@@ -10,7 +10,9 @@
 
 pub mod error;
 pub mod export_html;
+pub mod export_pdf;
 pub mod import_markdown;
+pub mod import_notion;
 pub mod import_obsidian;
 pub mod wikilink;
 

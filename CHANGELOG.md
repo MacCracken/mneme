@@ -2,6 +2,18 @@
 
 All notable changes to Mneme will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Import**: Notion export directory import with UUID cleanup, link conversion
+- **Export**: PDF export with printpdf (A4, Helvetica/Courier, page breaks)
+- **AI Writing**: Complete, reword, and expand text via daimon with local fallbacks
+- **Translation**: Per-note and batch translation with 12+ supported languages
+- **Temporal Analysis**: Monthly activity tracking, concept trend detection (rising/stable/declining)
+- **Multi-Modal**: Image/audio/video attachment support, Shruti transcription integration
+- **API**: 5 new endpoints — `/v1/ai/write`, `/v1/ai/translate/{id}`, `/v1/ai/languages`, `/v1/ai/temporal`, `/v1/export/pdf/{id}`
+- **ADR-005**: Advanced AI feature architecture decisions
+
 ## [2026.3.13] — 2026-03-13
 
 ### Added

@@ -39,5 +39,14 @@ pub fn build_router(state: AppState) -> Router {
         // Templates
         .route("/v1/templates", get(io_handlers::list_templates))
         .route("/v1/templates/render", post(io_handlers::render_template))
+        // AI — Writing
+        .route("/v1/ai/write", post(ai_handlers::write_assist))
+        // AI — Translation
+        .route("/v1/ai/translate/{id}", get(ai_handlers::translate_note))
+        .route("/v1/ai/languages", get(ai_handlers::list_languages))
+        // AI — Temporal
+        .route("/v1/ai/temporal", get(ai_handlers::temporal_analysis))
+        // Export — PDF
+        .route("/v1/export/pdf/{id}", get(io_handlers::export_note_pdf))
         .with_state(state)
 }

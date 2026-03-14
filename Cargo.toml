@@ -82,6 +82,9 @@ regex = "1"
 # Globbing
 glob = "0.3"
 
+# PDF
+printpdf = "0.7"
+
 [package]
 name = "mneme-workspace"
 version.workspace = true

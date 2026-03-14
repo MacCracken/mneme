@@ -199,3 +199,96 @@ pub async fn extract_concepts(
     })?;
     Ok(Json(extracted))
 }
+
+// --- AI Writing ---
+
+#[derive(Deserialize)]
+pub struct WriteAssistRequest {
+    pub action: mneme_ai::writer::WriteAction,
+    pub text: String,
+    pub context: Option<String>,
+}
+
+/// AI writing assistance (complete, reword, expand).
+pub async fn write_assist(
+    State(state): State<AppState>,
+    Json(req): Json<WriteAssistRequest>,
+) -> Result<Json<mneme_ai::writer::WriteResult>, (StatusCode, Json<ErrorResponse>)> {
+    let writer = mneme_ai::writer::Writer::new((*state.daimon).clone());
+    let write_req = mneme_ai::writer::WriteRequest {
+        action: req.action,
+        text: req.text,
+        context: req.context,
+    };
+    let result = writer.assist(&write_req).await.map_err(|e| {
+        (StatusCode::UNPROCESSABLE_ENTITY, Json(ErrorResponse { error: e.to_string() }))
+    })?;
+    Ok(Json(result))
+}
+
+// --- Translation ---
+
+/// Translate a note's content.
+pub async fn translate_note(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(params): Query<TranslateParams>,
+) -> Result<Json<mneme_ai::translator::TranslateResult>, (StatusCode, Json<ErrorResponse>)> {
+    let vault = state.vault.read().await;
+    let note = vault.get_note(id).await.map_err(|e| {
+        (StatusCode::NOT_FOUND, Json(ErrorResponse { error: e.to_string() }))
+    })?;
+
+    let translator = mneme_ai::translator::Translator::new((*state.daimon).clone());
+    let req = mneme_ai::translator::TranslateRequest {
+        content: note.content,
+        target_language: params.lang.clone(),
+        source_language: params.source_lang.clone(),
+        preserve_formatting: true,
+    };
+    let result = translator.translate(&req).await.map_err(|e| {
+        (StatusCode::UNPROCESSABLE_ENTITY, Json(ErrorResponse { error: e.to_string() }))
+    })?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+pub struct TranslateParams {
+    pub lang: String,
+    pub source_lang: Option<String>,
+}
+
+/// List supported languages.
+pub async fn list_languages() -> Json<Vec<mneme_ai::translator::Language>> {
+    Json(mneme_ai::translator::Translator::supported_languages())
+}
+
+// --- Temporal Analysis ---
+
+/// Temporal analysis across all notes.
+pub async fn temporal_analysis(
+    State(state): State<AppState>,
+) -> Result<Json<mneme_ai::temporal::TemporalReport>, (StatusCode, Json<ErrorResponse>)> {
+    let vault = state.vault.read().await;
+    let notes = vault.list_notes(1000, 0).await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
+    })?;
+
+    let mut snapshots = Vec::new();
+    for note in &notes {
+        if let Ok(full) = vault.get_note(note.id).await {
+            snapshots.push(mneme_ai::temporal::NoteSnapshot {
+                title: full.note.title,
+                content: full.content,
+                tags: full.tags,
+                created_at: full.note.created_at,
+                updated_at: full.note.updated_at,
+            });
+        }
+    }
+
+    let report = mneme_ai::temporal::analyze_temporal(&snapshots).map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
+    })?;
+    Ok(Json(report))
+}

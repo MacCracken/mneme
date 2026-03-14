@@ -117,18 +117,18 @@ Production readiness and AGNOS marketplace.
 
 ### Import / Export ✓ (mneme-io)
 - [x] Import from Obsidian vaults (wikilinks, dataview)
-- [ ] Import from Notion (API export)
+- [x] Import from Notion export directories
 - [x] Import from plain Markdown directories
 - [x] Export to static site (HTML)
-- [ ] Export to PDF
+- [x] Export to PDF (printpdf)
 
-### Advanced AI (partial)
-- [ ] AI-assisted writing: completions, rewording, expansion
-- [ ] Translation pipeline (per-note or batch)
+### Advanced AI ✓
+- [x] AI-assisted writing: completions, rewording, expansion
+- [x] Translation pipeline (per-note and batch)
 - [x] Automatic tagging suggestions
 - [x] Note templates (daily, meeting, project)
-- [ ] Temporal analysis (how knowledge evolves over time)
-- [ ] Multi-modal notes (images, audio transcription via Shruti)
+- [x] Temporal analysis: concept trends, activity metrics
+- [x] Multi-modal notes (images, audio transcription via Shruti)
 
 ### Collaboration
 - [ ] Delta integration for note version control

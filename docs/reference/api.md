@@ -153,3 +153,73 @@ Render a template with variable substitution, optionally creating the note.
   "created": false
 }
 ```
+
+## AI Writing
+
+### POST /v1/ai/write
+AI-assisted writing: complete, reword, or expand text.
+
+**Request:**
+```json
+{
+  "action": "complete",
+  "text": "Rust is a systems programming language.",
+  "context": "optional surrounding context"
+}
+```
+
+Actions: `complete`, `reword`, `expand`
+
+**Response:**
+```json
+{
+  "original": "Rust is a systems programming language.",
+  "result": "Rust is a systems programming language. Furthermore...",
+  "action": "complete",
+  "source": "daimon"
+}
+```
+
+## Translation
+
+### GET /v1/ai/translate/{id}?lang=es&source_lang=en
+Translate a note's content to the target language.
+
+**Response:**
+```json
+{
+  "original": "Hello world.",
+  "translated": "Hola mundo.",
+  "source_language": "en",
+  "target_language": "es",
+  "word_count": 2,
+  "source": "daimon"
+}
+```
+
+### GET /v1/ai/languages
+List supported translation languages.
+
+## Temporal Analysis
+
+### GET /v1/ai/temporal
+Analyze knowledge evolution across all notes.
+
+**Response:**
+```json
+{
+  "total_notes": 42,
+  "date_range": ["2026-01-01", "2026-03-13"],
+  "activity_by_month": [{"period": "2026-03", "notes_created": 5, "notes_updated": 3, "total_words": 2500}],
+  "concept_trends": [{"term": "rust", "trend": "rising", "total_occurrences": 15}],
+  "most_active_month": "2026-03",
+  "avg_words_per_note": 150
+}
+```
+
+## Export
+
+### GET /v1/export/pdf/{id}
+Export a note as a PDF file.
+
+Returns binary PDF with `Content-Type: application/pdf` and `Content-Disposition` header.

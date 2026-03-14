@@ -149,10 +149,71 @@ Mneme can import Obsidian vaults, converting wikilinks (`[[note]]`) to standard 
 **From Markdown directories:**
 Import plain Markdown files from any directory, preserving the directory structure as note paths.
 
+**From Notion exports:**
+Import from Notion's exported directories — UUID-suffixed filenames are cleaned, Notion-style links are converted to standard Markdown, and CSV database files are detected.
+
 ### Exporting Notes
 
 **To HTML:**
 Export your vault as a static HTML site with rendered Markdown, navigation, and styling.
+
+## AI Writing Assistant
+
+Mneme can help with writing through three actions:
+
+- **Complete** — continue writing from where you left off
+- **Reword** — rephrase text while preserving meaning
+- **Expand** — elaborate with more detail and examples
+
+```bash
+curl -X POST http://localhost:3838/v1/ai/write \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "expand", "text": "Rust ensures memory safety."}'
+```
+
+When daimon is available, writing uses AI generation. Otherwise, it falls back to local heuristics.
+
+## Translation
+
+Translate notes to any of 12+ supported languages:
+
+```bash
+# Translate a note to Spanish
+curl http://localhost:3838/v1/ai/translate/{note-id}?lang=es
+
+# List supported languages
+curl http://localhost:3838/v1/ai/languages
+```
+
+## Temporal Analysis
+
+Track how your knowledge base evolves over time:
+
+```bash
+curl http://localhost:3838/v1/ai/temporal
+```
+
+Returns monthly activity, concept trends (rising/stable/declining), and growth metrics.
+
+## Multi-Modal Notes
+
+Mneme supports binary attachments alongside Markdown notes:
+
+- **Images** (jpg, png, svg, etc.) — embedded with `![alt](attachments/file.jpg)`
+- **Audio** (mp3, wav, flac, etc.) — transcribed via Shruti when available
+- **Video** and **Documents** — linked as attachments
+
+Attachments are stored in the `attachments/` directory within your vault.
+
+## PDF Export
+
+Export any note as a PDF:
+
+```bash
+curl http://localhost:3838/v1/export/pdf/{note-id} -o note.pdf
+```
+
+The PDF includes the note title, tags, and formatted content with proper typography.
 
 ## Configuration
 

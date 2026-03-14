@@ -135,3 +135,47 @@ pub async fn suggest_tags(
 
     Ok(Json(suggestions))
 }
+
+// --- PDF Export ---
+
+/// Export a note as PDF.
+pub async fn export_note_pdf(
+    State(state): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<(StatusCode, [(String, String); 2], Vec<u8>), (StatusCode, Json<ErrorResponse>)> {
+    let vault = state.vault.read().await;
+    let note = vault.get_note(id).await.map_err(|e| {
+        (StatusCode::NOT_FOUND, Json(ErrorResponse { error: e.to_string() }))
+    })?;
+
+    let pdf_note = mneme_io::export_pdf::PdfNote {
+        title: note.note.title.clone(),
+        content_md: note.content,
+        tags: note.tags,
+    };
+
+    let dir = tempfile::TempDir::new().map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
+    })?;
+    let path = dir.path().join("export.pdf");
+
+    mneme_io::export_pdf::export_note_to_pdf(&pdf_note, &path, &mneme_io::export_pdf::PdfExportOptions::default())
+        .await
+        .map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
+        })?;
+
+    let bytes = tokio::fs::read(&path).await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
+    })?;
+
+    let filename = format!("{}.pdf", note.note.title.replace(' ', "-").to_lowercase());
+    Ok((
+        StatusCode::OK,
+        [
+            ("content-type".to_string(), "application/pdf".to_string()),
+            ("content-disposition".to_string(), format!("attachment; filename=\"{filename}\"")),
+        ],
+        bytes,
+    ))
+}

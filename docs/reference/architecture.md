@@ -29,11 +29,11 @@
 | `mneme-core` | None | Pure types: Note, Link, Tag, Graph, Frontmatter |
 | `mneme-store` | SQLite, filesystem | Persistence: DB operations, file I/O, Vault |
 | `mneme-search` | Tantivy, HTTP | Full-text index, semantic search, hybrid merge |
-| `mneme-ai` | HTTP (daimon) | RAG, summarization, auto-linking, concepts |
+| `mneme-ai` | HTTP (daimon) | RAG, summarization, auto-linking, concepts, writing, translation, temporal, multi-modal |
 | `mneme-api` | HTTP (axum) | REST API server |
 | `mneme-ui` | Terminal (crossterm) | TUI application |
 | `mneme-mcp` | Stdio | MCP server for Claude |
-| `mneme-io` | Filesystem | Import (Obsidian, Markdown), export (HTML) |
+| `mneme-io` | Filesystem | Import (Obsidian, Markdown, Notion), export (HTML, PDF) |
 
 ## Data Flow
 

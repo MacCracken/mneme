@@ -507,3 +507,168 @@ async fn delete_tag() {
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0]["name"], "keep-me");
 }
+
+#[tokio::test]
+async fn write_assist_complete() {
+    let (app, _dir) = test_app().await;
+    let resp = app
+        .oneshot(json_request(
+            "POST",
+            "/v1/ai/write",
+            Some(json!({
+                "action": "complete",
+                "text": "Rust is a systems programming language."
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = response_json(resp).await;
+    assert!(!body["result"].as_str().unwrap().is_empty());
+    assert_eq!(body["action"], "complete");
+}
+
+#[tokio::test]
+async fn write_assist_reword() {
+    let (app, _dir) = test_app().await;
+    let resp = app
+        .oneshot(json_request(
+            "POST",
+            "/v1/ai/write",
+            Some(json!({
+                "action": "reword",
+                "text": "This is also important because it helps show the big picture."
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = response_json(resp).await;
+    assert_eq!(body["source"], "local");
+}
+
+#[tokio::test]
+async fn list_languages() {
+    let (app, _dir) = test_app().await;
+    let resp = app
+        .oneshot(json_request("GET", "/v1/ai/languages", None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let langs = response_json(resp).await;
+    assert!(langs.as_array().unwrap().len() >= 10);
+}
+
+#[tokio::test]
+async fn translate_note_placeholder() {
+    let (app, _dir) = test_app().await;
+
+    // Create a note first
+    let resp = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/notes",
+            Some(json!({
+                "title": "English Note",
+                "content": "Hello world. This is a test.",
+                "tags": []
+            })),
+        ))
+        .await
+        .unwrap();
+    let created = response_json(resp).await;
+    let note_id = created["id"].as_str().unwrap();
+
+    let resp = app
+        .oneshot(json_request(
+            "GET",
+            &format!("/v1/ai/translate/{note_id}?lang=es"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = response_json(resp).await;
+    assert_eq!(body["target_language"], "es");
+    assert_eq!(body["source"], "placeholder");
+}
+
+#[tokio::test]
+async fn temporal_analysis_empty() {
+    let (app, _dir) = test_app().await;
+    let resp = app
+        .oneshot(json_request("GET", "/v1/ai/temporal", None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = response_json(resp).await;
+    assert_eq!(body["total_notes"], 0);
+}
+
+#[tokio::test]
+async fn temporal_analysis_with_notes() {
+    let (app, _dir) = test_app().await;
+
+    for i in 0..3 {
+        app.clone()
+            .oneshot(json_request(
+                "POST",
+                "/v1/notes",
+                Some(json!({
+                    "title": format!("Analysis Note {i}"),
+                    "content": format!("Content about Rust programming and systems design. Rust enables safe concurrency. Note number {i}."),
+                    "tags": ["test"]
+                })),
+            ))
+            .await
+            .unwrap();
+    }
+
+    let resp = app
+        .oneshot(json_request("GET", "/v1/ai/temporal", None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = response_json(resp).await;
+    assert_eq!(body["total_notes"], 3);
+}
+
+#[tokio::test]
+async fn export_note_as_pdf() {
+    let (app, _dir) = test_app().await;
+
+    let resp = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/notes",
+            Some(json!({
+                "title": "PDF Test",
+                "content": "# Hello\n\nThis note will be exported as PDF.\n\n- Item 1\n- Item 2",
+                "tags": ["pdf", "test"]
+            })),
+        ))
+        .await
+        .unwrap();
+    let created = response_json(resp).await;
+    let note_id = created["id"].as_str().unwrap();
+
+    let resp = app
+        .oneshot(json_request(
+            "GET",
+            &format!("/v1/export/pdf/{note_id}"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Check content type header
+    let content_type = resp.headers().get("content-type").unwrap().to_str().unwrap();
+    assert_eq!(content_type, "application/pdf");
+
+    // Check it starts with %PDF
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    assert!(bytes.starts_with(b"%PDF"));
+}

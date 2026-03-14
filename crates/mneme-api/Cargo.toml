@@ -11,6 +11,7 @@ mneme-core = { workspace = true }
 mneme-store = { workspace = true }
 mneme-search = { workspace = true }
 mneme-ai = { workspace = true }
+mneme-io = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
@@ -23,7 +24,7 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 anyhow = { workspace = true }
 dirs = "6"
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
 tower = { workspace = true, features = ["util"] }

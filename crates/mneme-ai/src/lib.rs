@@ -8,10 +8,14 @@ pub mod client;
 pub mod concepts;
 pub mod error;
 pub mod linker;
+pub mod multimodal;
 pub mod rag;
 pub mod summarizer;
 pub mod tagger;
 pub mod templates;
+pub mod temporal;
+pub mod translator;
+pub mod writer;
 
 pub use client::DaimonClient;
 pub use error::AiError;
