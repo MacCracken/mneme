@@ -1,0 +1,24 @@
+[Unit]
+Description=Mneme Background Indexer
+Documentation=https://github.com/agnostos/mneme
+After=mneme.service
+BindsTo=mneme.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mneme-api --reindex
+Environment=MNEME_VAULT_DIR=/var/lib/mneme
+Environment=RUST_LOG=info
+
+User=mneme
+Group=mneme
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/mneme
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mneme-indexer

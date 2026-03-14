@@ -70,3 +70,18 @@ mneme-ai = { path = "crates/mneme-ai" }
 mneme-api = { path = "crates/mneme-api" }
 mneme-ui = { path = "crates/mneme-ui" }
 mneme-mcp = { path = "crates/mneme-mcp" }
+
+[package]
+name = "mneme-workspace"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+mneme-search = { workspace = true }
+uuid = { workspace = true }
+
+[[bench]]
+name = "search_bench"
+harness = false
+

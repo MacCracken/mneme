@@ -1449,6 +1449,7 @@ dependencies = [
  "mneme-store",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tower",
@@ -1537,6 +1538,14 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "mneme-workspace"
+version = "2026.3.13"
+dependencies = [
+ "mneme-search",
  "uuid",
 ]
 

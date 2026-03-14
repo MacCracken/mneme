@@ -1,0 +1,40 @@
+[Unit]
+Description=Mneme Knowledge Base API Server
+Documentation=https://github.com/agnostos/mneme
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/mneme-api
+Environment=MNEME_VAULT_DIR=/var/lib/mneme
+Environment=MNEME_BIND=127.0.0.1:3838
+Environment=RUST_LOG=info
+
+# Run as dedicated service user
+User=mneme
+Group=mneme
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+WatchdogSec=30
+
+# Resource limits
+LimitNOFILE=65536
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/mneme
+ReadOnlyPaths=/etc/mneme
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mneme
+
+[Install]
+WantedBy=multi-user.target
