@@ -3,6 +3,7 @@
 use axum::Router;
 use axum::routing::{delete, get, post, put};
 
+use crate::ai_handlers;
 use crate::handlers;
 use crate::state::AppState;
 
@@ -22,5 +23,15 @@ pub fn build_router(state: AppState) -> Router {
         // Tags
         .route("/v1/tags", get(handlers::list_tags))
         .route("/v1/tags/{id}", delete(handlers::delete_tag))
+        // AI — RAG
+        .route("/v1/ai/rag/query", get(ai_handlers::rag_query))
+        .route("/v1/ai/rag/stats", get(ai_handlers::rag_stats))
+        .route("/v1/ai/rag/ingest/{id}", post(ai_handlers::rag_ingest_note))
+        // AI — Summarization
+        .route("/v1/ai/summarize/{id}", get(ai_handlers::summarize_note))
+        // AI — Auto-linking
+        .route("/v1/ai/suggest-links/{id}", get(ai_handlers::suggest_links))
+        // AI — Concept extraction
+        .route("/v1/ai/concepts/{id}", get(ai_handlers::extract_concepts))
         .with_state(state)
 }

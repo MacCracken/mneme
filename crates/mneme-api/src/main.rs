@@ -8,6 +8,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
+use mneme_ai::DaimonClient;
 use mneme_api::router::build_router;
 use mneme_api::state::AppState;
 use mneme_search::SearchEngine;
@@ -33,9 +34,20 @@ async fn main() -> anyhow::Result<()> {
     let search_dir = vault_dir.join(".mneme").join("search-index");
     let search = SearchEngine::open(&search_dir)?;
 
+    let daimon_url = std::env::var("DAIMON_URL").ok();
+    let daimon_key = std::env::var("DAIMON_API_KEY").ok();
+    let daimon = DaimonClient::new(daimon_url, daimon_key);
+
+    if daimon.health_check().await.unwrap_or(false) {
+        tracing::info!("Daimon agent runtime connected");
+    } else {
+        tracing::warn!("Daimon agent runtime not available — AI features will be limited");
+    }
+
     let state = AppState {
         vault: Arc::new(RwLock::new(vault)),
         search: Arc::new(search),
+        daimon: Arc::new(daimon),
     };
 
     let app = build_router(state)

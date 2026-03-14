@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use mneme_ai::DaimonClient;
 use mneme_search::SearchEngine;
 use mneme_store::Vault;
 use tokio::sync::RwLock;
@@ -11,4 +12,5 @@ use tokio::sync::RwLock;
 pub struct AppState {
     pub vault: Arc<RwLock<Vault>>,
     pub search: Arc<SearchEngine>,
+    pub daimon: Arc<DaimonClient>,
 }

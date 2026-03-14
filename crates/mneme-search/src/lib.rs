@@ -5,6 +5,7 @@
 
 pub mod engine;
 pub mod error;
+pub mod semantic;
 
 pub use engine::SearchEngine;
 pub use error::SearchError;
