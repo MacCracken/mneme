@@ -143,10 +143,7 @@ mod tests {
     #[test]
     fn find_by_capability() {
         let mut reg = PluginRegistry::new();
-        reg.register(test_plugin(
-            "proc1",
-            vec![PluginCapability::NoteProcessor],
-        ));
+        reg.register(test_plugin("proc1", vec![PluginCapability::NoteProcessor]));
         reg.register(test_plugin("imp1", vec![PluginCapability::Importer]));
         reg.register(test_plugin(
             "proc2",

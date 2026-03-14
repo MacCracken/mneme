@@ -80,24 +80,29 @@ pub fn analyze_temporal(notes: &[NoteSnapshot]) -> Result<TemporalReport, AiErro
         let words = note.content.split_whitespace().count();
         total_words += words;
 
-        let entry = monthly.entry(month_key.clone()).or_insert_with(|| PeriodActivity {
-            period: month_key.clone(),
-            notes_created: 0,
-            notes_updated: 0,
-            total_words: 0,
-        });
+        let entry = monthly
+            .entry(month_key.clone())
+            .or_insert_with(|| PeriodActivity {
+                period: month_key.clone(),
+                notes_created: 0,
+                notes_updated: 0,
+                total_words: 0,
+            });
         entry.notes_created += 1;
         entry.total_words += words;
 
         // Count updates separately if updated != created
         if note.updated_at != note.created_at {
             let update_key = format!("{}-{:02}", note.updated_at.year(), note.updated_at.month());
-            let update_entry = monthly.entry(update_key.clone()).or_insert_with(|| PeriodActivity {
-                period: update_key,
-                notes_created: 0,
-                notes_updated: 0,
-                total_words: 0,
-            });
+            let update_entry =
+                monthly
+                    .entry(update_key.clone())
+                    .or_insert_with(|| PeriodActivity {
+                        period: update_key,
+                        notes_created: 0,
+                        notes_updated: 0,
+                        total_words: 0,
+                    });
             update_entry.notes_updated += 1;
         }
     }
@@ -115,7 +120,10 @@ pub fn analyze_temporal(notes: &[NoteSnapshot]) -> Result<TemporalReport, AiErro
     let min_date = notes.iter().map(|n| n.created_at).min();
     let max_date = notes.iter().map(|n| n.updated_at).max();
     let date_range = min_date.zip(max_date).map(|(min, max)| {
-        (min.format("%Y-%m-%d").to_string(), max.format("%Y-%m-%d").to_string())
+        (
+            min.format("%Y-%m-%d").to_string(),
+            max.format("%Y-%m-%d").to_string(),
+        )
     });
 
     // Concept trends — extract concepts per month
@@ -229,7 +237,13 @@ mod tests {
 
     #[test]
     fn single_note_analysis() {
-        let notes = vec![make_snapshot("Test", "Hello world test content.", 2026, 3, 1)];
+        let notes = vec![make_snapshot(
+            "Test",
+            "Hello world test content.",
+            2026,
+            3,
+            1,
+        )];
         let report = analyze_temporal(&notes).unwrap();
         assert_eq!(report.total_notes, 1);
         assert_eq!(report.activity_by_month.len(), 1);
@@ -239,10 +253,34 @@ mod tests {
     #[test]
     fn multi_month_activity() {
         let notes = vec![
-            make_snapshot("Jan Note", "January content about Rust programming Rust.", 2026, 1, 15),
-            make_snapshot("Feb Note 1", "February content about Rust systems Rust.", 2026, 2, 10),
-            make_snapshot("Feb Note 2", "More February content about Rust design Rust.", 2026, 2, 20),
-            make_snapshot("Mar Note", "March content about Python programming Python.", 2026, 3, 5),
+            make_snapshot(
+                "Jan Note",
+                "January content about Rust programming Rust.",
+                2026,
+                1,
+                15,
+            ),
+            make_snapshot(
+                "Feb Note 1",
+                "February content about Rust systems Rust.",
+                2026,
+                2,
+                10,
+            ),
+            make_snapshot(
+                "Feb Note 2",
+                "More February content about Rust design Rust.",
+                2026,
+                2,
+                20,
+            ),
+            make_snapshot(
+                "Mar Note",
+                "March content about Python programming Python.",
+                2026,
+                3,
+                5,
+            ),
         ];
         let report = analyze_temporal(&notes).unwrap();
         assert_eq!(report.total_notes, 4);
@@ -266,7 +304,10 @@ mod tests {
             ("2026-03".into(), 2),
             ("2026-04".into(), 1),
         ];
-        assert!(matches!(compute_trend(&declining), TrendDirection::Declining));
+        assert!(matches!(
+            compute_trend(&declining),
+            TrendDirection::Declining
+        ));
 
         let stable = vec![
             ("2026-01".into(), 5usize),

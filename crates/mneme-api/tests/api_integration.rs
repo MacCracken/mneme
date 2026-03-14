@@ -478,20 +478,13 @@ async fn delete_tag() {
     let tags_arr = tags.as_array().unwrap();
     assert_eq!(tags_arr.len(), 2);
 
-    let tag_to_delete = tags_arr
-        .iter()
-        .find(|t| t["name"] == "delete-me")
-        .unwrap();
+    let tag_to_delete = tags_arr.iter().find(|t| t["name"] == "delete-me").unwrap();
     let tag_id = tag_to_delete["id"].as_str().unwrap();
 
     // Delete the tag
     let resp = app
         .clone()
-        .oneshot(json_request(
-            "DELETE",
-            &format!("/v1/tags/{tag_id}"),
-            None,
-        ))
+        .oneshot(json_request("DELETE", &format!("/v1/tags/{tag_id}"), None))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
@@ -665,11 +658,18 @@ async fn export_note_as_pdf() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // Check content type header
-    let content_type = resp.headers().get("content-type").unwrap().to_str().unwrap();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert_eq!(content_type, "application/pdf");
 
     // Check it starts with %PDF
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     assert!(bytes.starts_with(b"%PDF"));
 }
 
@@ -693,11 +693,7 @@ async fn get_note_tasks() {
     let note_id = created["id"].as_str().unwrap();
 
     let resp = app
-        .oneshot(json_request(
-            "GET",
-            &format!("/v1/tasks/{note_id}"),
-            None,
-        ))
+        .oneshot(json_request("GET", &format!("/v1/tasks/{note_id}"), None))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -749,11 +745,7 @@ async fn calendar_month_view() {
         .unwrap();
 
     let resp = app
-        .oneshot(json_request(
-            "GET",
-            "/v1/calendar?year=2026&month=3",
-            None,
-        ))
+        .oneshot(json_request("GET", "/v1/calendar?year=2026&month=3", None))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -815,11 +807,13 @@ async fn clip_bookmark_and_create() {
     assert_eq!(resp.status(), StatusCode::OK);
     let clip = response_json(resp).await;
     assert_eq!(clip["title"], "Rust Programming Language");
-    assert!(clip["tags"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|t| t == "bookmark"));
+    assert!(
+        clip["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t == "bookmark")
+    );
 
     // Verify note was created
     let resp = app

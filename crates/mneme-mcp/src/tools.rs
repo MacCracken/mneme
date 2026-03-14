@@ -368,10 +368,12 @@ mod tests {
             "tags": ["mcp", "test"]
         });
         let result = handle_tool_call(&id, "mneme_create_note", &args, &vault, &search).await;
-        assert!(result["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("Created note"));
+        assert!(
+            result["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Created note")
+        );
     }
 
     #[tokio::test]
@@ -398,10 +400,12 @@ mod tests {
         let id = serde_json::json!(1);
         let args = serde_json::json!({"query": "nonexistent", "limit": 5});
         let result = handle_tool_call(&id, "mneme_search", &args, &vault, &search).await;
-        assert!(result["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("No notes found"));
+        assert!(
+            result["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("No notes found")
+        );
     }
 
     #[tokio::test]
@@ -593,9 +597,14 @@ mod tests {
     async fn unknown_tool() {
         let (vault, search, _dir) = test_env().await;
         let id = serde_json::json!(1);
-        let result =
-            handle_tool_call(&id, "nonexistent_tool", &serde_json::json!({}), &vault, &search)
-                .await;
+        let result = handle_tool_call(
+            &id,
+            "nonexistent_tool",
+            &serde_json::json!({}),
+            &vault,
+            &search,
+        )
+        .await;
         assert_eq!(result["result"]["isError"], true);
     }
 }

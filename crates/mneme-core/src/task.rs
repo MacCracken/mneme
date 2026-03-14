@@ -111,15 +111,9 @@ fn extract_priority(text: &str) -> (String, Priority) {
             Priority::Urgent,
         )
     } else if text.contains("!high") {
-        (
-            text.replace("!high", "").trim().to_string(),
-            Priority::High,
-        )
+        (text.replace("!high", "").trim().to_string(), Priority::High)
     } else if text.contains("!low") {
-        (
-            text.replace("!low", "").trim().to_string(),
-            Priority::Low,
-        )
+        (text.replace("!low", "").trim().to_string(), Priority::Low)
     } else {
         (text.to_string(), Priority::Medium)
     }

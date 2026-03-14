@@ -5,8 +5,8 @@
 
 use std::collections::HashSet;
 
-use crate::concepts::{self, ConceptKind};
 use crate::AiError;
+use crate::concepts::{self, ConceptKind};
 
 /// A tag suggestion with confidence score.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -110,7 +110,11 @@ mod tests {
         let suggestions = suggest_tags(content, &existing, 5).unwrap();
         assert!(!suggestions.is_empty());
         // Should suggest topic-level concepts
-        assert!(suggestions.iter().all(|s| matches!(s.reason, TagReason::ConceptMatch)));
+        assert!(
+            suggestions
+                .iter()
+                .all(|s| matches!(s.reason, TagReason::ConceptMatch))
+        );
     }
 
     #[test]

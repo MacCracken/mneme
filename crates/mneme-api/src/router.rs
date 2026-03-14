@@ -55,7 +55,10 @@ pub fn build_router(state: AppState) -> Router {
         // Calendar
         .route("/v1/calendar", get(advanced_handlers::calendar_month))
         // Flashcards
-        .route("/v1/flashcards/{id}", get(advanced_handlers::get_note_flashcards))
+        .route(
+            "/v1/flashcards/{id}",
+            get(advanced_handlers::get_note_flashcards),
+        )
         // Web Clipper
         .route("/v1/clip/html", post(advanced_handlers::clip_html))
         .route("/v1/clip/bookmark", post(advanced_handlers::clip_bookmark))

@@ -79,14 +79,12 @@ impl Writer {
 
         // Try daimon
         match self.client.rag_query(&prompt, Some(3)).await {
-            Ok(resp) if !resp.formatted_context.is_empty() => {
-                Ok(WriteResult {
-                    original: req.text.clone(),
-                    result: resp.formatted_context,
-                    action: req.action,
-                    source: WriteSource::Daimon,
-                })
-            }
+            Ok(resp) if !resp.formatted_context.is_empty() => Ok(WriteResult {
+                original: req.text.clone(),
+                result: resp.formatted_context,
+                action: req.action,
+                source: WriteSource::Daimon,
+            }),
             _ => {
                 // Fallback to local heuristics
                 let result = local_assist(req);
@@ -106,7 +104,11 @@ fn local_assist(req: &WriteRequest) -> String {
     match req.action {
         WriteAction::Complete => {
             // Simple continuation: suggest an ending sentence
-            let sentences: Vec<&str> = req.text.split('.').filter(|s| !s.trim().is_empty()).collect();
+            let sentences: Vec<&str> = req
+                .text
+                .split('.')
+                .filter(|s| !s.trim().is_empty())
+                .collect();
             if sentences.is_empty() {
                 return req.text.clone();
             }
@@ -142,7 +144,9 @@ fn local_assist(req: &WriteRequest) -> String {
         }
         WriteAction::Expand => {
             // Extract key sentences and elaborate
-            let sentences: Vec<&str> = req.text.split('.')
+            let sentences: Vec<&str> = req
+                .text
+                .split('.')
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .collect();
@@ -151,7 +155,10 @@ fn local_assist(req: &WriteRequest) -> String {
             for sentence in &sentences {
                 expanded.push_str(sentence);
                 expanded.push_str(". ");
-                expanded.push_str(&format!("To elaborate on this point, {} is worth examining in greater detail. ", sentence.to_lowercase()));
+                expanded.push_str(&format!(
+                    "To elaborate on this point, {} is worth examining in greater detail. ",
+                    sentence.to_lowercase()
+                ));
             }
             expanded.trim().to_string()
         }
@@ -182,7 +189,11 @@ mod tests {
             context: None,
         };
         let result = local_assist(&req);
-        assert!(result.contains("additionally") || result.contains("significant") || result.contains("demonstrate"));
+        assert!(
+            result.contains("additionally")
+                || result.contains("significant")
+                || result.contains("demonstrate")
+        );
     }
 
     #[test]

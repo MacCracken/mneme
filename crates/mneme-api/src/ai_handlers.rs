@@ -221,7 +221,12 @@ pub async fn write_assist(
         context: req.context,
     };
     let result = writer.assist(&write_req).await.map_err(|e| {
-        (StatusCode::UNPROCESSABLE_ENTITY, Json(ErrorResponse { error: e.to_string() }))
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
     })?;
     Ok(Json(result))
 }
@@ -236,7 +241,12 @@ pub async fn translate_note(
 ) -> Result<Json<mneme_ai::translator::TranslateResult>, (StatusCode, Json<ErrorResponse>)> {
     let vault = state.vault.read().await;
     let note = vault.get_note(id).await.map_err(|e| {
-        (StatusCode::NOT_FOUND, Json(ErrorResponse { error: e.to_string() }))
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
     })?;
 
     let translator = mneme_ai::translator::Translator::new((*state.daimon).clone());
@@ -247,7 +257,12 @@ pub async fn translate_note(
         preserve_formatting: true,
     };
     let result = translator.translate(&req).await.map_err(|e| {
-        (StatusCode::UNPROCESSABLE_ENTITY, Json(ErrorResponse { error: e.to_string() }))
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
     })?;
     Ok(Json(result))
 }
@@ -271,7 +286,12 @@ pub async fn temporal_analysis(
 ) -> Result<Json<mneme_ai::temporal::TemporalReport>, (StatusCode, Json<ErrorResponse>)> {
     let vault = state.vault.read().await;
     let notes = vault.list_notes(1000, 0).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
     })?;
 
     let mut snapshots = Vec::new();
@@ -288,7 +308,12 @@ pub async fn temporal_analysis(
     }
 
     let report = mneme_ai::temporal::analyze_temporal(&snapshots).map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
     })?;
     Ok(Json(report))
 }

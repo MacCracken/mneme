@@ -83,9 +83,7 @@ fn render_pdf(note: &PdfNote, options: &PdfExportOptions) -> Result<Vec<u8>, IoE
     );
 
     let font_helvetica = doc.add_builtin_font(BuiltinFont::Helvetica).unwrap();
-    let font_helvetica_bold = doc
-        .add_builtin_font(BuiltinFont::HelveticaBold)
-        .unwrap();
+    let font_helvetica_bold = doc.add_builtin_font(BuiltinFont::HelveticaBold).unwrap();
     let font_courier = doc.add_builtin_font(BuiltinFont::Courier).unwrap();
 
     let usable_width = options.page_width_mm - 2.0 * options.margin_mm;
@@ -162,8 +160,7 @@ fn render_pdf(note: &PdfNote, options: &PdfExportOptions) -> Result<Vec<u8>, IoE
                             Mm(options.page_height_mm),
                             "Layer 1",
                         );
-                        current_layer =
-                            doc.get_page(new_page).get_layer(new_layer);
+                        current_layer = doc.get_page(new_page).get_layer(new_layer);
                         y = options.page_height_mm - options.margin_mm;
                     }
                     current_layer.use_text(
@@ -187,8 +184,7 @@ fn render_pdf(note: &PdfNote, options: &PdfExportOptions) -> Result<Vec<u8>, IoE
                             Mm(options.page_height_mm),
                             "Layer 1",
                         );
-                        current_layer =
-                            doc.get_page(new_page).get_layer(new_layer);
+                        current_layer = doc.get_page(new_page).get_layer(new_layer);
                         y = options.page_height_mm - options.margin_mm;
                     }
                     current_layer.use_text(
@@ -212,8 +208,7 @@ fn render_pdf(note: &PdfNote, options: &PdfExportOptions) -> Result<Vec<u8>, IoE
                             Mm(options.page_height_mm),
                             "Layer 1",
                         );
-                        current_layer =
-                            doc.get_page(new_page).get_layer(new_layer);
+                        current_layer = doc.get_page(new_page).get_layer(new_layer);
                         y = options.page_height_mm - options.margin_mm;
                     }
                     current_layer.use_text(
@@ -354,8 +349,7 @@ mod tests {
 
     #[test]
     fn parse_heading_blocks() {
-        let blocks =
-            parse_markdown_blocks("# Title\n\nParagraph text.\n\n## Section");
+        let blocks = parse_markdown_blocks("# Title\n\nParagraph text.\n\n## Section");
         assert!(matches!(blocks[0], MdBlock::Heading(1, _)));
         assert!(matches!(blocks[2], MdBlock::Paragraph(_)));
         assert!(matches!(blocks[4], MdBlock::Heading(2, _)));
@@ -370,8 +364,7 @@ mod tests {
 
     #[test]
     fn parse_list_items() {
-        let blocks =
-            parse_markdown_blocks("- item one\n- item two\n* item three");
+        let blocks = parse_markdown_blocks("- item one\n- item two\n* item three");
         assert!(matches!(blocks[0], MdBlock::ListItem(_)));
         assert!(matches!(blocks[1], MdBlock::ListItem(_)));
         assert!(matches!(blocks[2], MdBlock::ListItem(_)));
@@ -379,21 +372,14 @@ mod tests {
 
     #[test]
     fn strip_inline_markdown() {
-        assert_eq!(
-            strip_md_inline("**bold** and *italic*"),
-            "bold and italic"
-        );
+        assert_eq!(strip_md_inline("**bold** and *italic*"), "bold and italic");
         assert_eq!(strip_md_inline("`code`"), "code");
-        assert_eq!(
-            strip_md_inline("[link](http://example.com)"),
-            "link"
-        );
+        assert_eq!(strip_md_inline("[link](http://example.com)"), "link");
     }
 
     #[test]
     fn word_wrap() {
-        let lines =
-            wrap_text("hello world this is a test of word wrapping", 20);
+        let lines = wrap_text("hello world this is a test of word wrapping", 20);
         assert!(lines.len() > 1);
         for line in &lines {
             assert!(line.len() <= 25); // allow some slack for whole words
@@ -449,11 +435,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         // Generate content long enough for page break
         let long_content = (0..100)
-            .map(|i| {
-                format!(
-                    "This is paragraph number {i} with enough text to fill space."
-                )
-            })
+            .map(|i| format!("This is paragraph number {i} with enough text to fill space."))
             .collect::<Vec<_>>()
             .join("\n\n");
         let note = PdfNote {

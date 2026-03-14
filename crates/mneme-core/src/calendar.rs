@@ -105,10 +105,7 @@ mod tests {
             detect_entry_type("Sprint Planning Meeting"),
             EntryType::MeetingNote
         );
-        assert_eq!(
-            detect_entry_type("Project Deadline"),
-            EntryType::Deadline
-        );
+        assert_eq!(detect_entry_type("Project Deadline"), EntryType::Deadline);
         assert_eq!(detect_entry_type("Random Note"), EntryType::Event);
     }
 

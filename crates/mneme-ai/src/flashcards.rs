@@ -7,8 +7,8 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::client::DaimonClient;
 use crate::AiError;
+use crate::client::DaimonClient;
 
 /// A flashcard generated from a note.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,10 +222,7 @@ pub async fn generate_flashcards_ai(
                 .iter()
                 .enumerate()
                 .map(|(i, chunk)| Flashcard {
-                    id: Uuid::new_v5(
-                        &Uuid::NAMESPACE_OID,
-                        format!("{note_id}:ai:{i}").as_bytes(),
-                    ),
+                    id: Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("{note_id}:ai:{i}").as_bytes()),
                     note_id,
                     front: chunk
                         .metadata

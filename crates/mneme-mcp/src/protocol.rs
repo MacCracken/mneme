@@ -170,7 +170,10 @@ mod tests {
         let tools = tool_definitions();
         let arr = tools.as_array().unwrap();
         // create_note requires title and content
-        let create = arr.iter().find(|t| t["name"] == "mneme_create_note").unwrap();
+        let create = arr
+            .iter()
+            .find(|t| t["name"] == "mneme_create_note")
+            .unwrap();
         let required = create["inputSchema"]["required"].as_array().unwrap();
         assert!(required.iter().any(|r| r == "title"));
         assert!(required.iter().any(|r| r == "content"));

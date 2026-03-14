@@ -1,6 +1,10 @@
 # Stage 1: Build
 FROM rust:1.85-bookworm AS builder
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ crates/
@@ -10,6 +14,8 @@ RUN cargo build --release --workspace
 
 # Stage 2: Runtime
 FROM ghcr.io/maccracken/agnosticos:latest
+
+USER root
 
 RUN groupadd --system mneme && \
     useradd --system --gid mneme --uid 1004 --shell /usr/sbin/nologin --create-home mneme

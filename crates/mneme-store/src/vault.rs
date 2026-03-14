@@ -322,12 +322,15 @@ mod tests {
     #[tokio::test]
     async fn tag_operations() {
         let (vault, _dir) = test_vault().await;
-        vault.create_note(CreateNote {
-            title: "Tagged".into(),
-            path: None,
-            content: "Content.".into(),
-            tags: vec!["alpha".into(), "beta".into()],
-        }).await.unwrap();
+        vault
+            .create_note(CreateNote {
+                title: "Tagged".into(),
+                path: None,
+                content: "Content.".into(),
+                tags: vec!["alpha".into(), "beta".into()],
+            })
+            .await
+            .unwrap();
 
         let tags = vault.list_tags().await.unwrap();
         assert_eq!(tags.len(), 2);
@@ -341,19 +344,28 @@ mod tests {
     #[tokio::test]
     async fn update_note_partial() {
         let (vault, _dir) = test_vault().await;
-        let created = vault.create_note(CreateNote {
-            title: "Original".into(),
-            path: None,
-            content: "Original content.".into(),
-            tags: vec!["tag1".into()],
-        }).await.unwrap();
+        let created = vault
+            .create_note(CreateNote {
+                title: "Original".into(),
+                path: None,
+                content: "Original content.".into(),
+                tags: vec!["tag1".into()],
+            })
+            .await
+            .unwrap();
 
         // Update only title
-        let updated = vault.update_note(created.note.id, UpdateNote {
-            title: Some("New Title".into()),
-            content: None,
-            tags: None,
-        }).await.unwrap();
+        let updated = vault
+            .update_note(
+                created.note.id,
+                UpdateNote {
+                    title: Some("New Title".into()),
+                    content: None,
+                    tags: None,
+                },
+            )
+            .await
+            .unwrap();
         assert_eq!(updated.note.title, "New Title");
         assert_eq!(updated.content, "Original content.");
         assert_eq!(updated.tags, vec!["tag1"]);

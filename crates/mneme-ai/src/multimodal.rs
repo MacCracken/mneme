@@ -66,8 +66,15 @@ impl MultiModal {
 
     /// Detect media type from file extension.
     pub fn detect_media_type(path: &Path) -> MediaType {
-        match path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref() {
-            Some("jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "bmp" | "tiff") => MediaType::Image,
+        match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .as_deref()
+        {
+            Some("jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "bmp" | "tiff") => {
+                MediaType::Image
+            }
             Some("mp3" | "wav" | "ogg" | "flac" | "m4a" | "aac" | "wma") => MediaType::Audio,
             Some("mp4" | "mkv" | "avi" | "mov" | "webm") => MediaType::Video,
             Some("pdf" | "doc" | "docx" | "txt" | "rtf") => MediaType::Document,
@@ -77,8 +84,14 @@ impl MultiModal {
 
     /// Create an attachment record from a file path.
     pub async fn create_attachment(path: &Path) -> Result<Attachment, AiError> {
-        let metadata = tokio::fs::metadata(path).await.map_err(|e| AiError::Daimon(format!("File not found: {e}")))?;
-        let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let metadata = tokio::fs::metadata(path)
+            .await
+            .map_err(|e| AiError::Daimon(format!("File not found: {e}")))?;
+        let filename = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
 
         Ok(Attachment {
             filename,
@@ -89,7 +102,10 @@ impl MultiModal {
     }
 
     /// Transcribe an audio file via Shruti (daimon).
-    pub async fn transcribe_audio(&self, audio_path: &Path) -> Result<TranscriptionResult, AiError> {
+    pub async fn transcribe_audio(
+        &self,
+        audio_path: &Path,
+    ) -> Result<TranscriptionResult, AiError> {
         let media_type = Self::detect_media_type(audio_path);
         if media_type != MediaType::Audio {
             return Err(AiError::Daimon(format!(
@@ -104,22 +120,20 @@ impl MultiModal {
         let query = format!("Transcribe audio file: {filename}");
 
         match self.client.rag_query(&query, Some(1)).await {
-            Ok(resp) if !resp.formatted_context.is_empty() => {
-                Ok(TranscriptionResult {
-                    text: resp.formatted_context,
-                    duration_secs: None,
-                    language: Some("en".into()),
-                    source: TranscriptionSource::Shruti,
-                })
-            }
-            _ => {
-                Ok(TranscriptionResult {
-                    text: format!("[Audio transcription pending — Shruti unavailable]\nFile: {filename}"),
-                    duration_secs: None,
-                    language: None,
-                    source: TranscriptionSource::Placeholder,
-                })
-            }
+            Ok(resp) if !resp.formatted_context.is_empty() => Ok(TranscriptionResult {
+                text: resp.formatted_context,
+                duration_secs: None,
+                language: Some("en".into()),
+                source: TranscriptionSource::Shruti,
+            }),
+            _ => Ok(TranscriptionResult {
+                text: format!(
+                    "[Audio transcription pending — Shruti unavailable]\nFile: {filename}"
+                ),
+                duration_secs: None,
+                language: None,
+                source: TranscriptionSource::Placeholder,
+            }),
         }
     }
 
@@ -137,32 +151,49 @@ impl MultiModal {
         let filename = image_path.file_name().unwrap_or_default().to_string_lossy();
 
         // Try daimon vision
-        match self.client.rag_query(&format!("Describe image: {filename}"), Some(1)).await {
-            Ok(resp) if !resp.formatted_context.is_empty() => {
-                Ok(ImageDescription {
-                    description: resp.formatted_context,
-                    extracted_text: None,
-                    source: "daimon".into(),
-                })
-            }
-            _ => {
-                Ok(ImageDescription {
-                    description: format!("[Image description pending — daimon unavailable]\nFile: {filename}"),
-                    extracted_text: None,
-                    source: "placeholder".into(),
-                })
-            }
+        match self
+            .client
+            .rag_query(&format!("Describe image: {filename}"), Some(1))
+            .await
+        {
+            Ok(resp) if !resp.formatted_context.is_empty() => Ok(ImageDescription {
+                description: resp.formatted_context,
+                extracted_text: None,
+                source: "daimon".into(),
+            }),
+            _ => Ok(ImageDescription {
+                description: format!(
+                    "[Image description pending — daimon unavailable]\nFile: {filename}"
+                ),
+                extracted_text: None,
+                source: "placeholder".into(),
+            }),
         }
     }
 
     /// Generate a Markdown snippet for embedding an attachment in a note.
     pub fn attachment_markdown(attachment: &Attachment) -> String {
         match attachment.media_type {
-            MediaType::Image => format!("![{}](attachments/{})", attachment.filename, attachment.filename),
-            MediaType::Audio => format!("[🔊 {}](attachments/{})", attachment.filename, attachment.filename),
-            MediaType::Video => format!("[🎬 {}](attachments/{})", attachment.filename, attachment.filename),
-            MediaType::Document => format!("[📄 {}](attachments/{})", attachment.filename, attachment.filename),
-            MediaType::Unknown => format!("[📎 {}](attachments/{})", attachment.filename, attachment.filename),
+            MediaType::Image => format!(
+                "![{}](attachments/{})",
+                attachment.filename, attachment.filename
+            ),
+            MediaType::Audio => format!(
+                "[🔊 {}](attachments/{})",
+                attachment.filename, attachment.filename
+            ),
+            MediaType::Video => format!(
+                "[🎬 {}](attachments/{})",
+                attachment.filename, attachment.filename
+            ),
+            MediaType::Document => format!(
+                "[📄 {}](attachments/{})",
+                attachment.filename, attachment.filename
+            ),
+            MediaType::Unknown => format!(
+                "[📎 {}](attachments/{})",
+                attachment.filename, attachment.filename
+            ),
         }
     }
 }
@@ -174,28 +205,58 @@ mod tests {
 
     #[test]
     fn detect_image_types() {
-        assert_eq!(MultiModal::detect_media_type(Path::new("photo.jpg")), MediaType::Image);
-        assert_eq!(MultiModal::detect_media_type(Path::new("photo.PNG")), MediaType::Image);
-        assert_eq!(MultiModal::detect_media_type(Path::new("diagram.svg")), MediaType::Image);
+        assert_eq!(
+            MultiModal::detect_media_type(Path::new("photo.jpg")),
+            MediaType::Image
+        );
+        assert_eq!(
+            MultiModal::detect_media_type(Path::new("photo.PNG")),
+            MediaType::Image
+        );
+        assert_eq!(
+            MultiModal::detect_media_type(Path::new("diagram.svg")),
+            MediaType::Image
+        );
     }
 
     #[test]
     fn detect_audio_types() {
-        assert_eq!(MultiModal::detect_media_type(Path::new("voice.mp3")), MediaType::Audio);
-        assert_eq!(MultiModal::detect_media_type(Path::new("recording.wav")), MediaType::Audio);
-        assert_eq!(MultiModal::detect_media_type(Path::new("music.flac")), MediaType::Audio);
+        assert_eq!(
+            MultiModal::detect_media_type(Path::new("voice.mp3")),
+            MediaType::Audio
+        );
+        assert_eq!(
+            MultiModal::detect_media_type(Path::new("recording.wav")),
+            MediaType::Audio
+        );
+        assert_eq!(
+            MultiModal::detect_media_type(Path::new("music.flac")),
+            MediaType::Audio
+        );
     }
 
     #[test]
     fn detect_video_types() {
-        assert_eq!(MultiModal::detect_media_type(Path::new("clip.mp4")), MediaType::Video);
-        assert_eq!(MultiModal::detect_media_type(Path::new("movie.mkv")), MediaType::Video);
+        assert_eq!(
+            MultiModal::detect_media_type(Path::new("clip.mp4")),
+            MediaType::Video
+        );
+        assert_eq!(
+            MultiModal::detect_media_type(Path::new("movie.mkv")),
+            MediaType::Video
+        );
     }
 
     #[test]
     fn detect_unknown() {
-        assert_eq!(MultiModal::detect_media_type(Path::new("file.xyz")), MediaType::Unknown);
-        assert_eq!(MultiModal::detect_media_type(Path::new("noext")), MediaType::Unknown);
+        assert_eq!(
+            MultiModal::detect_media_type(Path::new("file.xyz")),
+            MediaType::Unknown
+        );
+        assert_eq!(
+            MultiModal::detect_media_type(Path::new("noext")),
+            MediaType::Unknown
+        );
     }
 
     #[test]
@@ -249,8 +310,14 @@ mod tests {
 
     #[test]
     fn detect_document_types() {
-        assert_eq!(MultiModal::detect_media_type(Path::new("file.pdf")), MediaType::Document);
-        assert_eq!(MultiModal::detect_media_type(Path::new("doc.docx")), MediaType::Document);
+        assert_eq!(
+            MultiModal::detect_media_type(Path::new("file.pdf")),
+            MediaType::Document
+        );
+        assert_eq!(
+            MultiModal::detect_media_type(Path::new("doc.docx")),
+            MediaType::Document
+        );
     }
 
     #[test]

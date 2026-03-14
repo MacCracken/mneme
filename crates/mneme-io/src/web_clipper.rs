@@ -240,8 +240,7 @@ mod tests {
     #[test]
     fn clip_basic_html() {
         let html = "<html><head><title>Test Page</title></head><body><h1>Hello</h1><p>World</p></body></html>";
-        let result =
-            clip_html(html, "https://example.com/test", &ClipOptions::default()).unwrap();
+        let result = clip_html(html, "https://example.com/test", &ClipOptions::default()).unwrap();
         assert_eq!(result.title, "Test Page");
         assert!(result.content_md.contains("Hello"));
         assert!(result.content_md.contains("World"));
@@ -301,10 +300,7 @@ mod tests {
     #[test]
     fn html_entity_decoding() {
         assert_eq!(html_decode("&amp; &lt; &gt;"), "& < >");
-        assert_eq!(
-            html_decode("&mdash; &hellip;"),
-            "\u{2014} ..."
-        );
+        assert_eq!(html_decode("&mdash; &hellip;"), "\u{2014} ...");
     }
 
     #[test]

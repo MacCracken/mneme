@@ -13,8 +13,8 @@ use tokio::fs;
 
 use mneme_core::frontmatter::{parse_frontmatter, split_frontmatter};
 
-use crate::wikilink::{extract_wikilinks, wikilinks_to_markdown};
 use crate::IoError;
+use crate::wikilink::{extract_wikilinks, wikilinks_to_markdown};
 
 /// A note imported from an Obsidian vault.
 #[derive(Debug, Clone)]
@@ -43,9 +43,7 @@ pub async fn import_obsidian_vault(
     convert_wikilinks: bool,
 ) -> Result<(Vec<ImportedNote>, ImportStats), IoError> {
     if !vault_path.exists() {
-        return Err(IoError::SourceNotFound(
-            vault_path.display().to_string(),
-        ));
+        return Err(IoError::SourceNotFound(vault_path.display().to_string()));
     }
 
     let mut notes = Vec::new();
@@ -62,9 +60,7 @@ pub async fn import_obsidian_vault(
                 stats.notes_imported += 1;
             }
             Err(e) => {
-                stats
-                    .errors
-                    .push((file_path.clone(), e.to_string()));
+                stats.errors.push((file_path.clone(), e.to_string()));
             }
         }
     }
@@ -218,7 +214,12 @@ mod tests {
     #[tokio::test]
     async fn import_inline_tags() {
         let dir = TempDir::new().unwrap();
-        write_file(dir.path(), "tagged.md", "Content with #rust and #project/agnos tags.").await;
+        write_file(
+            dir.path(),
+            "tagged.md",
+            "Content with #rust and #project/agnos tags.",
+        )
+        .await;
 
         let (notes, _) = import_obsidian_vault(dir.path(), true).await.unwrap();
         assert!(notes[0].tags.contains(&"rust".to_string()));

@@ -76,5 +76,10 @@ fn bench_search_query(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_index_note, bench_index_many_notes, bench_search_query);
+criterion_group!(
+    benches,
+    bench_index_note,
+    bench_index_many_notes,
+    bench_search_query
+);
 criterion_main!(benches);

@@ -9,8 +9,8 @@ use tokio::fs;
 
 use mneme_core::frontmatter::{parse_frontmatter, split_frontmatter};
 
-use crate::import_obsidian::ImportedNote;
 use crate::IoError;
+use crate::import_obsidian::ImportedNote;
 
 /// Import statistics for plain Markdown import.
 #[derive(Debug, Default)]
@@ -146,6 +146,10 @@ mod tests {
 
         let (notes, stats) = import_markdown_dir(dir.path()).await.unwrap();
         assert_eq!(stats.files_found, 3);
-        assert!(notes.iter().any(|n| n.relative_path.contains("project/sub/")));
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.relative_path.contains("project/sub/"))
+        );
     }
 }

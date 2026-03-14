@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use comrak::{markdown_to_html, Options};
+use comrak::{Options, markdown_to_html};
 use tokio::fs;
 
 use crate::IoError;
@@ -255,7 +255,10 @@ mod tests {
 
     #[test]
     fn html_escape_special_chars() {
-        assert_eq!(html_escape("<script>alert('xss')"), "&lt;script&gt;alert('xss')");
+        assert_eq!(
+            html_escape("<script>alert('xss')"),
+            "&lt;script&gt;alert('xss')"
+        );
         assert_eq!(html_escape("A & B"), "A &amp; B");
     }
 }

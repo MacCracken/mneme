@@ -9,8 +9,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::client::DaimonClient;
 use crate::AiError;
+use crate::client::DaimonClient;
 
 // --- Tazama (Video) ---
 
@@ -258,7 +258,10 @@ pub fn extract_trade_info(note_id: Uuid, content: &str) -> Vec<TradeJournalEntry
             .trim()
             .to_string();
 
-        if !entries.iter().any(|e: &TradeJournalEntry| e.ticker == ticker) {
+        if !entries
+            .iter()
+            .any(|e: &TradeJournalEntry| e.ticker == ticker)
+        {
             entries.push(TradeJournalEntry {
                 note_id,
                 ticker,
@@ -278,8 +281,7 @@ mod tests {
 
     #[test]
     fn extract_scenes() {
-        let content =
-            "# Opening\n\nThe camera pans across the city.\n\n# Interview\n\nHost introduces the guest.";
+        let content = "# Opening\n\nThe camera pans across the city.\n\n# Interview\n\nHost introduces the guest.";
         let scenes = extract_scenes_locally(content);
         // Splits into 4 paragraphs: heading, body, heading, body
         assert_eq!(scenes.len(), 4);
@@ -372,7 +374,12 @@ mod tests {
             image_path: "test.png".into(),
             note_id: Uuid::new_v4(),
             label: "Diagram".into(),
-            region: Some(AnnotationRegion { x: 10.0, y: 20.0, width: 100.0, height: 50.0 }),
+            region: Some(AnnotationRegion {
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                height: 50.0,
+            }),
         };
         let json = serde_json::to_string(&ann).unwrap();
         assert!(json.contains("Diagram"));
@@ -384,7 +391,10 @@ mod tests {
         let notes = ShowNotes {
             title: "Test".into(),
             summary: "Summary".into(),
-            timestamps: vec![TimestampEntry { time: "00:05".into(), label: "Intro".into() }],
+            timestamps: vec![TimestampEntry {
+                time: "00:05".into(),
+                label: "Intro".into(),
+            }],
             key_topics: vec!["topic1".into()],
         };
         let json = serde_json::to_string(&notes).unwrap();

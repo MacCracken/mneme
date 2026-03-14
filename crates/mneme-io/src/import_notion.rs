@@ -14,8 +14,8 @@ use tokio::fs;
 
 use mneme_core::frontmatter::{parse_frontmatter, split_frontmatter};
 
-use crate::import_obsidian::ImportedNote;
 use crate::IoError;
+use crate::import_obsidian::ImportedNote;
 
 /// Import statistics for Notion.
 #[derive(Debug, Default)]
@@ -32,9 +32,7 @@ pub async fn import_notion_export(
     export_path: &Path,
 ) -> Result<(Vec<ImportedNote>, NotionImportStats), IoError> {
     if !export_path.exists() {
-        return Err(IoError::SourceNotFound(
-            export_path.display().to_string(),
-        ));
+        return Err(IoError::SourceNotFound(export_path.display().to_string()));
     }
 
     let mut notes = Vec::new();
@@ -135,8 +133,7 @@ fn clean_notion_content(content: &str) -> String {
     let mut result = content.replace("%20", " ");
 
     // Convert Notion's internal links: [Title](Title uuid.md) -> [Title](slug.md)
-    let link_re =
-        Regex::new(r"\[([^\]]+)\]\(([^)]+)\s+[a-f0-9]{32}\.md\)").unwrap();
+    let link_re = Regex::new(r"\[([^\]]+)\]\(([^)]+)\s+[a-f0-9]{32}\.md\)").unwrap();
     result = link_re
         .replace_all(&result, |caps: &regex::Captures| {
             let text = &caps[1];
@@ -146,8 +143,7 @@ fn clean_notion_content(content: &str) -> String {
         .to_string();
 
     // Remove Notion's empty toggle blocks
-    let toggle_re =
-        Regex::new(r"<details>\s*<summary></summary>\s*</details>\n?").unwrap();
+    let toggle_re = Regex::new(r"<details>\s*<summary></summary>\s*</details>\n?").unwrap();
     result = toggle_re.replace_all(&result, "").to_string();
 
     result
@@ -218,8 +214,7 @@ mod tests {
 
     #[test]
     fn clean_uuid_suffix() {
-        let (title, cleaned) =
-            clean_notion_title("My Page abc123def4567890abcdef1234567890");
+        let (title, cleaned) = clean_notion_title("My Page abc123def4567890abcdef1234567890");
         assert_eq!(title, "My Page");
         assert!(cleaned);
     }
@@ -241,7 +236,8 @@ mod tests {
 
     #[test]
     fn path_cleaning() {
-        let path = "Projects abc123def4567890abcdef1234567890/Sub abc123def4567890abcdef1234567890.md";
+        let path =
+            "Projects abc123def4567890abcdef1234567890/Sub abc123def4567890abcdef1234567890.md";
         let cleaned = clean_notion_path(path);
         assert_eq!(cleaned, "Projects/Sub.md");
     }

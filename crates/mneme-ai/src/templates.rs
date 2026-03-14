@@ -37,10 +37,7 @@ pub struct RenderedTemplate {
 }
 
 /// Render a template with the given variables.
-pub fn render_template(
-    template: &Template,
-    vars: &HashMap<String, String>,
-) -> RenderedTemplate {
+pub fn render_template(template: &Template, vars: &HashMap<String, String>) -> RenderedTemplate {
     let mut context = build_context(vars);
 
     let title = substitute(&template.title_pattern, &context);
@@ -85,10 +82,7 @@ fn build_context(vars: &HashMap<String, String>) -> HashMap<String, String> {
     ctx.insert("year".into(), now.format("%Y").to_string());
     ctx.insert("month".into(), now.format("%m").to_string());
     ctx.insert("day".into(), now.format("%d").to_string());
-    ctx.insert(
-        "weekday".into(),
-        now.format("%A").to_string(),
-    );
+    ctx.insert("weekday".into(), now.format("%A").to_string());
 
     // User-provided variables override built-ins
     for (k, v) in vars {
@@ -109,7 +103,13 @@ fn substitute(template: &str, vars: &HashMap<String, String>) -> String {
 
 fn slug(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .split('-')
         .filter(|s| !s.is_empty())

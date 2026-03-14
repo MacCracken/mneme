@@ -244,13 +244,7 @@ mod tests {
         let note_id = Uuid::new_v4();
 
         store.record_version(note_id, "T", "Line 1\nLine 2\nLine 3", "h1", None);
-        store.record_version(
-            note_id,
-            "T",
-            "Line 1\nModified\nLine 3\nLine 4",
-            "h2",
-            None,
-        );
+        store.record_version(note_id, "T", "Line 1\nModified\nLine 3\nLine 4", "h2", None);
 
         let diff = store.diff(note_id, 1, 2).unwrap();
         assert!(diff.lines_added > 0 || diff.lines_removed > 0);

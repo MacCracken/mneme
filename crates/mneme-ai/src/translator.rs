@@ -65,22 +65,23 @@ impl Translator {
         );
 
         match self.client.rag_query(&prompt, Some(1)).await {
-            Ok(resp) if !resp.formatted_context.is_empty() => {
-                Ok(TranslateResult {
-                    original: req.content.clone(),
-                    translated: resp.formatted_context,
-                    source_language: source_lang,
-                    target_language: req.target_language.clone(),
-                    word_count: req.content.split_whitespace().count(),
-                    source: TranslateSource::Daimon,
-                })
-            }
+            Ok(resp) if !resp.formatted_context.is_empty() => Ok(TranslateResult {
+                original: req.content.clone(),
+                translated: resp.formatted_context,
+                source_language: source_lang,
+                target_language: req.target_language.clone(),
+                word_count: req.content.split_whitespace().count(),
+                source: TranslateSource::Daimon,
+            }),
             _ => {
                 // Fallback: return a placeholder translation
                 let translated = if req.preserve_formatting {
                     preserve_markdown_structure(&req.content, &req.target_language)
                 } else {
-                    format!("[Translation to {} pending — daimon unavailable]\n\n{}", req.target_language, req.content)
+                    format!(
+                        "[Translation to {} pending — daimon unavailable]\n\n{}",
+                        req.target_language, req.content
+                    )
                 };
 
                 Ok(TranslateResult {
@@ -117,18 +118,54 @@ impl Translator {
     /// List commonly supported languages.
     pub fn supported_languages() -> Vec<Language> {
         vec![
-            Language { code: "en".into(), name: "English".into() },
-            Language { code: "es".into(), name: "Spanish".into() },
-            Language { code: "fr".into(), name: "French".into() },
-            Language { code: "de".into(), name: "German".into() },
-            Language { code: "it".into(), name: "Italian".into() },
-            Language { code: "pt".into(), name: "Portuguese".into() },
-            Language { code: "zh".into(), name: "Chinese".into() },
-            Language { code: "ja".into(), name: "Japanese".into() },
-            Language { code: "ko".into(), name: "Korean".into() },
-            Language { code: "ar".into(), name: "Arabic".into() },
-            Language { code: "ru".into(), name: "Russian".into() },
-            Language { code: "hi".into(), name: "Hindi".into() },
+            Language {
+                code: "en".into(),
+                name: "English".into(),
+            },
+            Language {
+                code: "es".into(),
+                name: "Spanish".into(),
+            },
+            Language {
+                code: "fr".into(),
+                name: "French".into(),
+            },
+            Language {
+                code: "de".into(),
+                name: "German".into(),
+            },
+            Language {
+                code: "it".into(),
+                name: "Italian".into(),
+            },
+            Language {
+                code: "pt".into(),
+                name: "Portuguese".into(),
+            },
+            Language {
+                code: "zh".into(),
+                name: "Chinese".into(),
+            },
+            Language {
+                code: "ja".into(),
+                name: "Japanese".into(),
+            },
+            Language {
+                code: "ko".into(),
+                name: "Korean".into(),
+            },
+            Language {
+                code: "ar".into(),
+                name: "Arabic".into(),
+            },
+            Language {
+                code: "ru".into(),
+                name: "Russian".into(),
+            },
+            Language {
+                code: "hi".into(),
+                name: "Hindi".into(),
+            },
         ]
     }
 }
@@ -138,8 +175,11 @@ fn preserve_markdown_structure(content: &str, target_lang: &str) -> String {
     let mut result = String::new();
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("```")
-            || trimmed.starts_with("---") || trimmed.starts_with("- [")
+        if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("```")
+            || trimmed.starts_with("---")
+            || trimmed.starts_with("- [")
         {
             // Keep structural elements as-is
             result.push_str(line);
@@ -184,7 +224,10 @@ mod tests {
 
     #[test]
     fn language_serialization() {
-        let lang = Language { code: "ja".into(), name: "Japanese".into() };
+        let lang = Language {
+            code: "ja".into(),
+            name: "Japanese".into(),
+        };
         let json = serde_json::to_string(&lang).unwrap();
         assert!(json.contains("ja"));
         assert!(json.contains("Japanese"));
