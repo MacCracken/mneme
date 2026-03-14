@@ -6,7 +6,9 @@
 
 pub mod client;
 pub mod concepts;
+pub mod creative;
 pub mod error;
+pub mod flashcards;
 pub mod linker;
 pub mod multimodal;
 pub mod rag;

@@ -3,6 +3,7 @@
 use axum::Router;
 use axum::routing::{delete, get, post, put};
 
+use crate::advanced_handlers;
 use crate::ai_handlers;
 use crate::handlers;
 use crate::io_handlers;
@@ -48,5 +49,17 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/ai/temporal", get(ai_handlers::temporal_analysis))
         // Export — PDF
         .route("/v1/export/pdf/{id}", get(io_handlers::export_note_pdf))
+        // Tasks / Kanban
+        .route("/v1/tasks", get(advanced_handlers::get_all_tasks))
+        .route("/v1/tasks/{id}", get(advanced_handlers::get_note_tasks))
+        // Calendar
+        .route("/v1/calendar", get(advanced_handlers::calendar_month))
+        // Flashcards
+        .route("/v1/flashcards/{id}", get(advanced_handlers::get_note_flashcards))
+        // Web Clipper
+        .route("/v1/clip/html", post(advanced_handlers::clip_html))
+        .route("/v1/clip/bookmark", post(advanced_handlers::clip_bookmark))
+        // Plugins
+        .route("/v1/plugins", get(advanced_handlers::list_plugins))
         .with_state(state)
 }

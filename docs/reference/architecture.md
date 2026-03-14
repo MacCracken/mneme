@@ -26,14 +26,14 @@
 
 | Crate | I/O | Responsibility |
 |-------|-----|---------------|
-| `mneme-core` | None | Pure types: Note, Link, Tag, Graph, Frontmatter |
-| `mneme-store` | SQLite, filesystem | Persistence: DB operations, file I/O, Vault |
+| `mneme-core` | None | Pure types: Note, Link, Tag, Graph, Frontmatter, tasks, calendar, plugins |
+| `mneme-store` | SQLite, filesystem | Persistence: DB operations, file I/O, Vault, versioning, sharing |
 | `mneme-search` | Tantivy, HTTP | Full-text index, semantic search, hybrid merge |
-| `mneme-ai` | HTTP (daimon) | RAG, summarization, auto-linking, concepts, writing, translation, temporal, multi-modal |
+| `mneme-ai` | HTTP (daimon) | RAG, summarization, auto-linking, concepts, writing, translation, temporal, multi-modal, creative suite, flashcards |
 | `mneme-api` | HTTP (axum) | REST API server |
 | `mneme-ui` | Terminal (crossterm) | TUI application |
 | `mneme-mcp` | Stdio | MCP server for Claude |
-| `mneme-io` | Filesystem | Import (Obsidian, Markdown, Notion), export (HTML, PDF) |
+| `mneme-io` | Filesystem | Import (Obsidian, Markdown, Notion), export (HTML, PDF), web clipper |
 
 ## Data Flow
 
@@ -68,6 +68,7 @@ See `docs/adr/` for Architecture Decision Records:
 - **ADR-001**: Rust + Tantivy + SQLite
 - **ADR-002**: Plain Markdown files as source of truth
 - **ADR-003**: Daimon delegation for AI features
+- **ADR-006**: Collaboration and extensibility architecture
 
 ## AGNOS Integration
 

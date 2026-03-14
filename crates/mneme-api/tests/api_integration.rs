@@ -672,3 +672,191 @@ async fn export_note_as_pdf() {
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     assert!(bytes.starts_with(b"%PDF"));
 }
+
+#[tokio::test]
+async fn get_note_tasks() {
+    let (app, _dir) = test_app().await;
+    let resp = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/notes",
+            Some(json!({
+                "title": "Task Note",
+                "content": "# Tasks\n- [ ] Do something\n- [x] Done thing\n- [ ] Another task !high",
+                "tags": []
+            })),
+        ))
+        .await
+        .unwrap();
+    let created = response_json(resp).await;
+    let note_id = created["id"].as_str().unwrap();
+
+    let resp = app
+        .oneshot(json_request(
+            "GET",
+            &format!("/v1/tasks/{note_id}"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let board = response_json(resp).await;
+    assert_eq!(board["total"], 3);
+    assert_eq!(board["completed"], 1);
+    assert_eq!(board["pending"], 2);
+}
+
+#[tokio::test]
+async fn get_all_tasks() {
+    let (app, _dir) = test_app().await;
+    app.clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/notes",
+            Some(json!({
+                "title": "Tasks 1",
+                "content": "- [ ] Task A\n- [x] Task B",
+                "tags": []
+            })),
+        ))
+        .await
+        .unwrap();
+
+    let resp = app
+        .oneshot(json_request("GET", "/v1/tasks", None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let board = response_json(resp).await;
+    assert_eq!(board["total"], 2);
+}
+
+#[tokio::test]
+async fn calendar_month_view() {
+    let (app, _dir) = test_app().await;
+    app.clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/notes",
+            Some(json!({
+                "title": "2026-03-13 — Daily Note",
+                "content": "Today's note.",
+                "tags": ["daily"]
+            })),
+        ))
+        .await
+        .unwrap();
+
+    let resp = app
+        .oneshot(json_request(
+            "GET",
+            "/v1/calendar?year=2026&month=3",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let view = response_json(resp).await;
+    assert_eq!(view["year"], 2026);
+    assert_eq!(view["month"], 3);
+    assert_eq!(view["days_with_notes"], 1);
+}
+
+#[tokio::test]
+async fn get_flashcards() {
+    let (app, _dir) = test_app().await;
+    let resp = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/notes",
+            Some(json!({
+                "title": "Study Note",
+                "content": "**Rust**: A systems programming language.\n\n## Ownership\n\nEach value has exactly one owner.",
+                "tags": []
+            })),
+        ))
+        .await
+        .unwrap();
+    let created = response_json(resp).await;
+    let note_id = created["id"].as_str().unwrap();
+
+    let resp = app
+        .oneshot(json_request(
+            "GET",
+            &format!("/v1/flashcards/{note_id}"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let cards = response_json(resp).await;
+    assert!(!cards.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn clip_bookmark_and_create() {
+    let (app, _dir) = test_app().await;
+    let resp = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/clip/bookmark",
+            Some(json!({
+                "url": "https://rust-lang.org",
+                "title": "Rust Programming Language",
+                "description": "Official Rust website",
+                "create": true
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let clip = response_json(resp).await;
+    assert_eq!(clip["title"], "Rust Programming Language");
+    assert!(clip["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|t| t == "bookmark"));
+
+    // Verify note was created
+    let resp = app
+        .oneshot(json_request("GET", "/v1/notes?limit=10", None))
+        .await
+        .unwrap();
+    let notes = response_json(resp).await;
+    assert_eq!(notes.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn clip_html_content() {
+    let (app, _dir) = test_app().await;
+    let resp = app
+        .oneshot(json_request(
+            "POST",
+            "/v1/clip/html",
+            Some(json!({
+                "html": "<html><head><title>Article</title></head><body><h1>Test</h1><p>Content here.</p></body></html>",
+                "url": "https://example.com/article"
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let clip = response_json(resp).await;
+    assert_eq!(clip["title"], "Article");
+}
+
+#[tokio::test]
+async fn list_plugins_empty() {
+    let (app, _dir) = test_app().await;
+    let resp = app
+        .oneshot(json_request("GET", "/v1/plugins", None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let plugins = response_json(resp).await;
+    assert!(plugins.as_array().unwrap().is_empty());
+}

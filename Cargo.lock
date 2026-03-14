@@ -1809,6 +1809,7 @@ dependencies = [
  "chrono",
  "mneme-core",
  "mneme-search",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -1848,7 +1849,9 @@ name = "mneme-core"
 version = "2026.3.13"
 dependencies = [
  "chrono",
+ "regex",
  "serde",
+ "serde_json",
  "uuid",
 ]
 

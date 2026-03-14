@@ -215,6 +215,65 @@ curl http://localhost:3838/v1/export/pdf/{note-id} -o note.pdf
 
 The PDF includes the note title, tags, and formatted content with proper typography.
 
+## Tasks & Kanban
+
+Mneme extracts tasks from Markdown checkbox syntax in your notes:
+
+```markdown
+- [ ] Regular task
+- [x] Completed task
+- [ ] Urgent fix !urgent
+- [ ] Submit report @2026-03-15
+```
+
+Priority markers: `!urgent`, `!high`, `!low`. Due dates: `@YYYY-MM-DD`.
+
+```bash
+# Get tasks from a note
+curl http://localhost:3838/v1/tasks/{note-id}
+
+# Get all tasks across your vault
+curl http://localhost:3838/v1/tasks
+```
+
+## Calendar
+
+Notes with dates in their titles (e.g., "2026-03-13 — Daily Note") appear in the calendar view:
+
+```bash
+curl "http://localhost:3838/v1/calendar?year=2026&month=3"
+```
+
+## Flashcards
+
+Generate study flashcards from note content:
+
+```bash
+curl http://localhost:3838/v1/flashcards/{note-id}
+```
+
+Cards are extracted from:
+- **Definitions**: `**Term**: definition text`
+- **Concepts**: `## Heading` followed by explanatory content
+
+Includes SM-2 spaced repetition scheduling for optimal review intervals.
+
+## Web Clipper
+
+Save web pages and bookmarks as notes:
+
+```bash
+# Clip HTML content
+curl -X POST http://localhost:3838/v1/clip/html \
+  -H 'Content-Type: application/json' \
+  -d '{"html": "<html>...</html>", "url": "https://example.com", "create": true}'
+
+# Save a bookmark
+curl -X POST http://localhost:3838/v1/clip/bookmark \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://example.com", "title": "Example", "create": true}'
+```
+
 ## Configuration
 
 Environment variables:

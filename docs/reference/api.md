@@ -223,3 +223,71 @@ Analyze knowledge evolution across all notes.
 Export a note as a PDF file.
 
 Returns binary PDF with `Content-Type: application/pdf` and `Content-Disposition` header.
+
+## Tasks / Kanban
+
+### GET /v1/tasks
+Get all tasks extracted from all notes.
+
+**Response:**
+```json
+{
+  "tasks": [{"id": "uuid", "note_id": "uuid", "text": "Do something", "completed": false, "priority": "high", "line_number": 3}],
+  "total": 5,
+  "completed": 2,
+  "pending": 3
+}
+```
+
+### GET /v1/tasks/{id}
+Get tasks from a specific note.
+
+## Calendar
+
+### GET /v1/calendar?year=2026&month=3
+Get a calendar month view showing notes with dates in their titles.
+
+**Response:**
+```json
+{
+  "year": 2026,
+  "month": 3,
+  "entries": [{"date": "2026-03-13", "note_id": "uuid", "title": "2026-03-13 — Daily Note", "entry_type": "daily_note"}],
+  "days_with_notes": 5
+}
+```
+
+## Flashcards
+
+### GET /v1/flashcards/{id}
+Extract flashcards from a note's content (definitions, concepts).
+
+**Response:**
+```json
+[
+  {"id": "uuid", "note_id": "uuid", "front": "What is Rust?", "back": "A systems programming language.", "card_type": "definition"}
+]
+```
+
+## Web Clipper
+
+### POST /v1/clip/html
+Clip HTML content to a Markdown note.
+
+**Request:**
+```json
+{"html": "<html>...</html>", "url": "https://example.com", "create": true}
+```
+
+### POST /v1/clip/bookmark
+Save a bookmark as a note.
+
+**Request:**
+```json
+{"url": "https://example.com", "title": "Example", "description": "A test site", "create": true}
+```
+
+## Plugins
+
+### GET /v1/plugins
+List installed plugins.

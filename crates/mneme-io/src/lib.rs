@@ -14,6 +14,7 @@ pub mod export_pdf;
 pub mod import_markdown;
 pub mod import_notion;
 pub mod import_obsidian;
+pub mod web_clipper;
 pub mod wikilink;
 
 pub use error::IoError;

@@ -13,6 +13,16 @@ All notable changes to Mneme will be documented in this file.
 - **Multi-Modal**: Image/audio/video attachment support, Shruti transcription integration
 - **API**: 5 new endpoints — `/v1/ai/write`, `/v1/ai/translate/{id}`, `/v1/ai/languages`, `/v1/ai/temporal`, `/v1/export/pdf/{id}`
 - **ADR-005**: Advanced AI feature architecture decisions
+- **Tasks/Kanban**: Extract tasks from Markdown checkboxes, priority markers, due dates; board views
+- **Calendar**: Daily note calendar, month views, entry type detection from titles
+- **Plugin System**: Plugin registry with capability-based lookup and hook points
+- **Versioning**: Note version history with line-level diffs, Delta integration ready
+- **Sharing**: Multi-user vault sharing with Owner/Editor/Viewer roles, conflict detection
+- **Creative Suite**: Tazama shot lists, Rasa design assets, Shruti show notes, BullShift trade journal
+- **Flashcards**: Spaced repetition with SM-2 scheduling, card extraction from definitions and concepts
+- **Web Clipper**: HTML-to-Markdown conversion, bookmark saving with auto-tagging
+- **API**: 7 new endpoints — tasks, calendar, flashcards, web clipper, plugins
+- **ADR-006**: Collaboration and extensibility architecture decisions
 
 ## [2026.3.13] — 2026-03-13
 

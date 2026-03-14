@@ -10,3 +10,7 @@ description = "Zero-I/O core types: notes, links, tags, graph, markdown AST"
 serde = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

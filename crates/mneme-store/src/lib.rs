@@ -6,7 +6,9 @@
 pub mod db;
 pub mod error;
 pub mod files;
+pub mod sharing;
 pub mod vault;
+pub mod versioning;
 
 pub use error::StoreError;
 pub use vault::Vault;
