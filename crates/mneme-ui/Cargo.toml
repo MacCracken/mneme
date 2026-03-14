@@ -4,15 +4,21 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "GUI: editor, graph visualization, search, backlinks panel"
+description = "TUI: note list, search, editor, backlinks panel, tag browser"
 
 [dependencies]
 mneme-core = { workspace = true }
 mneme-store = { workspace = true }
 mneme-search = { workspace = true }
 mneme-ai = { workspace = true }
-mneme-api = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+dirs = "6"

@@ -1,4 +1,11 @@
-//! Mneme UI — graphical interface.
+//! Mneme UI — terminal user interface.
 //!
-//! Provides the desktop GUI with Markdown editor, knowledge graph
-//! visualization, search interface, and backlinks panel.
+//! Provides a TUI with:
+//! - Note list with search
+//! - Markdown note viewer
+//! - Backlinks panel
+//! - Tag browser
+//! - Keyboard-driven navigation
+
+pub mod app;
+pub mod views;

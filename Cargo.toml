@@ -52,11 +52,15 @@ pulldown-cmark = "0.12"
 comrak = "0.36"
 
 # Utilities
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 bytes = "1"
 sha2 = "0.10"
 hex = "0.4"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
 
 # Internal crates
 mneme-core = { path = "crates/mneme-core" }
