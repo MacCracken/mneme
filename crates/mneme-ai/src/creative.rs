@@ -339,4 +339,69 @@ mod tests {
         let json = serde_json::to_string(&link).unwrap();
         assert!(json.contains("mockup"));
     }
+
+    #[test]
+    fn extract_no_tickers() {
+        let entries = extract_trade_info(Uuid::new_v4(), "No stock tickers here.");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn show_notes_empty_transcript() {
+        let notes = local_show_notes("", "Empty");
+        assert_eq!(notes.title, "Empty");
+    }
+
+    #[test]
+    fn trade_hold_action() {
+        let content = "Decided to hold $MSFT position for now.";
+        let entries = extract_trade_info(Uuid::new_v4(), content);
+        assert_eq!(entries[0].action, TradeAction::Hold);
+    }
+
+    #[test]
+    fn trade_research_default() {
+        let content = "Analyzing $NVDA for potential opportunities.";
+        let entries = extract_trade_info(Uuid::new_v4(), content);
+        assert_eq!(entries[0].action, TradeAction::Research);
+    }
+
+    #[test]
+    fn image_annotation_serialization() {
+        let ann = ImageAnnotation {
+            image_path: "test.png".into(),
+            note_id: Uuid::new_v4(),
+            label: "Diagram".into(),
+            region: Some(AnnotationRegion { x: 10.0, y: 20.0, width: 100.0, height: 50.0 }),
+        };
+        let json = serde_json::to_string(&ann).unwrap();
+        assert!(json.contains("Diagram"));
+        assert!(json.contains("100"));
+    }
+
+    #[test]
+    fn show_notes_serialization() {
+        let notes = ShowNotes {
+            title: "Test".into(),
+            summary: "Summary".into(),
+            timestamps: vec![TimestampEntry { time: "00:05".into(), label: "Intro".into() }],
+            key_topics: vec!["topic1".into()],
+        };
+        let json = serde_json::to_string(&notes).unwrap();
+        assert!(json.contains("00:05"));
+    }
+
+    #[test]
+    fn trade_journal_serialization() {
+        let entry = TradeJournalEntry {
+            note_id: Uuid::new_v4(),
+            ticker: "AAPL".into(),
+            action: TradeAction::Buy,
+            thesis: "Strong earnings".into(),
+            outcome: Some("Profitable".into()),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("buy"));
+        assert!(json.contains("Profitable"));
+    }
 }

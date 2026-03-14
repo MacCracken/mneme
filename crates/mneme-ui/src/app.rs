@@ -241,4 +241,97 @@ mod tests {
         app.load_tags().await;
         assert_eq!(app.tag_list.len(), 2);
     }
+
+    #[tokio::test]
+    async fn select_note_loads_content() {
+        let (mut app, _dir) = test_app().await;
+        use mneme_core::note::CreateNote;
+        let note = app
+            .vault
+            .create_note(CreateNote {
+                title: "View Me".into(),
+                path: None,
+                content: "Detailed content here.".into(),
+                tags: vec!["tag1".into()],
+            })
+            .await
+            .unwrap();
+
+        app.select_note(note.note.id).await;
+        assert_eq!(app.panel, Panel::NoteView);
+        assert_eq!(app.selected_note_id, Some(note.note.id));
+        assert_eq!(app.note_content, "Detailed content here.");
+        assert_eq!(app.note_tags, vec!["tag1"]);
+        assert!(app.status_message.contains("View Me"));
+    }
+
+    #[tokio::test]
+    async fn select_note_not_found() {
+        let (mut app, _dir) = test_app().await;
+        app.select_note(uuid::Uuid::new_v4()).await;
+        assert!(app.status_message.contains("Error"));
+    }
+
+    #[tokio::test]
+    async fn run_search_with_results() {
+        let (mut app, _dir) = test_app().await;
+        use mneme_core::note::CreateNote;
+        let note = app
+            .vault
+            .create_note(CreateNote {
+                title: "Rust Guide".into(),
+                path: None,
+                content: "Rust programming language guide.".into(),
+                tags: vec!["rust".into()],
+            })
+            .await
+            .unwrap();
+        // Index it
+        let _ = app.search.index_note(
+            note.note.id,
+            &note.note.title,
+            &note.content,
+            &note.tags,
+            &note.note.path,
+        );
+
+        app.search_query = "rust".into();
+        app.run_search();
+        assert!(!app.search_results.is_empty());
+        assert!(app.status_message.contains("result"));
+    }
+
+    #[tokio::test]
+    async fn select_next_in_search_panel() {
+        let (mut app, _dir) = test_app().await;
+        app.panel = Panel::Search;
+        app.search_results = vec![
+            (uuid::Uuid::new_v4(), "R1".into(), 1.0),
+            (uuid::Uuid::new_v4(), "R2".into(), 0.5),
+        ];
+        app.selected_index = 0;
+        app.select_next();
+        assert_eq!(app.selected_index, 1);
+        app.select_next();
+        assert_eq!(app.selected_index, 1); // can't go past end
+    }
+
+    #[tokio::test]
+    async fn select_next_in_tags_panel() {
+        let (mut app, _dir) = test_app().await;
+        app.panel = Panel::Tags;
+        app.tag_list = vec!["a".into(), "b".into()];
+        app.selected_index = 0;
+        app.select_next();
+        assert_eq!(app.selected_index, 1);
+    }
+
+    #[tokio::test]
+    async fn select_next_in_note_view_noop() {
+        let (mut app, _dir) = test_app().await;
+        app.panel = Panel::NoteView;
+        app.selected_index = 0;
+        app.select_next();
+        assert_eq!(app.selected_index, 0); // no-op in NoteView
+    }
 }

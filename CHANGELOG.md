@@ -2,50 +2,76 @@
 
 All notable changes to Mneme will be documented in this file.
 
-## [Unreleased]
-
-### Added
-- **Import**: Notion export directory import with UUID cleanup, link conversion
-- **Export**: PDF export with printpdf (A4, Helvetica/Courier, page breaks)
-- **AI Writing**: Complete, reword, and expand text via daimon with local fallbacks
-- **Translation**: Per-note and batch translation with 12+ supported languages
-- **Temporal Analysis**: Monthly activity tracking, concept trend detection (rising/stable/declining)
-- **Multi-Modal**: Image/audio/video attachment support, Shruti transcription integration
-- **API**: 5 new endpoints — `/v1/ai/write`, `/v1/ai/translate/{id}`, `/v1/ai/languages`, `/v1/ai/temporal`, `/v1/export/pdf/{id}`
-- **ADR-005**: Advanced AI feature architecture decisions
-- **Tasks/Kanban**: Extract tasks from Markdown checkboxes, priority markers, due dates; board views
-- **Calendar**: Daily note calendar, month views, entry type detection from titles
-- **Plugin System**: Plugin registry with capability-based lookup and hook points
-- **Versioning**: Note version history with line-level diffs, Delta integration ready
-- **Sharing**: Multi-user vault sharing with Owner/Editor/Viewer roles, conflict detection
-- **Creative Suite**: Tazama shot lists, Rasa design assets, Shruti show notes, BullShift trade journal
-- **Flashcards**: Spaced repetition with SM-2 scheduling, card extraction from definitions and concepts
-- **Web Clipper**: HTML-to-Markdown conversion, bookmark saving with auto-tagging
-- **API**: 7 new endpoints — tasks, calendar, flashcards, web clipper, plugins
-- **ADR-006**: Collaboration and extensibility architecture decisions
-
 ## [2026.3.13] — 2026-03-13
 
-### Added
-- **Core**: Note, Link, Tag, Graph types with Markdown frontmatter parsing
-- **Store**: SQLite persistence with CRUD operations, file-backed Markdown storage, content hashing (SHA-256)
-- **Search**: Tantivy full-text search with BM25 ranking, hybrid semantic search via daimon, tag filtering
-- **AI**: RAG pipeline, note summarization, auto-linking, concept extraction, auto-tagging, note templates
-- **API**: Axum HTTP server (port 3838) with 18 endpoints — note CRUD, search, tags, AI, templates
-- **UI**: Terminal interface with note list, viewer, search, backlinks panel, tag browser
-- **MCP**: JSON-RPC 2.0 server with 5 tools for Claude integration
-- **Import/Export**: Obsidian vault import (wikilinks, frontmatter), Markdown directory import, HTML static site export
+### Core
+- Note, Link, Tag, Graph types with Markdown frontmatter parsing
+- Task extraction from Markdown checkboxes with priority markers and due dates
+- Calendar types: daily notes, month views, entry type detection
+- Plugin system: registry with capability-based lookup and hook points
+
+### Store
+- SQLite persistence with CRUD operations, file-backed Markdown storage, content hashing (SHA-256)
+- Note versioning: version history with line-level diffs, Delta integration ready
+- Vault sharing: multi-user with Owner/Editor/Viewer roles, conflict detection
+
+### Search
+- Tantivy full-text search with BM25 ranking
+- Hybrid semantic search via daimon vector endpoints
+- Tag-based filtering, search result pagination
+
+### AI
+- RAG pipeline: ingest, query, and Q&A over knowledge base
+- Note summarization (extractive + daimon abstractive)
+- Auto-linking: suggest connections between related notes
+- Concept extraction: entities, topics, key terms via TF-IDF
+- Auto-tagging with confidence scores and vocabulary matching
+- Note templates: daily, meeting, project with variable substitution
+- AI writing assistant: complete, reword, expand with daimon/local fallback
+- Translation pipeline: per-note and batch, 12+ supported languages
+- Temporal analysis: monthly activity tracking, concept trend detection
+- Multi-modal notes: image/audio/video attachments, Shruti transcription
+- Creative suite: Tazama shot lists, Rasa design assets, Shruti show notes, BullShift trade journal
+- Spaced repetition: SM-2 scheduling, flashcard extraction from definitions and concepts
+
+### API
+- Axum HTTP server (port 3838) with 30+ endpoints
+- Note CRUD, search, tags, health check
+- AI: RAG query/ingest/stats, summarize, suggest-links, concepts, suggest-tags, write, translate, languages, temporal
+- Templates: list, render (with optional note creation)
+- Export: PDF
+- Tasks/Kanban, Calendar, Flashcards
+- Web Clipper: HTML-to-Markdown, bookmarks
+- Plugins: list installed
+
+### UI
+- Terminal interface (ratatui + crossterm)
+- Note list, Markdown viewer, search, backlinks panel, tag browser
+- Keyboard-driven navigation
+
+### MCP
+- JSON-RPC 2.0 server with 5 tools for Claude integration
+- create_note, search, get_note, update_note, query_graph
+
+### Import / Export
+- Import: Obsidian vaults (wikilinks, frontmatter, inline tags)
+- Import: Notion export directories (UUID cleanup, link conversion)
+- Import: Plain Markdown directories
+- Export: Static HTML site with navigation and styling
+- Export: PDF (printpdf, A4, Helvetica/Courier, page breaks)
+- Web clipper: HTML-to-Markdown conversion, bookmark saving
 
 ### Quality
-- 106 tests across 8 crates (unit + integration)
+- 257 tests across 8 crates (unit + integration)
+- 77.69% test coverage
 - Criterion benchmark suite for search and store operations
 - Zero clippy warnings
 
 ### Documentation
-- User guide with templates, auto-tagging, and import/export sections
-- API reference covering all 18 endpoints
-- Architecture documentation with crate dependency graph and data flow diagrams
-- 4 Architecture Decision Records (ADR-001 through ADR-004)
+- User guide covering all features
+- API reference for all 30+ endpoints
+- Architecture documentation with crate dependency graph and data flow
+- 6 Architecture Decision Records (ADR-001 through ADR-006)
 
 ### AGNOS Integration
 - Systemd service unit (`deploy/mneme.service`)

@@ -174,6 +174,23 @@ mod tests {
     }
 
     #[test]
+    fn preserve_structure_code_blocks() {
+        let content = "Text line\n```\ncode here\n```\n---\nMore text";
+        let result = preserve_markdown_structure(content, "fr");
+        assert!(result.contains("```"));
+        assert!(result.contains("---"));
+        assert!(result.contains("/* fr */"));
+    }
+
+    #[test]
+    fn language_serialization() {
+        let lang = Language { code: "ja".into(), name: "Japanese".into() };
+        let json = serde_json::to_string(&lang).unwrap();
+        assert!(json.contains("ja"));
+        assert!(json.contains("Japanese"));
+    }
+
+    #[test]
     fn translate_result_serialization() {
         let result = TranslateResult {
             original: "hello".into(),

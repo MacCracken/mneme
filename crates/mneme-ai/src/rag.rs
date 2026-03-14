@@ -107,4 +107,34 @@ mod tests {
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains("test content"));
     }
+
+    #[test]
+    fn rag_answer_serialization() {
+        let answer = RagAnswer {
+            query: "test question".into(),
+            context: "some context".into(),
+            source_chunks: vec![SourceChunk {
+                content: "chunk".into(),
+                score: 0.9,
+                note_id: None,
+                note_title: None,
+            }],
+            token_estimate: 100,
+        };
+        let json = serde_json::to_string(&answer).unwrap();
+        assert!(json.contains("test question"));
+        assert!(json.contains("token_estimate"));
+    }
+
+    #[test]
+    fn source_chunk_without_note() {
+        let chunk = SourceChunk {
+            content: "data".into(),
+            score: 0.5,
+            note_id: None,
+            note_title: None,
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains("null"));
+    }
 }

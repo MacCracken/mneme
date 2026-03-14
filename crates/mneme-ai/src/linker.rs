@@ -112,4 +112,18 @@ mod tests {
         assert!(json.contains("Related Note"));
         assert!(json.contains("0.85"));
     }
+
+    #[test]
+    fn truncate_content_short() {
+        let result = super::truncate_content("short", 100);
+        assert_eq!(result, "short");
+    }
+
+    #[test]
+    fn truncate_content_long() {
+        let long = "a".repeat(200);
+        let result = super::truncate_content(&long, 50);
+        assert!(result.ends_with("..."));
+        assert!(result.len() < 60);
+    }
 }

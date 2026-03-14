@@ -1888,6 +1888,7 @@ dependencies = [
  "mneme-store",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

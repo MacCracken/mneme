@@ -246,4 +246,46 @@ mod tests {
         let json = serde_json::to_string(&att).unwrap();
         assert!(json.contains("audio"));
     }
+
+    #[test]
+    fn detect_document_types() {
+        assert_eq!(MultiModal::detect_media_type(Path::new("file.pdf")), MediaType::Document);
+        assert_eq!(MultiModal::detect_media_type(Path::new("doc.docx")), MediaType::Document);
+    }
+
+    #[test]
+    fn document_markdown() {
+        let att = Attachment {
+            filename: "report.pdf".into(),
+            media_type: MediaType::Document,
+            size_bytes: 4096,
+            path: PathBuf::from("report.pdf"),
+        };
+        let md = MultiModal::attachment_markdown(&att);
+        assert!(md.contains("report.pdf"));
+    }
+
+    #[test]
+    fn video_markdown() {
+        let att = Attachment {
+            filename: "clip.mp4".into(),
+            media_type: MediaType::Video,
+            size_bytes: 8192,
+            path: PathBuf::from("clip.mp4"),
+        };
+        let md = MultiModal::attachment_markdown(&att);
+        assert!(md.contains("clip.mp4"));
+    }
+
+    #[test]
+    fn unknown_markdown() {
+        let att = Attachment {
+            filename: "data.xyz".into(),
+            media_type: MediaType::Unknown,
+            size_bytes: 100,
+            path: PathBuf::from("data.xyz"),
+        };
+        let md = MultiModal::attachment_markdown(&att);
+        assert!(md.contains("data.xyz"));
+    }
 }

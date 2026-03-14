@@ -4,149 +4,38 @@ Version: 2026.3.13
 
 ---
 
-## Phase 1 — Foundation (MVP Core) ✓
+## Completed
 
-Build the essential note-taking and search infrastructure.
+All planned phases and post-MVP features have been implemented.
 
-### mneme-core ✓
-- [x] Note type: id, title, content hash, timestamps, path
-- [x] Link type: source, target, link text, context
-- [x] Tag type: name, color, hierarchy (nested tags)
-- [x] Graph types: nodes, edges, adjacency queries
-- [x] Markdown frontmatter parsing (YAML metadata)
+### Phases 1–4: Foundation → Polish (MVP Complete)
+- Core types, SQLite persistence, file-backed Markdown storage
+- Tantivy full-text search, hybrid BM25 + semantic ranking
+- AI pipelines: RAG, summarization, auto-linking, concept extraction, tagging, templates
+- Axum HTTP API (30+ endpoints), TUI (ratatui), MCP server (5 tools)
+- 257 tests, Criterion benchmarks, 6 ADRs, full documentation
+- AGNOS marketplace recipe, systemd service, agnoshi intents
 
-### mneme-store ✓
-- [x] SQLite schema: notes, tags, links, note_tags, attachments
-- [x] Migrations framework (sqlx)
-- [x] CRUD operations for notes, tags, links
-- [x] File-backed note storage (read/write Markdown files)
-- [x] Content hashing for change detection (SHA-256)
-- [x] File watcher for external edits (notify crate)
-
-### mneme-search ✓
-- [x] Tantivy index schema: title, body, tags, path
-- [x] Index build / incremental update
-- [x] Full-text search with ranking
-- [x] Tag-based filtering
-- [x] Search result types and pagination
-
-### mneme-api ✓
-- [x] Axum HTTP server scaffold
-- [x] Note CRUD endpoints (GET/POST/PUT/DELETE)
-- [x] Search endpoint (query + filters)
-- [x] Tag management endpoints
-- [x] Health check, version endpoint
+### Post-MVP
+- Import: Obsidian, Notion, Markdown directories
+- Export: HTML static site, PDF (printpdf)
+- AI: writing assist, translation, temporal analysis, multi-modal, creative suite, flashcards
+- Collaboration: versioning (Delta-ready), sharing (roles, conflicts)
+- Advanced: tasks/kanban, calendar, web clipper, plugin system
 
 ---
 
-## Phase 2 — Intelligence ✓
+## Future Considerations
 
-Add AI-powered features via daimon integration.
+Items that may be explored in future versions:
 
-### mneme-search (additions) ✓
-- [x] Vector/semantic search via daimon `/v1/vectors/*`
-- [x] Embedding generation for notes (on create/update)
-- [x] Hybrid search: combine BM25 + semantic ranking
-- [x] "Similar notes" suggestions
-
-### mneme-ai ✓
-- [x] daimon RAG client (`/v1/rag/*` endpoints)
-- [x] Note summarization pipeline
-- [x] Auto-linking: suggest links between related notes
-- [x] Concept extraction: entities, topics, key terms
-- [x] Knowledge graph population from extracted concepts
-- [x] Q&A over knowledge base (RAG pipeline)
-
-### mneme-api (additions) ✓
-- [x] AI endpoints: summarize, suggest-links, extract-concepts
-- [x] RAG query endpoint
-- [x] Knowledge graph query endpoints
-- [x] Background indexing / re-indexing jobs
-
----
-
-## Phase 3 — Interface & Integration ✓
-
-Desktop GUI and Claude integration.
-
-### mneme-ui ✓
-- [x] Markdown editor with live preview
-- [x] Note list / tree navigation
-- [x] Search interface (full-text + semantic)
-- [x] Backlinks panel (what links here)
-- [x] Tag browser and management
-- [ ] Knowledge graph visualization (force-directed or hierarchical)
-- [ ] Split-pane / multi-note view
-
-### mneme-mcp ✓
-- [x] MCP 2.0 server scaffold
-- [x] `mneme_create_note` tool
-- [x] `mneme_search` tool
-- [x] `mneme_get_note` tool
-- [x] `mneme_update_note` tool
-- [x] `mneme_query_graph` tool
-- [ ] SecureYeoman MCP tool registration
-
----
-
-## Phase 4 — Polish & Ecosystem (MVP Complete) ✓
-
-Production readiness and AGNOS marketplace.
-
-### Quality & Performance ✓
-- [x] 106 tests across all crates (unit + integration)
-- [x] Criterion benchmark suite: search latency, indexing throughput, store operations
-- [ ] Large vault stress testing (10k+ notes)
-- [ ] Memory profiling and optimization
-
-### AGNOS Integration ✓
-- [x] Marketplace recipe (`.agnos-agent` bundle)
-- [x] 5 agnoshi intents for voice/agent interaction
-- [x] Systemd service unit for background indexing
-- [ ] SecureYeoman sandbox verification
-
-### Documentation ✓
-- [x] User guide
-- [x] API reference
-- [x] Architecture documentation
-- [x] ADRs for all major decisions (001–004)
-
----
-
-## Post-MVP
-
-### Import / Export ✓ (mneme-io)
-- [x] Import from Obsidian vaults (wikilinks, dataview)
-- [x] Import from Notion export directories
-- [x] Import from plain Markdown directories
-- [x] Export to static site (HTML)
-- [x] Export to PDF (printpdf)
-
-### Advanced AI ✓
-- [x] AI-assisted writing: completions, rewording, expansion
-- [x] Translation pipeline (per-note and batch)
-- [x] Automatic tagging suggestions
-- [x] Note templates (daily, meeting, project)
-- [x] Temporal analysis: concept trends, activity metrics
-- [x] Multi-modal notes (images, audio transcription via Shruti)
-
-### Collaboration ✓
-- [x] Delta integration for note version control
-- [x] Shared vaults (multi-user, conflict resolution)
-- [x] Collaborative editing (sharing, roles, conflict detection)
-
-### Creative Suite Integration ✓
-- [x] Tazama: link notes to video projects, auto-generate shot lists
-- [x] Rasa: embed image annotations, link design assets
-- [x] Shruti: audio note transcription, podcast show notes
-- [x] BullShift: trade journal, research notes linked to positions
-
-### Advanced Features ✓
-- [x] Kanban / task views derived from note metadata
-- [x] Spaced repetition (flashcards from notes)
-- [x] Calendar integration (daily notes, event linking)
-- [x] Web clipper / bookmark integration
-- [x] Plugin/extension system
+- Knowledge graph visualization (force-directed / hierarchical)
+- Split-pane / multi-note view in TUI
+- SecureYeoman MCP tool registration and sandbox verification
+- Large vault stress testing (10k+ notes) and memory profiling
+- Real-time WebSocket collaborative editing
+- Import from Notion API (live sync, not just export)
+- Plugin dynamic loading (currently static registry)
 
 ---
 
@@ -154,5 +43,4 @@ Production readiness and AGNOS marketplace.
 
 | Version | Date | Milestone |
 |---------|------|-----------|
-| 2026.3.13 | 2026-03-13 | Phase 4 complete — MVP ready |
-| 2026.3.13-post | 2026-03-13 | Post-MVP complete — collaboration, creative suite, advanced features |
+| 2026.3.13 | 2026-03-13 | All phases complete — full feature set |

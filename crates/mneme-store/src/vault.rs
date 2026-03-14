@@ -318,4 +318,57 @@ mod tests {
 
         assert!(matches!(err, Err(StoreError::PathConflict(_))));
     }
+
+    #[tokio::test]
+    async fn tag_operations() {
+        let (vault, _dir) = test_vault().await;
+        vault.create_note(CreateNote {
+            title: "Tagged".into(),
+            path: None,
+            content: "Content.".into(),
+            tags: vec!["alpha".into(), "beta".into()],
+        }).await.unwrap();
+
+        let tags = vault.list_tags().await.unwrap();
+        assert_eq!(tags.len(), 2);
+
+        let tag_id = tags.iter().find(|t| t.name == "alpha").unwrap().id;
+        vault.delete_tag(tag_id).await.unwrap();
+        let tags = vault.list_tags().await.unwrap();
+        assert_eq!(tags.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn update_note_partial() {
+        let (vault, _dir) = test_vault().await;
+        let created = vault.create_note(CreateNote {
+            title: "Original".into(),
+            path: None,
+            content: "Original content.".into(),
+            tags: vec!["tag1".into()],
+        }).await.unwrap();
+
+        // Update only title
+        let updated = vault.update_note(created.note.id, UpdateNote {
+            title: Some("New Title".into()),
+            content: None,
+            tags: None,
+        }).await.unwrap();
+        assert_eq!(updated.note.title, "New Title");
+        assert_eq!(updated.content, "Original content.");
+        assert_eq!(updated.tags, vec!["tag1"]);
+    }
+
+    #[tokio::test]
+    async fn count_notes_empty() {
+        let (vault, _dir) = test_vault().await;
+        assert_eq!(vault.count_notes().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn delete_nonexistent_note() {
+        let (vault, _dir) = test_vault().await;
+        let result = vault.delete_note(uuid::Uuid::new_v4()).await;
+        assert!(result.is_err());
+    }
 }

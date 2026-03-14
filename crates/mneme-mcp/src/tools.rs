@@ -343,3 +343,259 @@ fn parse_uuid(args: &Value, field: &str) -> Result<Uuid, String> {
         .ok_or_else(|| format!("Missing required parameter: {field}"))?;
     Uuid::parse_str(s).map_err(|_| format!("Invalid UUID for {field}: {s}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mneme_search::SearchEngine;
+    use mneme_store::Vault;
+    use tempfile::TempDir;
+
+    async fn test_env() -> (Vault, SearchEngine, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open(dir.path()).await.unwrap();
+        let search = SearchEngine::in_memory().unwrap();
+        (vault, search, dir)
+    }
+
+    #[tokio::test]
+    async fn create_note_tool() {
+        let (vault, search, _dir) = test_env().await;
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({
+            "title": "Test Note",
+            "content": "Hello from MCP",
+            "tags": ["mcp", "test"]
+        });
+        let result = handle_tool_call(&id, "mneme_create_note", &args, &vault, &search).await;
+        assert!(result["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Created note"));
+    }
+
+    #[tokio::test]
+    async fn create_note_missing_title() {
+        let (vault, search, _dir) = test_env().await;
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({"content": "No title"});
+        let result = handle_tool_call(&id, "mneme_create_note", &args, &vault, &search).await;
+        assert_eq!(result["result"]["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn create_note_missing_content() {
+        let (vault, search, _dir) = test_env().await;
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({"title": "No content"});
+        let result = handle_tool_call(&id, "mneme_create_note", &args, &vault, &search).await;
+        assert_eq!(result["result"]["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn search_tool_no_results() {
+        let (vault, search, _dir) = test_env().await;
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({"query": "nonexistent", "limit": 5});
+        let result = handle_tool_call(&id, "mneme_search", &args, &vault, &search).await;
+        assert!(result["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("No notes found"));
+    }
+
+    #[tokio::test]
+    async fn search_tool_with_results() {
+        let (vault, search, _dir) = test_env().await;
+        // Create a note first
+        let create_args = serde_json::json!({
+            "title": "Rust Guide",
+            "content": "Rust programming language guide",
+            "tags": ["rust"]
+        });
+        handle_tool_call(
+            &serde_json::json!(1),
+            "mneme_create_note",
+            &create_args,
+            &vault,
+            &search,
+        )
+        .await;
+
+        let id = serde_json::json!(2);
+        let args = serde_json::json!({"query": "rust", "limit": 5});
+        let result = handle_tool_call(&id, "mneme_search", &args, &vault, &search).await;
+        let text = result["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("result(s)") || text.contains("Rust Guide"));
+    }
+
+    #[tokio::test]
+    async fn search_missing_query() {
+        let (vault, search, _dir) = test_env().await;
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({});
+        let result = handle_tool_call(&id, "mneme_search", &args, &vault, &search).await;
+        assert_eq!(result["result"]["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn get_note_tool() {
+        let (vault, search, _dir) = test_env().await;
+        // Create a note
+        let note = vault
+            .create_note(CreateNote {
+                title: "Get Test".into(),
+                path: None,
+                content: "Content here.".into(),
+                tags: vec!["test".into()],
+            })
+            .await
+            .unwrap();
+
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({"id": note.note.id.to_string()});
+        let result = handle_tool_call(&id, "mneme_get_note", &args, &vault, &search).await;
+        let text = result["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Get Test"));
+        assert!(text.contains("Content here."));
+    }
+
+    #[tokio::test]
+    async fn get_note_not_found() {
+        let (vault, search, _dir) = test_env().await;
+        let id = serde_json::json!(1);
+        let fake = Uuid::new_v4();
+        let args = serde_json::json!({"id": fake.to_string()});
+        let result = handle_tool_call(&id, "mneme_get_note", &args, &vault, &search).await;
+        assert_eq!(result["result"]["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn get_note_missing_id() {
+        let (vault, search, _dir) = test_env().await;
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({});
+        let result = handle_tool_call(&id, "mneme_get_note", &args, &vault, &search).await;
+        assert_eq!(result["result"]["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn get_note_invalid_uuid() {
+        let (vault, search, _dir) = test_env().await;
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({"id": "not-a-uuid"});
+        let result = handle_tool_call(&id, "mneme_get_note", &args, &vault, &search).await;
+        assert_eq!(result["result"]["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn update_note_tool() {
+        let (vault, search, _dir) = test_env().await;
+        let note = vault
+            .create_note(CreateNote {
+                title: "Original".into(),
+                path: None,
+                content: "Old content.".into(),
+                tags: vec![],
+            })
+            .await
+            .unwrap();
+
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({
+            "id": note.note.id.to_string(),
+            "title": "Updated Title",
+            "content": "New content."
+        });
+        let result = handle_tool_call(&id, "mneme_update_note", &args, &vault, &search).await;
+        let text = result["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Updated"));
+    }
+
+    #[tokio::test]
+    async fn update_note_no_fields() {
+        let (vault, search, _dir) = test_env().await;
+        let note = vault
+            .create_note(CreateNote {
+                title: "T".into(),
+                path: None,
+                content: "C".into(),
+                tags: vec![],
+            })
+            .await
+            .unwrap();
+
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({"id": note.note.id.to_string()});
+        let result = handle_tool_call(&id, "mneme_update_note", &args, &vault, &search).await;
+        assert_eq!(result["result"]["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn query_graph_no_params() {
+        let (vault, search, _dir) = test_env().await;
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({});
+        let result = handle_tool_call(&id, "mneme_query_graph", &args, &vault, &search).await;
+        assert_eq!(result["result"]["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn query_graph_by_note() {
+        let (vault, search, _dir) = test_env().await;
+        let note = vault
+            .create_note(CreateNote {
+                title: "Graph Note".into(),
+                path: None,
+                content: "Content.".into(),
+                tags: vec!["graph-tag".into()],
+            })
+            .await
+            .unwrap();
+
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({"note_id": note.note.id.to_string()});
+        let result = handle_tool_call(&id, "mneme_query_graph", &args, &vault, &search).await;
+        let text = result["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Graph"));
+    }
+
+    #[tokio::test]
+    async fn query_graph_by_tag() {
+        let (vault, search, _dir) = test_env().await;
+        vault
+            .create_note(CreateNote {
+                title: "Tagged Note".into(),
+                path: None,
+                content: "Content.".into(),
+                tags: vec!["my-tag".into()],
+            })
+            .await
+            .unwrap();
+
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({"tag": "my-tag"});
+        let result = handle_tool_call(&id, "mneme_query_graph", &args, &vault, &search).await;
+        let text = result["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Graph") || text.contains("node"));
+    }
+
+    #[tokio::test]
+    async fn query_graph_unknown_tag() {
+        let (vault, search, _dir) = test_env().await;
+        let id = serde_json::json!(1);
+        let args = serde_json::json!({"tag": "nonexistent-tag"});
+        let result = handle_tool_call(&id, "mneme_query_graph", &args, &vault, &search).await;
+        assert_eq!(result["result"]["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn unknown_tool() {
+        let (vault, search, _dir) = test_env().await;
+        let id = serde_json::json!(1);
+        let result =
+            handle_tool_call(&id, "nonexistent_tool", &serde_json::json!({}), &vault, &search)
+                .await;
+        assert_eq!(result["result"]["isError"], true);
+    }
+}

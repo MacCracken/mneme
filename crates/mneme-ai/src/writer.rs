@@ -198,6 +198,28 @@ mod tests {
     }
 
     #[test]
+    fn local_complete_empty_sentences() {
+        let req = WriteRequest {
+            action: WriteAction::Complete,
+            text: "no periods here".into(),
+            context: None,
+        };
+        let result = local_assist(&req);
+        assert!(result.contains("Furthermore"));
+    }
+
+    #[test]
+    fn local_expand_single_sentence() {
+        let req = WriteRequest {
+            action: WriteAction::Expand,
+            text: "Rust is fast.".into(),
+            context: None,
+        };
+        let result = local_assist(&req);
+        assert!(result.len() > req.text.len());
+    }
+
+    #[test]
     fn write_result_serialization() {
         let result = WriteResult {
             original: "test".into(),

@@ -146,6 +146,41 @@ mod tests {
     }
 
     #[test]
+    fn jsonrpc_error_format() {
+        let resp = jsonrpc_error(&json!(3), -32601, "Method not found");
+        assert_eq!(resp["jsonrpc"], "2.0");
+        assert_eq!(resp["id"], 3);
+        assert_eq!(resp["error"]["code"], -32601);
+        assert_eq!(resp["error"]["message"], "Method not found");
+    }
+
+    #[test]
+    fn tool_definitions_have_schemas() {
+        let tools = tool_definitions();
+        for tool in tools.as_array().unwrap() {
+            assert!(tool["name"].is_string());
+            assert!(tool["description"].is_string());
+            assert!(tool["inputSchema"]["type"].as_str() == Some("object"));
+            assert!(tool["inputSchema"]["properties"].is_object());
+        }
+    }
+
+    #[test]
+    fn tool_definitions_required_fields() {
+        let tools = tool_definitions();
+        let arr = tools.as_array().unwrap();
+        // create_note requires title and content
+        let create = arr.iter().find(|t| t["name"] == "mneme_create_note").unwrap();
+        let required = create["inputSchema"]["required"].as_array().unwrap();
+        assert!(required.iter().any(|r| r == "title"));
+        assert!(required.iter().any(|r| r == "content"));
+        // search requires query
+        let search = arr.iter().find(|t| t["name"] == "mneme_search").unwrap();
+        let required = search["inputSchema"]["required"].as_array().unwrap();
+        assert!(required.iter().any(|r| r == "query"));
+    }
+
+    #[test]
     fn tool_definitions_names() {
         let tools = tool_definitions();
         let names: Vec<&str> = tools
