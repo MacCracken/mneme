@@ -1,0 +1,20 @@
+[package]
+name = "mneme-mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "MCP 2.0 server exposing 5 tools for Claude integration"
+
+[dependencies]
+mneme-core = { workspace = true }
+mneme-store = { workspace = true }
+mneme-search = { workspace = true }
+mneme-ai = { workspace = true }
+mneme-api = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

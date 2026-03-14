@@ -1,0 +1,22 @@
+# Build
+/target/
+/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+tarpaulin-report.html
+lcov.info
+
+# Environment
+.env
+.env.local

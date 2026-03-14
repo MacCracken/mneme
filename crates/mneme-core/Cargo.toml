@@ -1,0 +1,12 @@
+[package]
+name = "mneme-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Zero-I/O core types: notes, links, tags, graph, markdown AST"
+
+[dependencies]
+serde = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
