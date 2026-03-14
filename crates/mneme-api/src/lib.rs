@@ -5,5 +5,6 @@
 
 pub mod ai_handlers;
 pub mod handlers;
+pub mod io_handlers;
 pub mod router;
 pub mod state;

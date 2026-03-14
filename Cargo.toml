@@ -7,6 +7,7 @@ members = [
     "crates/mneme-api",
     "crates/mneme-ui",
     "crates/mneme-mcp",
+    "crates/mneme-io",
 ]
 resolver = "2"
 
@@ -70,6 +71,16 @@ mneme-ai = { path = "crates/mneme-ai" }
 mneme-api = { path = "crates/mneme-api" }
 mneme-ui = { path = "crates/mneme-ui" }
 mneme-mcp = { path = "crates/mneme-mcp" }
+mneme-io = { path = "crates/mneme-io" }
+
+# File watching
+notify = "7"
+
+# Regex
+regex = "1"
+
+# Globbing
+glob = "0.3"
 
 [package]
 name = "mneme-workspace"

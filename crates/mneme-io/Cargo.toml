@@ -1,19 +1,25 @@
 [package]
-name = "mneme-ai"
+name = "mneme-io"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "AI pipelines: summarization, auto-linking, concept extraction, RAG"
+description = "Import/export: Obsidian, plain Markdown directories, HTML export"
 
 [dependencies]
 mneme-core = { workspace = true }
-mneme-search = { workspace = true }
 tokio = { workspace = true }
-reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+regex = { workspace = true }
+glob = { workspace = true }
+comrak = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

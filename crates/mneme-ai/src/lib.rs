@@ -10,6 +10,8 @@ pub mod error;
 pub mod linker;
 pub mod rag;
 pub mod summarizer;
+pub mod tagger;
+pub mod templates;
 
 pub use client::DaimonClient;
 pub use error::AiError;
