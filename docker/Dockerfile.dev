@@ -1,0 +1,25 @@
+# Development container with hot reload
+FROM ghcr.io/maccracken/agnosticos:latest
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake pkg-config libssl-dev git build-essential curl sqlite3 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --default-toolchain stable --component rustfmt,clippy
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+RUN cargo install cargo-watch --locked
+
+VOLUME /workspace
+WORKDIR /workspace
+
+ENV MNEME_VAULT_DIR=/tmp/mneme/data
+ENV MNEME_BIND=0.0.0.0:3838
+ENV RUST_LOG=debug
+ENV AGNOS_ULIMIT_VMEM=unlimited
+
+EXPOSE 3838
+
+ENTRYPOINT ["cargo", "watch", "-x", "run -p mneme-api"]

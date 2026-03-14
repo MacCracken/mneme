@@ -13,6 +13,7 @@ NC := \033[0m
         fmt format-check lint check \
         security-scan docs \
         ci-build ci-test ci-docs \
+        docker-build docker-dev docker-release \
         version-sync version-bump
 
 all: help
@@ -42,6 +43,11 @@ help:
 	@echo ""
 	@echo "$(GREEN)Security:$(NC)"
 	@echo "  $(YELLOW)security-scan$(NC)  - Run cargo audit"
+	@echo ""
+	@echo "$(GREEN)Docker:$(NC)"
+	@echo "  $(YELLOW)docker-build$(NC)   - Build production container"
+	@echo "  $(YELLOW)docker-dev$(NC)     - Run development container"
+	@echo "  $(YELLOW)docker-release$(NC) - Build and tag release container"
 	@echo ""
 	@echo "$(GREEN)Version:$(NC)"
 	@echo "  $(YELLOW)version-sync$(NC)   - Show current version"
@@ -110,6 +116,17 @@ ci-build: build
 ci-test: test
 
 ci-docs: docs
+
+# --- Docker ---
+
+docker-build:
+	docker build -t mneme:$(VERSION) -f docker/Dockerfile .
+
+docker-dev:
+	docker compose -f docker/docker-compose.yml --profile dev up --build
+
+docker-release:
+	docker build -t mneme:$(VERSION) -t mneme:latest -f docker/Dockerfile .
 
 # --- Version ---
 

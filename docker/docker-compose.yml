@@ -1,0 +1,41 @@
+services:
+  mneme-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    profiles: ["prod"]
+    ports:
+      - "${PORT:-3838}:3838"
+    volumes:
+      - mneme-data:/var/lib/mneme/data
+      - mneme-index:/var/lib/mneme/index
+    environment:
+      - MNEME_VAULT_DIR=/var/lib/mneme/data
+      - MNEME_BIND=0.0.0.0:3838
+      - DAIMON_URL=http://host.docker.internal:8090
+      - RUST_LOG=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3838/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  mneme-dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    profiles: ["dev"]
+    ports:
+      - "${PORT:-3838}:3838"
+    volumes:
+      - ..:/workspace
+      - cargo-cache:/root/.cargo/registry
+    environment:
+      - RUST_LOG=debug
+      - DAIMON_URL=http://host.docker.internal:8090
+
+volumes:
+  mneme-data:
+  mneme-index:
+  cargo-cache:

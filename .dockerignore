@@ -1,0 +1,13 @@
+target/
+.git/
+docker/
+.github/
+docs/
+*.md
+.gitignore
+.dockerignore
+tarpaulin-report.json
+tarpaulin-report.html
+lcov.info
+.idea/
+.vscode/
