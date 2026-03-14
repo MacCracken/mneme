@@ -2,3 +2,9 @@
 //!
 //! Provides full-text indexing via Tantivy and semantic/vector search
 //! by integrating with daimon's `/v1/vectors/*` endpoints.
+
+pub mod engine;
+pub mod error;
+
+pub use engine::SearchEngine;
+pub use error::SearchError;
