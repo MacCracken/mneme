@@ -1,0 +1,74 @@
+# Agnoshi intents for Mneme knowledge base
+# These define voice/agent commands for interacting with notes
+
+[[intent]]
+name = "mneme.create_note"
+phrases = [
+    "create a note about {topic}",
+    "write a note on {topic}",
+    "new note titled {title}",
+    "jot down {content}",
+    "save a note about {topic}",
+]
+action = "api"
+endpoint = "POST /v1/notes"
+parameters = [
+    { name = "topic", type = "string", maps_to = "title" },
+    { name = "title", type = "string", maps_to = "title" },
+    { name = "content", type = "string", maps_to = "content" },
+]
+
+[[intent]]
+name = "mneme.search"
+phrases = [
+    "search my notes for {query}",
+    "find notes about {query}",
+    "look up {query} in my notes",
+    "what do my notes say about {query}",
+]
+action = "api"
+endpoint = "GET /v1/search"
+parameters = [
+    { name = "query", type = "string", maps_to = "q" },
+]
+
+[[intent]]
+name = "mneme.ask"
+phrases = [
+    "ask my notes {question}",
+    "what do I know about {question}",
+    "query my knowledge base about {question}",
+    "answer from my notes: {question}",
+]
+action = "api"
+endpoint = "GET /v1/ai/rag/query"
+parameters = [
+    { name = "question", type = "string", maps_to = "q" },
+]
+
+[[intent]]
+name = "mneme.summarize"
+phrases = [
+    "summarize note {title}",
+    "give me a summary of {title}",
+    "what is {title} about",
+    "tldr {title}",
+]
+action = "api"
+endpoint = "GET /v1/ai/summarize/{id}"
+parameters = [
+    { name = "title", type = "string", resolve = "search_by_title" },
+]
+
+[[intent]]
+name = "mneme.daily_note"
+phrases = [
+    "create today's daily note",
+    "start my daily note",
+    "open daily note",
+    "new daily entry",
+]
+action = "api"
+endpoint = "POST /v1/templates/render"
+parameters = []
+body = { template_name = "daily", variables = {}, create = true }

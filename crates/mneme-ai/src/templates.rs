@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use chrono::{Local, NaiveDate};
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 
 /// A note template definition.

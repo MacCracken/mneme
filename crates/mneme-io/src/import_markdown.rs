@@ -72,7 +72,7 @@ async fn import_md_file(root: &Path, path: &Path) -> Result<ImportedNote, IoErro
         .await
         .ok()
         .and_then(|m| m.modified().ok())
-        .map(|t| chrono::DateTime::<chrono::Utc>::from(t));
+        .map(chrono::DateTime::<chrono::Utc>::from);
 
     Ok(ImportedNote {
         title,

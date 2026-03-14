@@ -1,40 +1,31 @@
 [Unit]
-Description=Mneme Knowledge Base API Server
+Description=Mneme Knowledge Base Server
 Documentation=https://github.com/agnostos/mneme
-After=network-online.target
-Wants=network-online.target
+After=network.target daimon.service
+Wants=daimon.service
 
 [Service]
-Type=notify
+Type=simple
 ExecStart=/usr/local/bin/mneme-api
-Environment=MNEME_VAULT_DIR=/var/lib/mneme
+Environment=MNEME_VAULT_DIR=%h/mneme
 Environment=MNEME_BIND=127.0.0.1:3838
+Environment=DAIMON_URL=http://127.0.0.1:8090
 Environment=RUST_LOG=info
-
-# Run as dedicated service user
-User=mneme
-Group=mneme
-
-# Restart policy
 Restart=on-failure
 RestartSec=5
-WatchdogSec=30
-
-# Resource limits
-LimitNOFILE=65536
-
-# Security hardening
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-NoNewPrivileges=true
-ReadWritePaths=/var/lib/mneme
-ReadOnlyPaths=/etc/mneme
-
-# Logging
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=mneme
+
+# Sandboxing
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/mneme
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

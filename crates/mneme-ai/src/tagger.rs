@@ -62,16 +62,16 @@ pub fn suggest_tags(
 
     // Suggest new tags from high-scoring concepts (topics)
     for concept in &concepts {
-        if concept.kind == ConceptKind::Topic && concept.score > 0.01 {
-            if !existing.contains(concept.term.as_str())
-                && !suggestions.iter().any(|s| s.tag == concept.term)
-            {
-                suggestions.push(TagSuggestion {
-                    tag: concept.term.clone(),
-                    confidence: concept.score * 0.5,
-                    reason: TagReason::ConceptMatch,
-                });
-            }
+        if concept.kind == ConceptKind::Topic
+            && concept.score > 0.01
+            && !existing.contains(concept.term.as_str())
+            && !suggestions.iter().any(|s| s.tag == concept.term)
+        {
+            suggestions.push(TagSuggestion {
+                tag: concept.term.clone(),
+                confidence: concept.score * 0.5,
+                reason: TagReason::ConceptMatch,
+            });
         }
     }
 

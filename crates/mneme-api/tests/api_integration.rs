@@ -304,3 +304,206 @@ async fn concept_extraction_endpoint() {
     let concepts = response_json(resp).await;
     assert!(!concepts.as_array().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn suggest_tags_for_note() {
+    let (app, _dir) = test_app().await;
+
+    let resp = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/notes",
+            Some(json!({
+                "title": "Rust Programming Guide",
+                "content": "Machine learning algorithms require training data for models. Neural networks are a subset of machine learning. Deep learning extends machine learning with multiple layers. Training models with machine learning produces intelligent systems. The machine learning pipeline includes feature engineering.",
+                "tags": ["algorithms"]
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let created = response_json(resp).await;
+    let note_id = created["id"].as_str().unwrap();
+
+    let resp = app
+        .oneshot(json_request(
+            "GET",
+            &format!("/v1/ai/suggest-tags/{note_id}"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let suggestions = response_json(resp).await;
+    assert!(!suggestions.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn list_templates() {
+    let (app, _dir) = test_app().await;
+
+    let resp = app
+        .oneshot(json_request("GET", "/v1/templates", None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = response_json(resp).await;
+    let templates = body["templates"].as_array().unwrap();
+    assert_eq!(templates.len(), 3);
+
+    let names: Vec<&str> = templates
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"daily"));
+    assert!(names.contains(&"meeting"));
+    assert!(names.contains(&"project"));
+}
+
+#[tokio::test]
+async fn render_template_without_create() {
+    let (app, _dir) = test_app().await;
+
+    let resp = app
+        .oneshot(json_request(
+            "POST",
+            "/v1/templates/render",
+            Some(json!({
+                "template_name": "daily",
+                "variables": {}
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = response_json(resp).await;
+    assert!(!body["title"].as_str().unwrap().is_empty());
+    assert!(!body["content"].as_str().unwrap().is_empty());
+    assert_eq!(body["created"], false);
+}
+
+#[tokio::test]
+async fn render_template_and_create_note() {
+    let (app, _dir) = test_app().await;
+
+    let resp = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/templates/render",
+            Some(json!({
+                "template_name": "daily",
+                "variables": {},
+                "create": true
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = response_json(resp).await;
+    assert_eq!(body["created"], true);
+    assert!(!body["title"].as_str().unwrap().is_empty());
+
+    // Verify the note was actually created by listing notes
+    let resp = app
+        .oneshot(json_request("GET", "/v1/notes?limit=10", None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let notes = response_json(resp).await;
+    assert_eq!(notes.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn summarize_note_extractive() {
+    let (app, _dir) = test_app().await;
+
+    let resp = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/notes",
+            Some(json!({
+                "title": "Detailed Topic",
+                "content": "Rust is a modern systems programming language focused on safety and performance. The borrow checker enforces strict ownership rules at compile time. This eliminates entire classes of memory bugs without a garbage collector. Concurrency in Rust is fearless because data races are caught by the compiler. The type system provides zero-cost abstractions for building reliable software.",
+                "tags": ["rust"]
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let created = response_json(resp).await;
+    let note_id = created["id"].as_str().unwrap();
+
+    let resp = app
+        .oneshot(json_request(
+            "GET",
+            &format!("/v1/ai/summarize/{note_id}"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let summary = response_json(resp).await;
+    assert!(!summary["summary"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn delete_tag() {
+    let (app, _dir) = test_app().await;
+
+    // Create a note with tags
+    app.clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/notes",
+            Some(json!({
+                "title": "Tagged Note",
+                "content": "Some content",
+                "tags": ["keep-me", "delete-me"]
+            })),
+        ))
+        .await
+        .unwrap();
+
+    // List tags and find the one to delete
+    let resp = app
+        .clone()
+        .oneshot(json_request("GET", "/v1/tags", None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let tags = response_json(resp).await;
+    let tags_arr = tags.as_array().unwrap();
+    assert_eq!(tags_arr.len(), 2);
+
+    let tag_to_delete = tags_arr
+        .iter()
+        .find(|t| t["name"] == "delete-me")
+        .unwrap();
+    let tag_id = tag_to_delete["id"].as_str().unwrap();
+
+    // Delete the tag
+    let resp = app
+        .clone()
+        .oneshot(json_request(
+            "DELETE",
+            &format!("/v1/tags/{tag_id}"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Verify only one tag remains
+    let resp = app
+        .oneshot(json_request("GET", "/v1/tags", None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let tags = response_json(resp).await;
+    let remaining = tags.as_array().unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0]["name"], "keep-me");
+}

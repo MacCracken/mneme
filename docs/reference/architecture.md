@@ -33,6 +33,7 @@
 | `mneme-api` | HTTP (axum) | REST API server |
 | `mneme-ui` | Terminal (crossterm) | TUI application |
 | `mneme-mcp` | Stdio | MCP server for Claude |
+| `mneme-io` | Filesystem | Import (Obsidian, Markdown), export (HTML) |
 
 ## Data Flow
 

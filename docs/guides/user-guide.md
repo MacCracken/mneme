@@ -98,6 +98,62 @@ When connected to daimon (AGNOS agent runtime), Mneme provides:
 
 These features degrade gracefully — basic note-taking and full-text search work without daimon.
 
+## Templates
+
+Mneme includes built-in templates for common note types:
+
+| Template | Description |
+|----------|-------------|
+| `daily` | Daily journal with tasks, notes, and log sections |
+| `meeting` | Meeting notes with attendees, agenda, and action items |
+| `project` | Project overview with goals, status, and links |
+
+### Using Templates
+
+Via the API:
+```bash
+# List available templates
+curl http://localhost:3838/v1/templates
+
+# Create a daily note from template
+curl -X POST http://localhost:3838/v1/templates/render \
+  -H 'Content-Type: application/json' \
+  -d '{"template_name": "daily", "variables": {}, "create": true}'
+
+# Render a meeting note (preview without creating)
+curl -X POST http://localhost:3838/v1/templates/render \
+  -H 'Content-Type: application/json' \
+  -d '{"template_name": "meeting", "variables": {"topic": "Sprint Planning", "attendees": "Alice, Bob"}}'
+```
+
+Templates support variable substitution with `{{variable}}` syntax. Built-in variables include `date`, `time`, `datetime`, `year`, `month`, `day`, and `weekday`.
+
+## Auto-Tagging
+
+Mneme can suggest tags for notes based on content analysis:
+
+```bash
+# Get tag suggestions for a note
+curl http://localhost:3838/v1/ai/suggest-tags/{note-id}
+```
+
+The tagger analyzes note content, matches against existing tags in your vault, and suggests new tags based on key concepts found in the text. Each suggestion includes a confidence score and reason.
+
+## Import / Export
+
+### Importing Notes
+
+**From Obsidian vaults:**
+Mneme can import Obsidian vaults, converting wikilinks (`[[note]]`) to standard Markdown links and preserving frontmatter metadata and tags.
+
+**From Markdown directories:**
+Import plain Markdown files from any directory, preserving the directory structure as note paths.
+
+### Exporting Notes
+
+**To HTML:**
+Export your vault as a static HTML site with rendered Markdown, navigation, and styling.
+
 ## Configuration
 
 Environment variables:

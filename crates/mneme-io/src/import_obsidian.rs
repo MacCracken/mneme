@@ -128,7 +128,7 @@ async fn import_single_note(
         .await
         .ok()
         .and_then(|m| m.modified().ok())
-        .map(|t| DateTime::<Utc>::from(t));
+        .map(DateTime::<Utc>::from);
 
     Ok(ImportedNote {
         title,

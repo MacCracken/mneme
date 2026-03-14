@@ -1,0 +1,39 @@
+[agent]
+name = "mneme"
+display_name = "Mneme Knowledge Base"
+version = "2026.3.13"
+description = "AI-native knowledge base with semantic search, auto-linking, and RAG"
+category = "productivity"
+tier = 1
+
+[agent.author]
+name = "AGNOS"
+url = "https://github.com/agnostos"
+
+[build]
+type = "cargo"
+workspace = true
+binaries = ["mneme-api", "mneme-ui", "mneme-mcp"]
+
+[runtime]
+service = "mneme.service"
+port = 3838
+health_check = "/health"
+
+[runtime.environment]
+MNEME_VAULT_DIR = "${HOME}/mneme"
+MNEME_BIND = "127.0.0.1:3838"
+DAIMON_URL = "http://127.0.0.1:8090"
+
+[dependencies]
+optional = ["daimon"]
+
+[mcp]
+enabled = true
+binary = "mneme-mcp"
+transport = "stdio"
+
+[sandbox]
+network = "localhost"
+filesystem = ["${HOME}/mneme:rw"]
+capabilities = []

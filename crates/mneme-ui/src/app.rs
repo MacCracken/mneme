@@ -132,3 +132,113 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mneme_search::SearchEngine;
+    use mneme_store::Vault;
+    use tempfile::TempDir;
+
+    async fn test_app() -> (App, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let vault = Vault::open(dir.path()).await.unwrap();
+        let search = SearchEngine::in_memory().unwrap();
+        (App::new(vault, search), dir)
+    }
+
+    #[tokio::test]
+    async fn new_app_defaults() {
+        let (app, _dir) = test_app().await;
+        assert_eq!(app.panel, Panel::NoteList);
+        assert_eq!(app.selected_index, 0);
+        assert!(app.notes.is_empty());
+        assert!(!app.should_quit);
+    }
+
+    #[tokio::test]
+    async fn select_prev_at_zero() {
+        let (mut app, _dir) = test_app().await;
+        app.select_prev();
+        assert_eq!(app.selected_index, 0); // stays at 0
+    }
+
+    #[tokio::test]
+    async fn select_next_empty_list() {
+        let (mut app, _dir) = test_app().await;
+        app.select_next();
+        assert_eq!(app.selected_index, 0); // stays at 0 when empty
+    }
+
+    #[tokio::test]
+    async fn load_notes_populates_list() {
+        let (mut app, _dir) = test_app().await;
+        // Create some notes first
+        use mneme_core::note::CreateNote;
+        for i in 0..3 {
+            app.vault
+                .create_note(CreateNote {
+                    title: format!("Note {i}"),
+                    path: None,
+                    content: format!("Content {i}"),
+                    tags: vec![],
+                })
+                .await
+                .unwrap();
+        }
+        app.load_notes().await;
+        assert_eq!(app.notes.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn select_navigation() {
+        let (mut app, _dir) = test_app().await;
+        use mneme_core::note::CreateNote;
+        for i in 0..3 {
+            app.vault
+                .create_note(CreateNote {
+                    title: format!("Note {i}"),
+                    path: None,
+                    content: format!("Content {i}"),
+                    tags: vec![],
+                })
+                .await
+                .unwrap();
+        }
+        app.load_notes().await;
+
+        app.select_next();
+        assert_eq!(app.selected_index, 1);
+        app.select_next();
+        assert_eq!(app.selected_index, 2);
+        app.select_next();
+        assert_eq!(app.selected_index, 2); // can't go past end
+        app.select_prev();
+        assert_eq!(app.selected_index, 1);
+    }
+
+    #[tokio::test]
+    async fn search_empty_query_clears() {
+        let (mut app, _dir) = test_app().await;
+        app.search_query = String::new();
+        app.run_search();
+        assert!(app.search_results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_tags_works() {
+        let (mut app, _dir) = test_app().await;
+        use mneme_core::note::CreateNote;
+        app.vault
+            .create_note(CreateNote {
+                title: "Tagged".into(),
+                path: None,
+                content: "Content".into(),
+                tags: vec!["alpha".into(), "beta".into()],
+            })
+            .await
+            .unwrap();
+        app.load_tags().await;
+        assert_eq!(app.tag_list.len(), 2);
+    }
+}

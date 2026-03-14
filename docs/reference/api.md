@@ -95,3 +95,61 @@ Get auto-link suggestions for a note.
 
 ### GET /v1/ai/concepts/{id}
 Extract concepts (topics, entities, key terms) from a note.
+
+### GET /v1/ai/suggest-tags/{id}
+Suggest tags for a note based on content analysis.
+
+**Response:**
+```json
+[
+  {
+    "tag": "rust",
+    "confidence": 0.85,
+    "reason": "matches existing vocabulary",
+    "source": "vocabulary"
+  }
+]
+```
+
+## Templates
+
+### GET /v1/templates
+List all available templates.
+
+**Response:**
+```json
+{
+  "templates": [
+    {
+      "name": "daily",
+      "description": "Daily journal / log note",
+      "title_pattern": "{{date}} — Daily Note",
+      "default_tags": ["daily"],
+      "variables": []
+    }
+  ]
+}
+```
+
+### POST /v1/templates/render
+Render a template with variable substitution, optionally creating the note.
+
+**Request:**
+```json
+{
+  "template_name": "meeting",
+  "variables": {"topic": "Sprint Planning", "attendees": "Alice, Bob"},
+  "create": false
+}
+```
+
+**Response:**
+```json
+{
+  "title": "Meeting: Sprint Planning — 2026-03-13",
+  "content": "# Meeting: Sprint Planning\n...",
+  "tags": ["meeting"],
+  "path": null,
+  "created": false
+}
+```
