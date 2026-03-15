@@ -1,6 +1,6 @@
 # Mneme Roadmap
 
-Version: 2026.3.13
+Version: 2026.3.15
 
 ---
 
@@ -22,6 +22,8 @@ All planned phases and post-MVP features have been implemented.
 - AI: writing assist, translation, temporal analysis, multi-modal, creative suite, flashcards
 - Collaboration: versioning (Delta-ready), sharing (roles, conflicts)
 - Advanced: tasks/kanban, calendar, web clipper, plugin system
+- Knowledge graph visualization (force-directed layout, Canvas rendering, node cycling, zoom/pan)
+- Split-pane / multi-note view in TUI (side-by-side, pane switching, note picker)
 
 ---
 
@@ -29,8 +31,6 @@ All planned phases and post-MVP features have been implemented.
 
 Items that may be explored in future versions:
 
-- Knowledge graph visualization (force-directed / hierarchical)
-- Split-pane / multi-note view in TUI
 - SecureYeoman MCP tool registration and sandbox verification
 - Large vault stress testing (10k+ notes) and memory profiling
 - Real-time WebSocket collaborative editing
@@ -43,4 +43,5 @@ Items that may be explored in future versions:
 
 | Version | Date | Milestone |
 |---------|------|-----------|
+| 2026.3.15 | 2026-03-15 | Knowledge graph visualization + split-pane multi-note view |
 | 2026.3.13 | 2026-03-13 | All phases complete — full feature set |

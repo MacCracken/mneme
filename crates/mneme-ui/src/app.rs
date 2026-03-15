@@ -2,6 +2,9 @@
 
 use uuid::Uuid;
 
+use mneme_core::graph::{
+    EdgeRelation, GraphEdge, GraphLayout, GraphNode, NodeKind, Subgraph,
+};
 use mneme_core::note::Note;
 use mneme_search::SearchEngine;
 use mneme_store::Vault;
@@ -13,6 +16,31 @@ pub enum Panel {
     NoteView,
     Search,
     Tags,
+    Graph,
+    SplitView,
+}
+
+/// State for one pane in split view.
+pub struct PaneState {
+    pub note_id: Option<Uuid>,
+    pub title: String,
+    pub content: String,
+    pub tags: Vec<String>,
+    pub backlinks: Vec<(String, Uuid)>,
+    pub scroll: u16,
+}
+
+impl Default for PaneState {
+    fn default() -> Self {
+        Self {
+            note_id: None,
+            title: String::new(),
+            content: String::new(),
+            tags: Vec::new(),
+            backlinks: Vec::new(),
+            scroll: 0,
+        }
+    }
 }
 
 /// Application state for the TUI.
@@ -31,6 +59,16 @@ pub struct App {
     pub tag_list: Vec<String>,
     pub status_message: String,
     pub should_quit: bool,
+    // Graph state
+    pub graph_layout: Option<GraphLayout>,
+    pub graph_center: (f64, f64),
+    pub graph_zoom: f64,
+    pub graph_selected: Option<usize>,
+    // Split view state
+    pub split_panes: [PaneState; 2],
+    pub active_pane: usize,
+    /// When picking a note for a split pane, remember which pane to load into.
+    pub split_pick_pane: Option<usize>,
 }
 
 impl App {
@@ -50,6 +88,13 @@ impl App {
             tag_list: Vec::new(),
             status_message: "Press ? for help".into(),
             should_quit: false,
+            graph_layout: None,
+            graph_center: (0.0, 0.0),
+            graph_zoom: 1.0,
+            graph_selected: None,
+            split_panes: [PaneState::default(), PaneState::default()],
+            active_pane: 0,
+            split_pick_pane: None,
         }
     }
 
@@ -112,23 +157,156 @@ impl App {
         }
     }
 
+    /// Build and lay out the knowledge graph from all notes, tags, and links.
+    pub async fn load_graph(&mut self) {
+        let notes = match self.vault.list_notes(1000, 0).await {
+            Ok(n) => n,
+            Err(e) => {
+                self.status_message = format!("Graph error: {e}");
+                return;
+            }
+        };
+        let tags = match self.vault.list_tags().await {
+            Ok(t) => t,
+            Err(e) => {
+                self.status_message = format!("Graph error: {e}");
+                return;
+            }
+        };
+        let links = match self.vault.list_all_links().await {
+            Ok(l) => l,
+            Err(e) => {
+                self.status_message = format!("Graph error: {e}");
+                return;
+            }
+        };
+
+        let mut nodes: Vec<GraphNode> = notes
+            .iter()
+            .map(|n| GraphNode {
+                id: n.id,
+                label: n.title.clone(),
+                kind: NodeKind::Note,
+            })
+            .collect();
+
+        for tag in &tags {
+            nodes.push(GraphNode {
+                id: tag.id,
+                label: tag.name.clone(),
+                kind: NodeKind::Tag,
+            });
+        }
+
+        // Note-to-note edges from links
+        let mut edges: Vec<GraphEdge> = links
+            .iter()
+            .map(|l| GraphEdge {
+                source: l.source_id,
+                target: l.target_id,
+                relation: EdgeRelation::LinksTo,
+            })
+            .collect();
+
+        // Note-tag edges: query tags for each note
+        for note in &notes {
+            if let Ok(note_tags) = self.vault.db().get_note_tags(note.id).await {
+                for tag_name in &note_tags {
+                    if let Some(tag) = tags.iter().find(|t| &t.name == tag_name) {
+                        edges.push(GraphEdge {
+                            source: note.id,
+                            target: tag.id,
+                            relation: EdgeRelation::TaggedWith,
+                        });
+                    }
+                }
+            }
+        }
+
+        let subgraph = Subgraph { nodes, edges };
+        let layout = GraphLayout::from_subgraph(&subgraph);
+
+        let node_count = layout.nodes.len();
+        let edge_count = layout.edges.len();
+        self.graph_layout = Some(layout);
+        self.graph_center = (0.0, 0.0);
+        self.graph_zoom = 1.0;
+        self.graph_selected = if node_count > 0 { Some(0) } else { None };
+        self.status_message = format!("Graph: {node_count} nodes, {edge_count} edges");
+    }
+
+    /// Load a note into a specific split pane.
+    pub async fn load_pane(&mut self, pane_idx: usize, note_id: Uuid) {
+        match self.vault.get_note(note_id).await {
+            Ok(note) => {
+                let pane = &mut self.split_panes[pane_idx];
+                pane.note_id = Some(note_id);
+                pane.title = note.note.title;
+                pane.content = note.content;
+                pane.tags = note.tags;
+                pane.backlinks = note
+                    .backlinks
+                    .into_iter()
+                    .map(|bl| (bl.source_title, bl.source_id))
+                    .collect();
+                pane.scroll = 0;
+                self.status_message = format!("Pane {}: {}", pane_idx + 1, self.split_panes[pane_idx].title);
+            }
+            Err(e) => self.status_message = format!("Error: {e}"),
+        }
+    }
+
     /// Move selection up.
     pub fn select_prev(&mut self) {
-        if self.selected_index > 0 {
-            self.selected_index -= 1;
+        match self.panel {
+            Panel::Graph => {
+                if self.graph_layout.is_some() {
+                    if let Some(sel) = self.graph_selected {
+                        if sel > 0 {
+                            self.graph_selected = Some(sel - 1);
+                        }
+                    }
+                }
+            }
+            Panel::SplitView => {
+                let pane = &mut self.split_panes[self.active_pane];
+                pane.scroll = pane.scroll.saturating_sub(1);
+            }
+            _ => {
+                if self.selected_index > 0 {
+                    self.selected_index -= 1;
+                }
+            }
         }
     }
 
     /// Move selection down.
     pub fn select_next(&mut self) {
-        let max = match self.panel {
-            Panel::NoteList => self.notes.len(),
-            Panel::Search => self.search_results.len(),
-            Panel::Tags => self.tag_list.len(),
-            Panel::NoteView => return,
-        };
-        if self.selected_index + 1 < max {
-            self.selected_index += 1;
+        match self.panel {
+            Panel::Graph => {
+                if let Some(ref layout) = self.graph_layout {
+                    if let Some(sel) = self.graph_selected {
+                        if sel + 1 < layout.nodes.len() {
+                            self.graph_selected = Some(sel + 1);
+                        }
+                    }
+                }
+            }
+            Panel::SplitView => {
+                let pane = &mut self.split_panes[self.active_pane];
+                pane.scroll = pane.scroll.saturating_add(1);
+            }
+            _ => {
+                let max = match self.panel {
+                    Panel::NoteList => self.notes.len(),
+                    Panel::Search => self.search_results.len(),
+                    Panel::Tags => self.tag_list.len(),
+                    _ => return,
+                };
+                if self.selected_index + 1 < max {
+                    self.selected_index += 1;
+                }
+            }
         }
     }
 }

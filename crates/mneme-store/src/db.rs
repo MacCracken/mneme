@@ -290,6 +290,17 @@ impl Database {
             .collect())
     }
 
+    /// Fetch all links in the database (for graph building).
+    pub async fn list_all_links(&self) -> Result<Vec<Link>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT id, source_id, target_id, link_text, context, created_at FROM links",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(row_to_link).collect()
+    }
+
     /// Delete all links originating from a note.
     pub async fn clear_note_links(&self, note_id: Uuid) -> Result<(), StoreError> {
         sqlx::query("DELETE FROM links WHERE source_id = ?")

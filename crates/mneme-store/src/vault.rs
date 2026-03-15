@@ -184,6 +184,11 @@ impl Vault {
     pub async fn delete_tag(&self, id: Uuid) -> Result<(), StoreError> {
         self.db.delete_tag(id).await
     }
+
+    /// List all links (for graph building).
+    pub async fn list_all_links(&self) -> Result<Vec<mneme_core::link::Link>, StoreError> {
+        self.db.list_all_links().await
+    }
 }
 
 #[cfg(test)]

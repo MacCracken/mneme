@@ -1748,7 +1748,7 @@ dependencies = [
 
 [[package]]
 name = "mneme-ai"
-version = "2026.3.13"
+version = "2026.3.15"
 dependencies = [
  "chrono",
  "mneme-core",
@@ -1766,7 +1766,7 @@ dependencies = [
 
 [[package]]
 name = "mneme-api"
-version = "2026.3.13"
+version = "2026.3.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -1790,7 +1790,7 @@ dependencies = [
 
 [[package]]
 name = "mneme-core"
-version = "2026.3.13"
+version = "2026.3.15"
 dependencies = [
  "chrono",
  "regex",
@@ -1801,7 +1801,7 @@ dependencies = [
 
 [[package]]
 name = "mneme-io"
-version = "2026.3.13"
+version = "2026.3.15"
 dependencies = [
  "chrono",
  "comrak",
@@ -1822,7 +1822,7 @@ dependencies = [
 
 [[package]]
 name = "mneme-mcp"
-version = "2026.3.13"
+version = "2026.3.15"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1841,7 +1841,7 @@ dependencies = [
 
 [[package]]
 name = "mneme-search"
-version = "2026.3.13"
+version = "2026.3.15"
 dependencies = [
  "criterion",
  "mneme-core",
@@ -1858,7 +1858,7 @@ dependencies = [
 
 [[package]]
 name = "mneme-store"
-version = "2026.3.13"
+version = "2026.3.15"
 dependencies = [
  "chrono",
  "criterion",
@@ -1877,7 +1877,7 @@ dependencies = [
 
 [[package]]
 name = "mneme-ui"
-version = "2026.3.13"
+version = "2026.3.15"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1899,7 +1899,7 @@ dependencies = [
 
 [[package]]
 name = "mneme-workspace"
-version = "2026.3.13"
+version = "2026.3.15"
 dependencies = [
  "mneme-search",
  "uuid",
