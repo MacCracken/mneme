@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use mneme_ai::DaimonClient;
 use mneme_ai::rag_eval::RagEvalAggregates;
-use mneme_search::{RetrievalOptimizer, SearchEngine, SemanticEngine};
+use mneme_search::{ContextBuffer, RetrievalOptimizer, SearchEngine, SemanticEngine};
 use mneme_store::VaultManager;
 use mneme_store::manager::OpenVault;
 use tokio::sync::RwLock;
@@ -18,6 +18,7 @@ pub struct VaultEngines {
     pub semantic: SemanticEngine,
     pub optimizer: RetrievalOptimizer,
     pub rag_eval: RagEvalAggregates,
+    pub context_buffer: ContextBuffer,
 }
 
 /// An open vault with its search engines — convenience accessor.
@@ -157,6 +158,7 @@ fn create_engines(vault_path: &Path, models_dir: &Path) -> VaultEngines {
         semantic,
         optimizer,
         rag_eval: RagEvalAggregates::default(),
+        context_buffer: ContextBuffer::new(7),
     }
 }
 

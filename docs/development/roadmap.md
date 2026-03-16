@@ -85,14 +85,13 @@ Improvements informed by SecureYeoman's brain/KB architecture to make Mneme a
 smarter, more self-maintaining knowledge base.
 
 ### Phase 10 — Context-Aware Retrieval
-
-Improve relevance during interactive sessions (TUI, MCP).
-
-- Fuse current session context with query embedding before search:
-  `search_vec = λ·query_emb + (1−λ)·context_emb`
-- Track a lightweight working-memory buffer of recent note IDs (capacity ~7)
-- Bias retrieval toward notes related to the current editing context
-- Configurable via `mneme.toml` (`context_retrieval.enabled`, `query_weight`)
+- `ContextBuffer`: bounded working-memory of recent note IDs (capacity ~7, recency-weighted)
+- `fuse_embeddings()`: λ-weighted blend of query + context vectors, L2-normalized
+- `SemanticEngine::context_search()`: fused embedding search
+- `MnemeConfig.context_retrieval`: `enabled`, `query_weight` (λ=0.7), `buffer_capacity`
+- API: `GET /v1/notes/{id}` pushes to context buffer; search uses it automatically
+- API: `?context=false` query param on search to opt out
+- TUI: `select_note()` pushes to context buffer, `run_search()` merges context-aware results
 
 ### Phase 11 — Document Provenance & Trust Scoring
 

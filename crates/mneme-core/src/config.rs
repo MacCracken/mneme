@@ -16,6 +16,46 @@ pub struct MnemeConfig {
     /// Inline vault definitions (alternative to registry).
     #[serde(default)]
     pub vaults: Vec<VaultConfigEntry>,
+    /// Context-aware retrieval settings.
+    #[serde(default)]
+    pub context_retrieval: ContextRetrievalConfig,
+}
+
+/// Configuration for context-aware retrieval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextRetrievalConfig {
+    /// Whether to fuse session context with search queries.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Weight for the query embedding (λ). Context gets `1 - query_weight`.
+    /// Range: 0.0–1.0. Default: 0.7 (query-dominant).
+    #[serde(default = "default_query_weight")]
+    pub query_weight: f64,
+    /// Maximum number of recent notes to track in the context buffer.
+    #[serde(default = "default_buffer_capacity")]
+    pub buffer_capacity: usize,
+}
+
+impl Default for ContextRetrievalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            query_weight: 0.7,
+            buffer_capacity: 7,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_query_weight() -> f64 {
+    0.7
+}
+
+fn default_buffer_capacity() -> usize {
+    7
 }
 
 /// A vault entry in the config file.
@@ -71,6 +111,9 @@ mod tests {
         let config = MnemeConfig::default();
         assert!(config.default_vault.is_none());
         assert!(config.vaults.is_empty());
+        assert!(config.context_retrieval.enabled);
+        assert!((config.context_retrieval.query_weight - 0.7).abs() < 1e-6);
+        assert_eq!(config.context_retrieval.buffer_capacity, 7);
     }
 
     #[test]
@@ -114,6 +157,7 @@ mod tests {
                     search_weight: 0.5,
                 },
             ],
+            context_retrieval: ContextRetrievalConfig::default(),
         };
         let toml_str = toml::to_string(&config).unwrap();
         let parsed: MnemeConfig = toml::from_str(&toml_str).unwrap();

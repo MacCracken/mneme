@@ -10,7 +10,7 @@ use mneme_core::graph::{
     EdgeRelation, GraphEdge, GraphLayout, GraphNode, NodeKind, Subgraph,
 };
 use mneme_core::note::Note;
-use mneme_search::{SearchEngine, SemanticEngine};
+use mneme_search::{ContextBuffer, SearchEngine, SemanticEngine};
 use mneme_store::VaultManager;
 
 /// Active panel in the TUI.
@@ -85,6 +85,8 @@ pub struct App {
     pub clusters: Vec<(String, Vec<(Uuid, String)>)>, // (label, [(note_id, title)])
     pub cluster_selected: usize,
     pub cluster_expanded: Option<usize>,
+    // Context-aware retrieval
+    pub context_buffer: ContextBuffer,
 }
 
 fn create_engines(vault_path: &Path, models_dir: &Path) -> (SearchEngine, SemanticEngine) {
@@ -133,6 +135,7 @@ impl App {
             clusters: Vec::new(),
             cluster_selected: 0,
             cluster_expanded: None,
+            context_buffer: ContextBuffer::new(7),
         }
     }
 
@@ -190,12 +193,14 @@ impl App {
                     .collect();
                 self.panel = Panel::NoteView;
                 self.status_message = format!("Viewing: {}", note.note.title);
+                // Track in context buffer for context-aware retrieval
+                self.context_buffer.push(id);
             }
             Err(e) => self.status_message = format!("Error: {e}"),
         }
     }
 
-    /// Run a search query.
+    /// Run a search query, with optional context-aware semantic boost.
     pub fn run_search(&mut self) {
         if self.search_query.is_empty() {
             self.search_results.clear();
@@ -210,6 +215,42 @@ impl App {
                     .into_iter()
                     .map(|r| (r.note_id, r.title, r.score))
                     .collect();
+
+                // Attempt context-aware semantic re-ranking
+                if !self.context_buffer.is_empty() {
+                    if let Some(semantic) = self.active_semantic() {
+                        // Build context embedding from recent notes
+                        let recent_ids: Vec<Uuid> =
+                            self.context_buffer.recent_ids().iter().copied().collect();
+                        let mut embeddings = Vec::new();
+                        for note in &self.notes {
+                            if recent_ids.contains(&note.id) {
+                                if let Ok(Some(emb)) = semantic.embed(&note.title) {
+                                    embeddings.push((note.id, emb));
+                                }
+                            }
+                        }
+                        if let Some(ctx_emb) = self.context_buffer.context_embedding(&embeddings) {
+                            if let Ok(ctx_results) = semantic.context_search(
+                                &self.search_query,
+                                &ctx_emb,
+                                0.7,
+                                20,
+                            ) {
+                                // Merge semantic context results with fulltext
+                                for sr in ctx_results {
+                                    if let Some(id) = sr.note_id {
+                                        if !self.search_results.iter().any(|(rid, _, _)| *rid == id) {
+                                            let title = sr.title.unwrap_or_default();
+                                            self.search_results.push((id, title, sr.score as f32));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 self.status_message = format!("{} result(s)", self.search_results.len());
             }
             Err(e) => self.status_message = format!("Search error: {e}"),

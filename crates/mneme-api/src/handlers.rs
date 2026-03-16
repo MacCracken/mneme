@@ -41,6 +41,8 @@ pub struct SearchParams {
     pub q: String,
     pub limit: Option<usize>,
     pub vault: Option<String>,
+    /// Whether to use context-aware retrieval (default: use config setting).
+    pub context: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -120,9 +122,18 @@ pub async fn get_note(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<NoteWithContent>, (StatusCode, Json<ErrorResponse>)> {
-    let vs = state.vaults.read().await;
-    let vwe = vs.active().ok_or_else(no_vault)?;
-    let note = vwe.vault.vault.get_note(id).await.map_err(not_found)?;
+    let note = {
+        let vs = state.vaults.read().await;
+        let vwe = vs.active().ok_or_else(no_vault)?;
+        vwe.vault.vault.get_note(id).await.map_err(not_found)?
+    };
+
+    // Record note access in the context buffer
+    let mut vs = state.vaults.write().await;
+    if let Some(eng) = vs.active_engines_mut() {
+        eng.context_buffer.push(id);
+    }
+
     Ok(Json(note))
 }
 
@@ -190,7 +201,31 @@ pub async fn search_notes(
     let search_id = format!("s:{}:{}", arm_idx, vwe.optimizer().total_searches);
 
     let ft_results = vwe.search().search(&params.q, limit).map_err(bad_request)?;
-    let sem_results = vwe.semantic().search(&params.q, limit).unwrap_or_default();
+
+    // Context-aware semantic search: fuse query with context buffer if available
+    let use_context = params.context.unwrap_or(true);
+    let sem_results = if use_context && !vwe.engines.context_buffer.is_empty() {
+        // Build context embedding from recent notes
+        let recent_ids: Vec<uuid::Uuid> = vwe.engines.context_buffer.recent_ids().iter().copied().collect();
+        let mut embeddings = Vec::new();
+        for id in &recent_ids {
+            // Re-embed the note title as a lightweight context signal
+            if let Some(note) = vwe.vault.vault.list_notes(1000, 0).await.ok()
+                .and_then(|notes| notes.into_iter().find(|n| n.id == *id))
+            {
+                if let Ok(Some(emb)) = vwe.semantic().embed(&note.title) {
+                    embeddings.push((*id, emb));
+                }
+            }
+        }
+        if let Some(ctx_emb) = vwe.engines.context_buffer.context_embedding(&embeddings) {
+            vwe.semantic().context_search(&params.q, &ctx_emb, 0.7, limit).unwrap_or_default()
+        } else {
+            vwe.semantic().search(&params.q, limit).unwrap_or_default()
+        }
+    } else {
+        vwe.semantic().search(&params.q, limit).unwrap_or_default()
+    };
 
     let items = if sem_results.is_empty() {
         ft_results

@@ -193,6 +193,44 @@ impl SemanticEngine {
         }
     }
 
+    /// Context-aware search: fuse query embedding with context embedding before searching.
+    ///
+    /// `context_emb` is the averaged embedding of recently accessed notes.
+    /// `query_weight` (λ) controls how much to weight the query vs context.
+    pub fn context_search(
+        &self,
+        query: &str,
+        context_emb: &[f32],
+        query_weight: f64,
+        limit: usize,
+    ) -> Result<Vec<SemanticResult>, SearchError> {
+        #[cfg(feature = "local-vectors")]
+        {
+            let embedder = match &self.embedder {
+                Some(e) => e,
+                None => return Ok(vec![]),
+            };
+            let vector_store = match &self.vector_store {
+                Some(vs) => vs,
+                None => return Ok(vec![]),
+            };
+
+            let query_emb = embedder.embed(query)?;
+            let fused = crate::context_buffer::fuse_embeddings(&query_emb, context_emb, query_weight);
+
+            vector_store
+                .read()
+                .map_err(|e| SearchError::VectorStore(e.to_string()))?
+                .search(&fused, limit)
+        }
+
+        #[cfg(not(feature = "local-vectors"))]
+        {
+            let _ = (query, context_emb, query_weight, limit);
+            Ok(vec![])
+        }
+    }
+
     /// Find notes similar to the given text, filtered by a score threshold.
     ///
     /// Used for duplicate detection: embeds the text, searches the vector store,

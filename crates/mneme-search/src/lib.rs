@@ -4,6 +4,7 @@
 //! via local ONNX embeddings + usearch ANN index, with optional
 //! fallback to daimon's `/v1/vectors/*` endpoints.
 
+pub mod context_buffer;
 pub mod engine;
 pub mod error;
 pub mod retrieval_optimizer;
@@ -17,6 +18,7 @@ pub mod vector_store;
 
 pub mod cross_vault;
 
+pub use context_buffer::ContextBuffer;
 pub use engine::SearchEngine;
 pub use error::SearchError;
 pub use retrieval_optimizer::RetrievalOptimizer;
