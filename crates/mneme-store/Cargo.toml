@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Persistence layer: SQLite metadata, file-backed note storage"
+description = "Persistence layer: SQLite metadata, file-backed note storage, vault registry"
 
 [dependencies]
 mneme-core = { workspace = true }
@@ -12,6 +12,7 @@ tokio = { workspace = true }
 sqlx = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
@@ -22,6 +23,7 @@ hex = { workspace = true }
 [dev-dependencies]
 tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [[bench]]
 name = "store_bench"

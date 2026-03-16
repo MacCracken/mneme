@@ -28,6 +28,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Panel::Tags => render_tags(frame, app, chunks[0]),
         Panel::Graph => render_graph(frame, app, chunks[0]),
         Panel::SplitView => render_split_view(frame, app, chunks[0]),
+        Panel::VaultPicker => render_vault_picker(frame, app, chunks[0]),
     }
 
     // Status bar
@@ -386,6 +387,41 @@ fn render_split_view(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+fn render_vault_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let items: Vec<ListItem> = app
+        .vault_list
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let active = if app.manager.active_id() == Some(v.id) {
+                " (active)"
+            } else {
+                ""
+            };
+            let default = if v.is_default { " [default]" } else { "" };
+            let style = if i == app.selected_index {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(format!(
+                "  {} {}{}",
+                v.name, active, default
+            )))
+            .style(style)
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Vaults — Enter to switch, Esc to cancel "),
+    );
+    frame.render_widget(list, area);
+}
+
 fn panel_name(panel: Panel) -> &'static str {
     match panel {
         Panel::NoteList => "NOTES",
@@ -394,6 +430,7 @@ fn panel_name(panel: Panel) -> &'static str {
         Panel::Tags => "TAGS",
         Panel::Graph => "GRAPH",
         Panel::SplitView => "SPLIT",
+        Panel::VaultPicker => "VAULTS",
     }
 }
 

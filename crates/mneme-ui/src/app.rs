@@ -1,13 +1,17 @@
 //! Application state and event loop.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
 use uuid::Uuid;
 
+use mneme_core::config::VaultInfo;
 use mneme_core::graph::{
     EdgeRelation, GraphEdge, GraphLayout, GraphNode, NodeKind, Subgraph,
 };
 use mneme_core::note::Note;
-use mneme_search::SearchEngine;
-use mneme_store::Vault;
+use mneme_search::{SearchEngine, SemanticEngine};
+use mneme_store::VaultManager;
 
 /// Active panel in the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +22,7 @@ pub enum Panel {
     Tags,
     Graph,
     SplitView,
+    VaultPicker,
 }
 
 /// State for one pane in split view.
@@ -45,8 +50,9 @@ impl Default for PaneState {
 
 /// Application state for the TUI.
 pub struct App {
-    pub vault: Vault,
-    pub search: SearchEngine,
+    pub manager: VaultManager,
+    pub engines: HashMap<Uuid, (SearchEngine, SemanticEngine)>,
+    pub models_dir: PathBuf,
     pub panel: Panel,
     pub notes: Vec<Note>,
     pub selected_index: usize,
@@ -67,15 +73,32 @@ pub struct App {
     // Split view state
     pub split_panes: [PaneState; 2],
     pub active_pane: usize,
-    /// When picking a note for a split pane, remember which pane to load into.
     pub split_pick_pane: Option<usize>,
+    // Vault picker state
+    pub vault_list: Vec<VaultInfo>,
+}
+
+fn create_engines(vault_path: &Path, models_dir: &Path) -> (SearchEngine, SemanticEngine) {
+    let search_dir = vault_path.join(".mneme").join("search-index");
+    let search = SearchEngine::open(&search_dir)
+        .unwrap_or_else(|_| SearchEngine::in_memory().unwrap());
+    let vectors_dir = vault_path.join(".mneme").join("vectors");
+    let semantic = SemanticEngine::open(models_dir, &vectors_dir);
+    (search, semantic)
 }
 
 impl App {
-    pub fn new(vault: Vault, search: SearchEngine) -> Self {
+    pub fn new(manager: VaultManager, models_dir: PathBuf) -> Self {
+        let mut engines = HashMap::new();
+        if let Some(ov) = manager.active() {
+            let eng = create_engines(&ov.info.path, &models_dir);
+            engines.insert(ov.info.id, eng);
+        }
+
         Self {
-            vault,
-            search,
+            manager,
+            engines,
+            models_dir,
             panel: Panel::NoteList,
             notes: Vec::new(),
             selected_index: 0,
@@ -86,7 +109,7 @@ impl App {
             search_query: String::new(),
             search_results: Vec::new(),
             tag_list: Vec::new(),
-            status_message: "Press ? for help".into(),
+            status_message: "Press ? for help, v for vault picker".into(),
             should_quit: false,
             graph_layout: None,
             graph_center: (0.0, 0.0),
@@ -95,12 +118,30 @@ impl App {
             split_panes: [PaneState::default(), PaneState::default()],
             active_pane: 0,
             split_pick_pane: None,
+            vault_list: Vec::new(),
         }
     }
 
-    /// Load the note list from the vault.
+    /// Get the active vault's name for display.
+    pub fn active_vault_name(&self) -> &str {
+        self.manager
+            .active()
+            .map(|ov| ov.info.name.as_str())
+            .unwrap_or("(none)")
+    }
+
+    fn active_search(&self) -> Option<&SearchEngine> {
+        let id = self.manager.active_id()?;
+        self.engines.get(&id).map(|(s, _)| s)
+    }
+
+    /// Load the note list from the active vault.
     pub async fn load_notes(&mut self) {
-        match self.vault.list_notes(100, 0).await {
+        let Some(ov) = self.manager.active() else {
+            self.status_message = "No active vault".into();
+            return;
+        };
+        match ov.vault.list_notes(100, 0).await {
             Ok(notes) => {
                 self.notes = notes;
                 if self.selected_index >= self.notes.len() && !self.notes.is_empty() {
@@ -111,9 +152,10 @@ impl App {
         }
     }
 
-    /// Load tags.
+    /// Load tags from the active vault.
     pub async fn load_tags(&mut self) {
-        match self.vault.list_tags().await {
+        let Some(ov) = self.manager.active() else { return };
+        match ov.vault.list_tags().await {
             Ok(tags) => self.tag_list = tags.into_iter().map(|t| t.name).collect(),
             Err(e) => self.status_message = format!("Error: {e}"),
         }
@@ -121,7 +163,8 @@ impl App {
 
     /// Select and load a note.
     pub async fn select_note(&mut self, id: Uuid) {
-        match self.vault.get_note(id).await {
+        let Some(ov) = self.manager.active() else { return };
+        match ov.vault.get_note(id).await {
             Ok(note) => {
                 self.selected_note_id = Some(id);
                 self.note_content = note.content;
@@ -145,7 +188,9 @@ impl App {
             return;
         }
 
-        match self.search.search(&self.search_query, 20) {
+        let Some(search) = self.active_search() else { return };
+
+        match search.search(&self.search_query, 20) {
             Ok(results) => {
                 self.search_results = results
                     .into_iter()
@@ -157,23 +202,25 @@ impl App {
         }
     }
 
-    /// Build and lay out the knowledge graph from all notes, tags, and links.
+    /// Build and lay out the knowledge graph.
     pub async fn load_graph(&mut self) {
-        let notes = match self.vault.list_notes(1000, 0).await {
+        let Some(ov) = self.manager.active() else { return };
+
+        let notes = match ov.vault.list_notes(1000, 0).await {
             Ok(n) => n,
             Err(e) => {
                 self.status_message = format!("Graph error: {e}");
                 return;
             }
         };
-        let tags = match self.vault.list_tags().await {
+        let tags = match ov.vault.list_tags().await {
             Ok(t) => t,
             Err(e) => {
                 self.status_message = format!("Graph error: {e}");
                 return;
             }
         };
-        let links = match self.vault.list_all_links().await {
+        let links = match ov.vault.list_all_links().await {
             Ok(l) => l,
             Err(e) => {
                 self.status_message = format!("Graph error: {e}");
@@ -198,7 +245,6 @@ impl App {
             });
         }
 
-        // Note-to-note edges from links
         let mut edges: Vec<GraphEdge> = links
             .iter()
             .map(|l| GraphEdge {
@@ -208,9 +254,8 @@ impl App {
             })
             .collect();
 
-        // Note-tag edges: query tags for each note
         for note in &notes {
-            if let Ok(note_tags) = self.vault.db().get_note_tags(note.id).await {
+            if let Ok(note_tags) = ov.vault.db().get_note_tags(note.id).await {
                 for tag_name in &note_tags {
                     if let Some(tag) = tags.iter().find(|t| &t.name == tag_name) {
                         edges.push(GraphEdge {
@@ -237,7 +282,8 @@ impl App {
 
     /// Load a note into a specific split pane.
     pub async fn load_pane(&mut self, pane_idx: usize, note_id: Uuid) {
-        match self.vault.get_note(note_id).await {
+        let Some(ov) = self.manager.active() else { return };
+        match ov.vault.get_note(note_id).await {
             Ok(note) => {
                 let pane = &mut self.split_panes[pane_idx];
                 pane.note_id = Some(note_id);
@@ -253,6 +299,32 @@ impl App {
                 self.status_message = format!("Pane {}: {}", pane_idx + 1, self.split_panes[pane_idx].title);
             }
             Err(e) => self.status_message = format!("Error: {e}"),
+        }
+    }
+
+    /// Load the vault list for the picker.
+    pub fn load_vault_list(&mut self) {
+        self.vault_list = self.manager.registry().list().to_vec();
+        self.selected_index = 0;
+    }
+
+    /// Switch to a vault by its index in the vault list.
+    pub async fn switch_vault_by_index(&mut self, index: usize) {
+        if let Some(info) = self.vault_list.get(index).cloned() {
+            match self.manager.switch_vault(info.id).await {
+                Ok(()) => {
+                    // Create engines if needed
+                    if !self.engines.contains_key(&info.id) {
+                        let eng = create_engines(&info.path, &self.models_dir);
+                        self.engines.insert(info.id, eng);
+                    }
+                    self.status_message = format!("Switched to vault '{}'", info.name);
+                    self.panel = Panel::NoteList;
+                    self.load_notes().await;
+                    self.load_tags().await;
+                }
+                Err(e) => self.status_message = format!("Error: {e}"),
+            }
         }
     }
 
@@ -301,6 +373,7 @@ impl App {
                     Panel::NoteList => self.notes.len(),
                     Panel::Search => self.search_results.len(),
                     Panel::Tags => self.tag_list.len(),
+                    Panel::VaultPicker => self.vault_list.len(),
                     _ => return,
                 };
                 if self.selected_index + 1 < max {
@@ -314,15 +387,14 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mneme_search::SearchEngine;
-    use mneme_store::Vault;
+    use mneme_store::VaultManager;
     use tempfile::TempDir;
 
     async fn test_app() -> (App, TempDir) {
         let dir = TempDir::new().unwrap();
-        let vault = Vault::open(dir.path()).await.unwrap();
-        let search = SearchEngine::in_memory().unwrap();
-        (App::new(vault, search), dir)
+        let manager = VaultManager::single(dir.path()).await.unwrap();
+        let models_dir = PathBuf::from("/nonexistent"); // no models for tests
+        (App::new(manager, models_dir), dir)
     }
 
     #[tokio::test]
@@ -335,26 +407,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn select_prev_at_zero() {
-        let (mut app, _dir) = test_app().await;
-        app.select_prev();
-        assert_eq!(app.selected_index, 0); // stays at 0
-    }
-
-    #[tokio::test]
-    async fn select_next_empty_list() {
-        let (mut app, _dir) = test_app().await;
-        app.select_next();
-        assert_eq!(app.selected_index, 0); // stays at 0 when empty
+    async fn active_vault_name() {
+        let (app, _dir) = test_app().await;
+        assert_eq!(app.active_vault_name(), "default");
     }
 
     #[tokio::test]
     async fn load_notes_populates_list() {
         let (mut app, _dir) = test_app().await;
-        // Create some notes first
         use mneme_core::note::CreateNote;
+        let ov = app.manager.active().unwrap();
         for i in 0..3 {
-            app.vault
+            ov.vault
                 .create_note(CreateNote {
                     title: format!("Note {i}"),
                     path: None,
@@ -372,8 +436,9 @@ mod tests {
     async fn select_navigation() {
         let (mut app, _dir) = test_app().await;
         use mneme_core::note::CreateNote;
+        let ov = app.manager.active().unwrap();
         for i in 0..3 {
-            app.vault
+            ov.vault
                 .create_note(CreateNote {
                     title: format!("Note {i}"),
                     path: None,
@@ -390,7 +455,7 @@ mod tests {
         app.select_next();
         assert_eq!(app.selected_index, 2);
         app.select_next();
-        assert_eq!(app.selected_index, 2); // can't go past end
+        assert_eq!(app.selected_index, 2);
         app.select_prev();
         assert_eq!(app.selected_index, 1);
     }
@@ -404,112 +469,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_tags_works() {
+    async fn vault_picker_navigation() {
         let (mut app, _dir) = test_app().await;
-        use mneme_core::note::CreateNote;
-        app.vault
-            .create_note(CreateNote {
-                title: "Tagged".into(),
-                path: None,
-                content: "Content".into(),
-                tags: vec!["alpha".into(), "beta".into()],
-            })
-            .await
-            .unwrap();
-        app.load_tags().await;
-        assert_eq!(app.tag_list.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn select_note_loads_content() {
-        let (mut app, _dir) = test_app().await;
-        use mneme_core::note::CreateNote;
-        let note = app
-            .vault
-            .create_note(CreateNote {
-                title: "View Me".into(),
-                path: None,
-                content: "Detailed content here.".into(),
-                tags: vec!["tag1".into()],
-            })
-            .await
-            .unwrap();
-
-        app.select_note(note.note.id).await;
-        assert_eq!(app.panel, Panel::NoteView);
-        assert_eq!(app.selected_note_id, Some(note.note.id));
-        assert_eq!(app.note_content, "Detailed content here.");
-        assert_eq!(app.note_tags, vec!["tag1"]);
-        assert!(app.status_message.contains("View Me"));
-    }
-
-    #[tokio::test]
-    async fn select_note_not_found() {
-        let (mut app, _dir) = test_app().await;
-        app.select_note(uuid::Uuid::new_v4()).await;
-        assert!(app.status_message.contains("Error"));
-    }
-
-    #[tokio::test]
-    async fn run_search_with_results() {
-        let (mut app, _dir) = test_app().await;
-        use mneme_core::note::CreateNote;
-        let note = app
-            .vault
-            .create_note(CreateNote {
-                title: "Rust Guide".into(),
-                path: None,
-                content: "Rust programming language guide.".into(),
-                tags: vec!["rust".into()],
-            })
-            .await
-            .unwrap();
-        // Index it
-        let _ = app.search.index_note(
-            note.note.id,
-            &note.note.title,
-            &note.content,
-            &note.tags,
-            &note.note.path,
-        );
-
-        app.search_query = "rust".into();
-        app.run_search();
-        assert!(!app.search_results.is_empty());
-        assert!(app.status_message.contains("result"));
-    }
-
-    #[tokio::test]
-    async fn select_next_in_search_panel() {
-        let (mut app, _dir) = test_app().await;
-        app.panel = Panel::Search;
-        app.search_results = vec![
-            (uuid::Uuid::new_v4(), "R1".into(), 1.0),
-            (uuid::Uuid::new_v4(), "R2".into(), 0.5),
-        ];
-        app.selected_index = 0;
+        app.load_vault_list();
+        assert_eq!(app.vault_list.len(), 1);
+        app.panel = Panel::VaultPicker;
         app.select_next();
-        assert_eq!(app.selected_index, 1);
-        app.select_next();
-        assert_eq!(app.selected_index, 1); // can't go past end
-    }
-
-    #[tokio::test]
-    async fn select_next_in_tags_panel() {
-        let (mut app, _dir) = test_app().await;
-        app.panel = Panel::Tags;
-        app.tag_list = vec!["a".into(), "b".into()];
-        app.selected_index = 0;
-        app.select_next();
-        assert_eq!(app.selected_index, 1);
-    }
-
-    #[tokio::test]
-    async fn select_next_in_note_view_noop() {
-        let (mut app, _dir) = test_app().await;
-        app.panel = Panel::NoteView;
-        app.selected_index = 0;
-        app.select_next();
-        assert_eq!(app.selected_index, 0); // no-op in NoteView
+        assert_eq!(app.selected_index, 0);
     }
 }

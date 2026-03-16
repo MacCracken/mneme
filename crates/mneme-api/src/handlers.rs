@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use mneme_core::note::{CreateNote, Note, NoteWithContent, UpdateNote};
 use mneme_core::tag::Tag;
+use mneme_search::semantic::HybridResult;
 
 use crate::state::AppState;
 
@@ -23,18 +24,23 @@ pub struct HealthResponse {
     pub status: String,
     pub version: String,
     pub notes_count: i64,
+    pub active_vault: Option<String>,
+    pub semantic_available: bool,
+    pub vector_count: usize,
 }
 
 #[derive(Deserialize)]
 pub struct ListParams {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    pub vault: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct SearchParams {
     pub q: String,
     pub limit: Option<usize>,
+    pub vault: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -43,18 +49,30 @@ pub struct SearchResultResponse {
     pub title: String,
     pub path: String,
     pub snippet: String,
-    pub score: f32,
+    pub score: f64,
+    pub source: String,
 }
 
 // --- Health ---
 
 pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
-    let vault = state.vault.read().await;
-    let count = vault.count_notes().await.unwrap_or(0);
+    let vs = state.vaults.read().await;
+    let (count, vault_name, semantic_available, vector_count) = match vs.active() {
+        Some(vwe) => (
+            vwe.vault.vault.count_notes().await.unwrap_or(0),
+            Some(vwe.vault.info.name.clone()),
+            vwe.semantic().is_available(),
+            vwe.semantic().vector_count(),
+        ),
+        None => (0, None, false, 0),
+    };
     Json(HealthResponse {
         status: "ok".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         notes_count: count,
+        active_vault: vault_name,
+        semantic_available,
+        vector_count,
     })
 }
 
@@ -64,25 +82,21 @@ pub async fn create_note(
     State(state): State<AppState>,
     Json(req): Json<CreateNote>,
 ) -> Result<(StatusCode, Json<NoteWithContent>), (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
+    let vs = state.vaults.read().await;
+    let vwe = vs.active().ok_or_else(no_vault)?;
 
-    let result = vault.create_note(req).await.map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let result = vwe.vault.vault.create_note(req).await.map_err(bad_request)?;
 
-    // Index for search
-    let _ = state.search.index_note(
+    let _ = vwe.search().index_note(
         result.note.id,
         &result.note.title,
         &result.content,
         &result.tags,
         &result.note.path,
     );
+    let _ = vwe
+        .semantic()
+        .index_note(result.note.id, &result.note.title, &result.content);
 
     Ok((StatusCode::CREATED, Json(result)))
 }
@@ -91,15 +105,9 @@ pub async fn get_note(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<NoteWithContent>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let note = vault.get_note(id).await.map_err(|e| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let vs = state.vaults.read().await;
+    let vwe = vs.active().ok_or_else(no_vault)?;
+    let note = vwe.vault.vault.get_note(id).await.map_err(not_found)?;
     Ok(Json(note))
 }
 
@@ -107,17 +115,11 @@ pub async fn list_notes(
     State(state): State<AppState>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<Note>>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
+    let vs = state.vaults.read().await;
+    let vwe = vs.resolve(params.vault.as_deref()).ok_or_else(no_vault)?;
     let limit = params.limit.unwrap_or(50);
     let offset = params.offset.unwrap_or(0);
-    let notes = vault.list_notes(limit, offset).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let notes = vwe.vault.vault.list_notes(limit, offset).await.map_err(internal)?;
     Ok(Json(notes))
 }
 
@@ -126,24 +128,20 @@ pub async fn update_note(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateNote>,
 ) -> Result<Json<NoteWithContent>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let result = vault.update_note(id, req).await.map_err(|e| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let vs = state.vaults.read().await;
+    let vwe = vs.active().ok_or_else(no_vault)?;
+    let result = vwe.vault.vault.update_note(id, req).await.map_err(not_found)?;
 
-    // Re-index for search
-    let _ = state.search.index_note(
+    let _ = vwe.search().index_note(
         result.note.id,
         &result.note.title,
         &result.content,
         &result.tags,
         &result.note.path,
     );
+    let _ = vwe
+        .semantic()
+        .index_note(result.note.id, &result.note.title, &result.content);
 
     Ok(Json(result))
 }
@@ -152,19 +150,13 @@ pub async fn delete_note(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
+    let vs = state.vaults.read().await;
+    let vwe = vs.active().ok_or_else(no_vault)?;
 
-    // Remove from search index
-    let _ = state.search.remove_note(id);
+    let _ = vwe.search().remove_note(id);
+    let _ = vwe.semantic().remove_note(id);
 
-    vault.delete_note(id).await.map_err(|e| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    vwe.vault.vault.delete_note(id).await.map_err(not_found)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -174,28 +166,49 @@ pub async fn search_notes(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<Vec<SearchResultResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let vs = state.vaults.read().await;
+    let vwe = vs.resolve(params.vault.as_deref()).ok_or_else(no_vault)?;
     let limit = params.limit.unwrap_or(20);
-    let results = state.search.search(&params.q, limit).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
 
-    Ok(Json(
-        results
+    let ft_results = vwe.search().search(&params.q, limit).map_err(bad_request)?;
+    let sem_results = vwe.semantic().search(&params.q, limit).unwrap_or_default();
+
+    if sem_results.is_empty() {
+        Ok(Json(
+            ft_results
+                .into_iter()
+                .map(|r| SearchResultResponse {
+                    note_id: r.note_id,
+                    title: r.title,
+                    path: r.path,
+                    snippet: r.snippet,
+                    score: r.score as f64,
+                    source: "fulltext".into(),
+                })
+                .collect(),
+        ))
+    } else {
+        let ft_tuples: Vec<_> = ft_results
             .into_iter()
-            .map(|r| SearchResultResponse {
-                note_id: r.note_id,
-                title: r.title,
-                path: r.path,
-                snippet: r.snippet,
-                score: r.score,
-            })
-            .collect(),
-    ))
+            .map(|r| (r.note_id, r.title, r.path, r.snippet, r.score))
+            .collect();
+        let hybrid = mneme_search::semantic::hybrid_merge(ft_tuples, sem_results, limit);
+        Ok(Json(hybrid_to_response(hybrid)))
+    }
+}
+
+fn hybrid_to_response(results: Vec<HybridResult>) -> Vec<SearchResultResponse> {
+    results
+        .into_iter()
+        .map(|r| SearchResultResponse {
+            note_id: r.note_id,
+            title: r.title,
+            path: r.path,
+            snippet: r.snippet,
+            score: r.score,
+            source: format!("{:?}", r.source).to_lowercase(),
+        })
+        .collect()
 }
 
 // --- Tags ---
@@ -203,15 +216,9 @@ pub async fn search_notes(
 pub async fn list_tags(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Tag>>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let tags = vault.list_tags().await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let vs = state.vaults.read().await;
+    let vwe = vs.active().ok_or_else(no_vault)?;
+    let tags = vwe.vault.vault.list_tags().await.map_err(internal)?;
     Ok(Json(tags))
 }
 
@@ -219,14 +226,46 @@ pub async fn delete_tag(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    vault.delete_tag(id).await.map_err(|e| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let vs = state.vaults.read().await;
+    let vwe = vs.active().ok_or_else(no_vault)?;
+    vwe.vault.vault.delete_tag(id).await.map_err(not_found)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Error helpers ---
+
+fn no_vault() -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorResponse {
+            error: "No active vault".into(),
+        }),
+    )
+}
+
+fn bad_request(e: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: e.to_string(),
+        }),
+    )
+}
+
+fn not_found(e: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            error: e.to_string(),
+        }),
+    )
+}
+
+fn internal(e: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+            error: e.to_string(),
+        }),
+    )
 }

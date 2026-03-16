@@ -9,14 +9,29 @@ use uuid::Uuid;
 use crate::handlers::ErrorResponse;
 use crate::state::AppState;
 
+/// Helper to get the active vault.
+macro_rules! active_vault {
+    ($mgr:expr) => {{
+        $mgr.active().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "No active vault".into(),
+                }),
+            )
+        })?
+    }};
+}
+
 // --- Tasks / Kanban ---
 
 pub async fn get_note_tasks(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<mneme_core::task::TaskBoard>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let note = vault.get_note(id).await.map_err(|e| {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+    let note = ov.vault.vault.get_note(id).await.map_err(|e| {
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -31,8 +46,9 @@ pub async fn get_note_tasks(
 pub async fn get_all_tasks(
     State(state): State<AppState>,
 ) -> Result<Json<mneme_core::task::TaskBoard>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let notes = vault.list_notes(1000, 0).await.map_err(|e| {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+    let notes = ov.vault.vault.list_notes(1000, 0).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -42,7 +58,7 @@ pub async fn get_all_tasks(
     })?;
     let mut all_tasks = Vec::new();
     for note in &notes {
-        if let Ok(full) = vault.get_note(note.id).await {
+        if let Ok(full) = ov.vault.vault.get_note(note.id).await {
             all_tasks.extend(mneme_core::task::extract_tasks(note.id, &full.content));
         }
     }
@@ -61,8 +77,9 @@ pub async fn calendar_month(
     State(state): State<AppState>,
     Query(params): Query<CalendarParams>,
 ) -> Result<Json<mneme_core::calendar::MonthView>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let notes = vault.list_notes(1000, 0).await.map_err(|e| {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+    let notes = ov.vault.vault.list_notes(1000, 0).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -98,8 +115,9 @@ pub async fn get_note_flashcards(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<mneme_ai::flashcards::Flashcard>>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let note = vault.get_note(id).await.map_err(|e| {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+    let note = ov.vault.vault.get_note(id).await.map_err(|e| {
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -147,21 +165,26 @@ pub async fn clip_html(
     })?;
 
     if req.create.unwrap_or(false) {
-        let vault = state.vault.read().await;
-        let create_req = mneme_core::note::CreateNote {
-            title: clipped.title.clone(),
-            path: None,
-            content: clipped.content_md.clone(),
-            tags: clipped.tags.clone(),
-        };
-        if let Ok(note) = vault.create_note(create_req).await {
-            let _ = state.search.index_note(
-                note.note.id,
-                &note.note.title,
-                &note.content,
-                &note.tags,
-                &note.note.path,
-            );
+        let vs = state.vaults.read().await;
+        if let Some(ov) = vs.active() {
+            let create_req = mneme_core::note::CreateNote {
+                title: clipped.title.clone(),
+                path: None,
+                content: clipped.content_md.clone(),
+                tags: clipped.tags.clone(),
+            };
+            if let Ok(note) = ov.vault.vault.create_note(create_req).await {
+                let _ = ov.search().index_note(
+                    note.note.id,
+                    &note.note.title,
+                    &note.content,
+                    &note.tags,
+                    &note.note.path,
+                );
+                let _ = ov
+                    .semantic()
+                    .index_note(note.note.id, &note.note.title, &note.content);
+            }
         }
     }
 
@@ -179,21 +202,26 @@ pub async fn clip_bookmark(
     );
 
     if req.create.unwrap_or(false) {
-        let vault = state.vault.read().await;
-        let create_req = mneme_core::note::CreateNote {
-            title: clipped.title.clone(),
-            path: None,
-            content: clipped.content_md.clone(),
-            tags: clipped.tags.clone(),
-        };
-        if let Ok(note) = vault.create_note(create_req).await {
-            let _ = state.search.index_note(
-                note.note.id,
-                &note.note.title,
-                &note.content,
-                &note.tags,
-                &note.note.path,
-            );
+        let vs = state.vaults.read().await;
+        if let Some(ov) = vs.active() {
+            let create_req = mneme_core::note::CreateNote {
+                title: clipped.title.clone(),
+                path: None,
+                content: clipped.content_md.clone(),
+                tags: clipped.tags.clone(),
+            };
+            if let Ok(note) = ov.vault.vault.create_note(create_req).await {
+                let _ = ov.search().index_note(
+                    note.note.id,
+                    &note.note.title,
+                    &note.content,
+                    &note.tags,
+                    &note.note.path,
+                );
+                let _ = ov
+                    .semantic()
+                    .index_note(note.note.id, &note.note.title, &note.content);
+            }
         }
     }
 
@@ -203,6 +231,5 @@ pub async fn clip_bookmark(
 // --- Plugins ---
 
 pub async fn list_plugins() -> Json<Vec<mneme_core::plugin::PluginInfo>> {
-    // Return empty list (no plugins installed by default)
     Json(vec![])
 }

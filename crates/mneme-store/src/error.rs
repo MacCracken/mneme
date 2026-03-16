@@ -13,6 +13,12 @@ pub enum StoreError {
     #[error("note already exists at path: {0}")]
     PathConflict(String),
 
+    #[error("vault not found: {0}")]
+    VaultNotFound(String),
+
+    #[error("vault already exists: {0}")]
+    VaultAlreadyExists(String),
+
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 

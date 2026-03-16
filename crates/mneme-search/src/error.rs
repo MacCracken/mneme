@@ -12,4 +12,13 @@ pub enum SearchError {
 
     #[error("tantivy error: {0}")]
     Tantivy(#[from] tantivy::TantivyError),
+
+    #[error("embedding error: {0}")]
+    Embedding(String),
+
+    #[error("vector store error: {0}")]
+    VectorStore(String),
+
+    #[error("model not found: {0}")]
+    ModelNotFound(String),
 }

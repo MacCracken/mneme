@@ -37,6 +37,22 @@ pub struct IngestResponse {
 pub struct RagStatsResponse {
     pub index_size: usize,
     pub daimon_available: bool,
+    pub local_vectors: usize,
+    pub local_available: bool,
+}
+
+/// Helper to get the active vault.
+macro_rules! active_vault {
+    ($mgr:expr) => {{
+        $mgr.active().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "No active vault".into(),
+                }),
+            )
+        })?
+    }};
 }
 
 // --- RAG ---
@@ -63,8 +79,10 @@ pub async fn rag_ingest_note(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<IngestResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let note = vault.get_note(id).await.map_err(|e| {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+
+    let note = ov.vault.vault.get_note(id).await.map_err(|e| {
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -72,6 +90,11 @@ pub async fn rag_ingest_note(
             }),
         )
     })?;
+
+    // Also index locally
+    let _ = ov
+        .semantic()
+        .index_note(id, &note.note.title, &note.content);
 
     let pipeline = RagPipeline::new((*state.daimon).clone());
     let chunks = pipeline
@@ -96,15 +119,26 @@ pub async fn rag_ingest_note(
 pub async fn rag_stats(
     State(state): State<AppState>,
 ) -> Result<Json<RagStatsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let vs = state.vaults.read().await;
+
+    let (local_vectors, local_available) = match vs.active() {
+        Some(ov) => (ov.semantic().vector_count(), ov.semantic().is_available()),
+        None => (0, false),
+    };
+
     let pipeline = RagPipeline::new((*state.daimon).clone());
     match pipeline.stats().await {
         Ok(size) => Ok(Json(RagStatsResponse {
             index_size: size,
             daimon_available: true,
+            local_vectors,
+            local_available,
         })),
         Err(_) => Ok(Json(RagStatsResponse {
             index_size: 0,
             daimon_available: false,
+            local_vectors,
+            local_available,
         })),
     }
 }
@@ -116,8 +150,10 @@ pub async fn summarize_note(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<NoteSummary>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let note = vault.get_note(id).await.map_err(|e| {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+
+    let note = ov.vault.vault.get_note(id).await.map_err(|e| {
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -146,8 +182,10 @@ pub async fn suggest_links(
     Path(id): Path<Uuid>,
     Query(params): Query<SuggestLinksParams>,
 ) -> Result<Json<Vec<LinkSuggestion>>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let note = vault.get_note(id).await.map_err(|e| {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+
+    let note = ov.vault.vault.get_note(id).await.map_err(|e| {
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -179,8 +217,10 @@ pub async fn extract_concepts(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<Concept>>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let note = vault.get_note(id).await.map_err(|e| {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+
+    let note = ov.vault.vault.get_note(id).await.map_err(|e| {
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -239,8 +279,10 @@ pub async fn translate_note(
     Path(id): Path<Uuid>,
     Query(params): Query<TranslateParams>,
 ) -> Result<Json<mneme_ai::translator::TranslateResult>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let note = vault.get_note(id).await.map_err(|e| {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+
+    let note = ov.vault.vault.get_note(id).await.map_err(|e| {
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -284,8 +326,10 @@ pub async fn list_languages() -> Json<Vec<mneme_ai::translator::Language>> {
 pub async fn temporal_analysis(
     State(state): State<AppState>,
 ) -> Result<Json<mneme_ai::temporal::TemporalReport>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let notes = vault.list_notes(1000, 0).await.map_err(|e| {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+
+    let notes = ov.vault.vault.list_notes(1000, 0).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -296,7 +340,7 @@ pub async fn temporal_analysis(
 
     let mut snapshots = Vec::new();
     for note in &notes {
-        if let Ok(full) = vault.get_note(note.id).await {
+        if let Ok(full) = ov.vault.vault.get_note(note.id).await {
             snapshots.push(mneme_ai::temporal::NoteSnapshot {
                 title: full.note.title,
                 content: full.content,

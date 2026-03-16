@@ -14,6 +14,20 @@ use mneme_core::note::CreateNote;
 use crate::handlers::ErrorResponse;
 use crate::state::AppState;
 
+/// Helper to get the active vault.
+macro_rules! active_vault {
+    ($mgr:expr) => {{
+        $mgr.active().ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "No active vault".into(),
+                }),
+            )
+        })?
+    }};
+}
+
 // --- Templates ---
 
 #[derive(Serialize)]
@@ -60,7 +74,8 @@ pub async fn render_template(
     let rendered: RenderedTemplate = templates::render_template(template, &req.variables);
 
     let created = if req.create.unwrap_or(false) {
-        let vault = state.vault.read().await;
+        let vs = state.vaults.read().await;
+        let ov = active_vault!(vs);
         let create_req = CreateNote {
             title: rendered.title.clone(),
             path: rendered.path.clone(),
@@ -68,15 +83,18 @@ pub async fn render_template(
             tags: rendered.tags.clone(),
         };
 
-        match vault.create_note(create_req).await {
+        match ov.vault.vault.create_note(create_req).await {
             Ok(note) => {
-                let _ = state.search.index_note(
+                let _ = ov.search().index_note(
                     note.note.id,
                     &note.note.title,
                     &note.content,
                     &note.tags,
                     &note.note.path,
                 );
+                let _ = ov
+                    .semantic()
+                    .index_note(note.note.id, &note.note.title, &note.content);
                 true
             }
             Err(e) => {
@@ -108,8 +126,9 @@ pub async fn suggest_tags(
     State(state): State<AppState>,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<Vec<TagSuggestion>>, (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let note = vault.get_note(id).await.map_err(|e| {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+    let note = ov.vault.vault.get_note(id).await.map_err(|e| {
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -118,7 +137,9 @@ pub async fn suggest_tags(
         )
     })?;
 
-    let existing_tags: Vec<String> = vault
+    let existing_tags: Vec<String> = ov
+        .vault
+        .vault
         .list_tags()
         .await
         .map(|tags| tags.into_iter().map(|t| t.name).collect())
@@ -143,8 +164,9 @@ pub async fn export_note_pdf(
     State(state): State<AppState>,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<(StatusCode, [(String, String); 2], Vec<u8>), (StatusCode, Json<ErrorResponse>)> {
-    let vault = state.vault.read().await;
-    let note = vault.get_note(id).await.map_err(|e| {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+    let note = ov.vault.vault.get_note(id).await.map_err(|e| {
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {

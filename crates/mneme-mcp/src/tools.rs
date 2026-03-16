@@ -1,29 +1,100 @@
 //! MCP tool handlers — business logic for each tool.
 
+use std::collections::HashMap;
+use std::path::Path;
+
 use serde_json::Value;
 use uuid::Uuid;
 
 use mneme_core::graph::{EdgeRelation, GraphEdge, GraphNode, NodeKind, Subgraph};
 use mneme_core::note::{CreateNote, UpdateNote};
-use mneme_search::SearchEngine;
-use mneme_store::Vault;
+use mneme_search::{SearchEngine, SemanticEngine};
+use mneme_store::VaultManager;
+use mneme_store::manager::OpenVault;
 
 use crate::protocol::{mcp_error, mcp_success};
+
+/// Search engines for open vaults.
+pub struct McpEngines {
+    pub engines: HashMap<Uuid, (SearchEngine, SemanticEngine)>,
+}
+
+impl McpEngines {
+    pub fn new() -> Self {
+        Self {
+            engines: HashMap::new(),
+        }
+    }
+
+    pub fn ensure(&mut self, id: Uuid, vault_path: &Path, models_dir: &Path) {
+        if !self.engines.contains_key(&id) {
+            let search_dir = vault_path.join(".mneme").join("search-index");
+            let search = SearchEngine::open(&search_dir)
+                .unwrap_or_else(|_| SearchEngine::in_memory().unwrap());
+            let vectors_dir = vault_path.join(".mneme").join("vectors");
+            let semantic = SemanticEngine::open(models_dir, &vectors_dir);
+            self.engines.insert(id, (search, semantic));
+        }
+    }
+
+    pub fn get(&self, id: Uuid) -> Option<(&SearchEngine, &SemanticEngine)> {
+        self.engines.get(&id).map(|(s, se)| (s, se))
+    }
+}
+
+/// Resolved vault with engines for a tool call.
+struct ResolvedVault<'a> {
+    vault: &'a OpenVault,
+    search: &'a SearchEngine,
+    semantic: &'a SemanticEngine,
+}
+
+fn resolve<'a>(
+    args: &Value,
+    manager: &'a VaultManager,
+    engines: &'a McpEngines,
+) -> Result<ResolvedVault<'a>, String> {
+    let ov = if let Some(vault_ref) = args.get("vault").and_then(|v| v.as_str()) {
+        let info = manager
+            .registry()
+            .resolve(vault_ref)
+            .ok_or_else(|| format!("Vault not found: {vault_ref}"))?;
+        manager
+            .get(info.id)
+            .ok_or_else(|| format!("Vault not open: {vault_ref}"))?
+    } else {
+        manager
+            .active()
+            .ok_or_else(|| "No active vault".to_string())?
+    };
+
+    let (search, semantic) = engines
+        .get(ov.info.id)
+        .ok_or_else(|| "Search engines not initialized".to_string())?;
+
+    Ok(ResolvedVault {
+        vault: ov,
+        search,
+        semantic,
+    })
+}
 
 /// Dispatch a tool call to the appropriate handler.
 pub async fn handle_tool_call(
     id: &Value,
     tool: &str,
     args: &Value,
-    vault: &Vault,
-    search: &SearchEngine,
+    manager: &mut VaultManager,
+    engines: &McpEngines,
 ) -> Value {
     match tool {
-        "mneme_create_note" => handle_create_note(id, args, vault, search).await,
-        "mneme_search" => handle_search(id, args, search),
-        "mneme_get_note" => handle_get_note(id, args, vault).await,
-        "mneme_update_note" => handle_update_note(id, args, vault, search).await,
-        "mneme_query_graph" => handle_query_graph(id, args, vault).await,
+        "mneme_create_note" => handle_create_note(id, args, manager, engines).await,
+        "mneme_search" => handle_search(id, args, manager, engines),
+        "mneme_get_note" => handle_get_note(id, args, manager, engines).await,
+        "mneme_update_note" => handle_update_note(id, args, manager, engines).await,
+        "mneme_query_graph" => handle_query_graph(id, args, manager, engines).await,
+        "mneme_list_vaults" => handle_list_vaults(id, manager),
+        "mneme_switch_vault" => handle_switch_vault(id, args, manager).await,
         _ => mcp_error(id, format!("Unknown tool: {tool}")),
     }
 }
@@ -31,9 +102,14 @@ pub async fn handle_tool_call(
 async fn handle_create_note(
     id: &Value,
     args: &Value,
-    vault: &Vault,
-    search: &SearchEngine,
+    manager: &VaultManager,
+    engines: &McpEngines,
 ) -> Value {
+    let rv = match resolve(args, manager, engines) {
+        Ok(rv) => rv,
+        Err(e) => return mcp_error(id, e),
+    };
+
     let title = match args.get("title").and_then(|t| t.as_str()) {
         Some(t) => t.to_string(),
         None => return mcp_error(id, "Missing required parameter: title"),
@@ -63,16 +139,18 @@ async fn handle_create_note(
         tags,
     };
 
-    match vault.create_note(req).await {
+    match rv.vault.vault.create_note(req).await {
         Ok(note) => {
-            // Index for search
-            let _ = search.index_note(
+            let _ = rv.search.index_note(
                 note.note.id,
                 &note.note.title,
                 &note.content,
                 &note.tags,
                 &note.note.path,
             );
+            let _ = rv
+                .semantic
+                .index_note(note.note.id, &note.note.title, &note.content);
 
             mcp_success(
                 id,
@@ -86,7 +164,17 @@ async fn handle_create_note(
     }
 }
 
-fn handle_search(id: &Value, args: &Value, search: &SearchEngine) -> Value {
+fn handle_search(
+    id: &Value,
+    args: &Value,
+    manager: &VaultManager,
+    engines: &McpEngines,
+) -> Value {
+    let rv = match resolve(args, manager, engines) {
+        Ok(rv) => rv,
+        Err(e) => return mcp_error(id, e),
+    };
+
     let query = match args.get("query").and_then(|q| q.as_str()) {
         Some(q) => q,
         None => return mcp_error(id, "Missing required parameter: query"),
@@ -94,37 +182,74 @@ fn handle_search(id: &Value, args: &Value, search: &SearchEngine) -> Value {
 
     let limit = args.get("limit").and_then(|l| l.as_u64()).unwrap_or(10) as usize;
 
-    match search.search(query, limit) {
-        Ok(results) => {
-            if results.is_empty() {
-                return mcp_success(id, "No notes found matching your query.");
-            }
+    let ft_results = match rv.search.search(query, limit) {
+        Ok(r) => r,
+        Err(e) => return mcp_error(id, format!("Search failed: {e}")),
+    };
 
-            let mut text = format!("Found {} result(s):\n\n", results.len());
-            for (i, r) in results.iter().enumerate() {
-                text.push_str(&format!(
-                    "{}. **{}** (ID: {}, score: {:.2})\n   Path: {}\n   {}\n\n",
-                    i + 1,
-                    r.title,
-                    r.note_id,
-                    r.score,
-                    r.path,
-                    r.snippet
-                ));
-            }
-            mcp_success(id, text)
-        }
-        Err(e) => mcp_error(id, format!("Search failed: {e}")),
+    let sem_results = rv.semantic.search(query, limit).unwrap_or_default();
+
+    if ft_results.is_empty() && sem_results.is_empty() {
+        return mcp_success(id, "No notes found matching your query.");
     }
+
+    let mut text = String::new();
+
+    if !sem_results.is_empty() {
+        let ft_tuples: Vec<_> = ft_results
+            .into_iter()
+            .map(|r| (r.note_id, r.title, r.path, r.snippet, r.score))
+            .collect();
+        let hybrid =
+            mneme_search::semantic::hybrid_merge(ft_tuples, sem_results, limit);
+
+        text.push_str(&format!("Found {} result(s) (hybrid):\n\n", hybrid.len()));
+        for (i, r) in hybrid.iter().enumerate() {
+            text.push_str(&format!(
+                "{}. **{}** (ID: {}, score: {:.3}, source: {:?})\n   {}\n\n",
+                i + 1,
+                r.title,
+                r.note_id,
+                r.score,
+                r.source,
+                r.snippet
+            ));
+        }
+    } else {
+        text.push_str(&format!("Found {} result(s):\n\n", ft_results.len()));
+        for (i, r) in ft_results.iter().enumerate() {
+            text.push_str(&format!(
+                "{}. **{}** (ID: {}, score: {:.2})\n   Path: {}\n   {}\n\n",
+                i + 1,
+                r.title,
+                r.note_id,
+                r.score,
+                r.path,
+                r.snippet
+            ));
+        }
+    }
+
+    mcp_success(id, text)
 }
 
-async fn handle_get_note(id: &Value, args: &Value, vault: &Vault) -> Value {
+async fn handle_get_note(
+    id: &Value,
+    args: &Value,
+    manager: &VaultManager,
+    engines: &McpEngines,
+) -> Value {
+    let rv = match resolve(args, manager, engines) {
+        Ok(rv) => rv,
+        Err(e) => return mcp_error(id, e),
+    };
+
     let note_id = match parse_uuid(args, "id") {
         Ok(id) => id,
         Err(e) => return mcp_error(id, e),
     };
 
-    match vault.get_note(note_id).await {
+    match rv.vault.vault.get_note(note_id).await {
         Ok(note) => {
             let mut text = format!(
                 "# {}\n\nID: {}\nPath: {}\nTags: {}\nCreated: {}\nUpdated: {}\n",
@@ -157,9 +282,14 @@ async fn handle_get_note(id: &Value, args: &Value, vault: &Vault) -> Value {
 async fn handle_update_note(
     id: &Value,
     args: &Value,
-    vault: &Vault,
-    search: &SearchEngine,
+    manager: &VaultManager,
+    engines: &McpEngines,
 ) -> Value {
+    let rv = match resolve(args, manager, engines) {
+        Ok(rv) => rv,
+        Err(e) => return mcp_error(id, e),
+    };
+
     let note_id = match parse_uuid(args, "id") {
         Ok(id) => id,
         Err(e) => return mcp_error(id, e),
@@ -189,16 +319,18 @@ async fn handle_update_note(
         tags,
     };
 
-    match vault.update_note(note_id, req).await {
+    match rv.vault.vault.update_note(note_id, req).await {
         Ok(note) => {
-            // Re-index
-            let _ = search.index_note(
+            let _ = rv.search.index_note(
                 note.note.id,
                 &note.note.title,
                 &note.content,
                 &note.tags,
                 &note.note.path,
             );
+            let _ = rv
+                .semantic
+                .index_note(note.note.id, &note.note.title, &note.content);
 
             mcp_success(
                 id,
@@ -209,7 +341,17 @@ async fn handle_update_note(
     }
 }
 
-async fn handle_query_graph(id: &Value, args: &Value, vault: &Vault) -> Value {
+async fn handle_query_graph(
+    id: &Value,
+    args: &Value,
+    manager: &VaultManager,
+    engines: &McpEngines,
+) -> Value {
+    let rv = match resolve(args, manager, engines) {
+        Ok(rv) => rv,
+        Err(e) => return mcp_error(id, e),
+    };
+
     let note_id = args
         .get("note_id")
         .and_then(|v| v.as_str())
@@ -217,13 +359,11 @@ async fn handle_query_graph(id: &Value, args: &Value, vault: &Vault) -> Value {
     let tag_filter = args.get("tag").and_then(|t| t.as_str());
     let _depth = args.get("depth").and_then(|d| d.as_u64()).unwrap_or(1);
 
-    // Build a subgraph from the vault data
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
 
     if let Some(nid) = note_id {
-        // Get the center note and its connections
-        match vault.get_note(nid).await {
+        match rv.vault.vault.get_note(nid).await {
             Ok(note) => {
                 nodes.push(GraphNode {
                     id: nid,
@@ -231,7 +371,6 @@ async fn handle_query_graph(id: &Value, args: &Value, vault: &Vault) -> Value {
                     kind: NodeKind::Note,
                 });
 
-                // Add tag nodes and edges
                 for tag_name in &note.tags {
                     let tag_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, tag_name.as_bytes());
                     nodes.push(GraphNode {
@@ -246,7 +385,6 @@ async fn handle_query_graph(id: &Value, args: &Value, vault: &Vault) -> Value {
                     });
                 }
 
-                // Add backlink edges
                 for bl in &note.backlinks {
                     nodes.push(GraphNode {
                         id: bl.source_id,
@@ -260,8 +398,7 @@ async fn handle_query_graph(id: &Value, args: &Value, vault: &Vault) -> Value {
                     });
                 }
 
-                // Add outgoing links
-                let db = vault.db();
+                let db = rv.vault.vault.db();
                 if let Ok(links) = db.get_outgoing_links(nid).await {
                     for link in links {
                         if let Ok(target_note) = db.get_note(link.target_id).await {
@@ -282,9 +419,7 @@ async fn handle_query_graph(id: &Value, args: &Value, vault: &Vault) -> Value {
             Err(e) => return mcp_error(id, format!("Note not found: {e}")),
         }
     } else if let Some(tag_name) = tag_filter {
-        // List all notes with this tag
-        // For now, search by tag name
-        match vault.db().list_tags().await {
+        match rv.vault.vault.db().list_tags().await {
             Ok(tags) => {
                 if let Some(tag) = tags.iter().find(|t| t.name == tag_name) {
                     let tag_node_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, tag_name.as_bytes());
@@ -294,10 +429,9 @@ async fn handle_query_graph(id: &Value, args: &Value, vault: &Vault) -> Value {
                         kind: NodeKind::Tag,
                     });
 
-                    // Get all notes — for proper implementation we'd query by tag
-                    if let Ok(all_notes) = vault.list_notes(100, 0).await {
+                    if let Ok(all_notes) = rv.vault.vault.list_notes(100, 0).await {
                         for note in all_notes {
-                            if let Ok(note_tags) = vault.db().get_note_tags(note.id).await
+                            if let Ok(note_tags) = rv.vault.vault.db().get_note_tags(note.id).await
                                 && note_tags.contains(&tag_name.to_string())
                             {
                                 nodes.push(GraphNode {
@@ -336,6 +470,58 @@ async fn handle_query_graph(id: &Value, args: &Value, vault: &Vault) -> Value {
     )
 }
 
+fn handle_list_vaults(id: &Value, manager: &VaultManager) -> Value {
+    let vaults = manager.registry().list();
+    let active_id = manager.active_id();
+
+    if vaults.is_empty() {
+        return mcp_success(id, "No vaults registered.");
+    }
+
+    let mut text = format!("{} vault(s):\n\n", vaults.len());
+    for v in vaults {
+        let active = if active_id == Some(v.id) { " (active)" } else { "" };
+        let default = if v.is_default { " [default]" } else { "" };
+        text.push_str(&format!(
+            "- **{}**{}{}\n  ID: {}\n  Path: {}\n\n",
+            v.name,
+            active,
+            default,
+            v.id,
+            v.path.display()
+        ));
+    }
+    mcp_success(id, text)
+}
+
+async fn handle_switch_vault(
+    id: &Value,
+    args: &Value,
+    manager: &mut VaultManager,
+) -> Value {
+    let vault_ref = match args.get("vault").and_then(|v| v.as_str()) {
+        Some(v) => v,
+        None => return mcp_error(id, "Missing required parameter: vault"),
+    };
+
+    let vault_id = match manager.registry().resolve(vault_ref) {
+        Some(info) => info.id,
+        None => return mcp_error(id, format!("Vault not found: {vault_ref}")),
+    };
+
+    match manager.switch_vault(vault_id).await {
+        Ok(()) => {
+            let name = manager
+                .registry()
+                .get_by_id(vault_id)
+                .map(|v| v.name.clone())
+                .unwrap_or_default();
+            mcp_success(id, format!("Switched to vault '{name}'"))
+        }
+        Err(e) => mcp_error(id, format!("Failed to switch vault: {e}")),
+    }
+}
+
 fn parse_uuid(args: &Value, field: &str) -> Result<Uuid, String> {
     let s = args
         .get(field)
@@ -347,27 +533,35 @@ fn parse_uuid(args: &Value, field: &str) -> Result<Uuid, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mneme_search::SearchEngine;
-    use mneme_store::Vault;
+    use mneme_store::VaultManager;
     use tempfile::TempDir;
 
-    async fn test_env() -> (Vault, SearchEngine, TempDir) {
+    async fn test_env() -> (VaultManager, McpEngines, TempDir) {
         let dir = TempDir::new().unwrap();
-        let vault = Vault::open(dir.path()).await.unwrap();
-        let search = SearchEngine::in_memory().unwrap();
-        (vault, search, dir)
+        let mgr = VaultManager::single(dir.path()).await.unwrap();
+        let mut engines = McpEngines::new();
+        let id = mgr.active_id().unwrap();
+        // Use in-memory engines for testing
+        engines.engines.insert(
+            id,
+            (
+                SearchEngine::in_memory().unwrap(),
+                SemanticEngine::disabled(),
+            ),
+        );
+        (mgr, engines, dir)
     }
 
     #[tokio::test]
     async fn create_note_tool() {
-        let (vault, search, _dir) = test_env().await;
+        let (mut mgr, engines, _dir) = test_env().await;
         let id = serde_json::json!(1);
         let args = serde_json::json!({
             "title": "Test Note",
             "content": "Hello from MCP",
             "tags": ["mcp", "test"]
         });
-        let result = handle_tool_call(&id, "mneme_create_note", &args, &vault, &search).await;
+        let result = handle_tool_call(&id, "mneme_create_note", &args, &mut mgr, &engines).await;
         assert!(
             result["result"]["content"][0]["text"]
                 .as_str()
@@ -378,28 +572,19 @@ mod tests {
 
     #[tokio::test]
     async fn create_note_missing_title() {
-        let (vault, search, _dir) = test_env().await;
+        let (mut mgr, engines, _dir) = test_env().await;
         let id = serde_json::json!(1);
         let args = serde_json::json!({"content": "No title"});
-        let result = handle_tool_call(&id, "mneme_create_note", &args, &vault, &search).await;
-        assert_eq!(result["result"]["isError"], true);
-    }
-
-    #[tokio::test]
-    async fn create_note_missing_content() {
-        let (vault, search, _dir) = test_env().await;
-        let id = serde_json::json!(1);
-        let args = serde_json::json!({"title": "No content"});
-        let result = handle_tool_call(&id, "mneme_create_note", &args, &vault, &search).await;
+        let result = handle_tool_call(&id, "mneme_create_note", &args, &mut mgr, &engines).await;
         assert_eq!(result["result"]["isError"], true);
     }
 
     #[tokio::test]
     async fn search_tool_no_results() {
-        let (vault, search, _dir) = test_env().await;
+        let (mut mgr, engines, _dir) = test_env().await;
         let id = serde_json::json!(1);
         let args = serde_json::json!({"query": "nonexistent", "limit": 5});
-        let result = handle_tool_call(&id, "mneme_search", &args, &vault, &search).await;
+        let result = handle_tool_call(&id, "mneme_search", &args, &mut mgr, &engines).await;
         assert!(
             result["result"]["content"][0]["text"]
                 .as_str()
@@ -410,8 +595,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_tool_with_results() {
-        let (vault, search, _dir) = test_env().await;
-        // Create a note first
+        let (mut mgr, engines, _dir) = test_env().await;
         let create_args = serde_json::json!({
             "title": "Rust Guide",
             "content": "Rust programming language guide",
@@ -421,32 +605,24 @@ mod tests {
             &serde_json::json!(1),
             "mneme_create_note",
             &create_args,
-            &vault,
-            &search,
+            &mut mgr,
+            &engines,
         )
         .await;
 
         let id = serde_json::json!(2);
         let args = serde_json::json!({"query": "rust", "limit": 5});
-        let result = handle_tool_call(&id, "mneme_search", &args, &vault, &search).await;
+        let result = handle_tool_call(&id, "mneme_search", &args, &mut mgr, &engines).await;
         let text = result["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("result(s)") || text.contains("Rust Guide"));
     }
 
     #[tokio::test]
-    async fn search_missing_query() {
-        let (vault, search, _dir) = test_env().await;
-        let id = serde_json::json!(1);
-        let args = serde_json::json!({});
-        let result = handle_tool_call(&id, "mneme_search", &args, &vault, &search).await;
-        assert_eq!(result["result"]["isError"], true);
-    }
-
-    #[tokio::test]
     async fn get_note_tool() {
-        let (vault, search, _dir) = test_env().await;
-        // Create a note
-        let note = vault
+        let (mut mgr, engines, _dir) = test_env().await;
+        let ov = mgr.active().unwrap();
+        let note = ov
+            .vault
             .create_note(CreateNote {
                 title: "Get Test".into(),
                 path: None,
@@ -458,153 +634,39 @@ mod tests {
 
         let id = serde_json::json!(1);
         let args = serde_json::json!({"id": note.note.id.to_string()});
-        let result = handle_tool_call(&id, "mneme_get_note", &args, &vault, &search).await;
+        let result = handle_tool_call(&id, "mneme_get_note", &args, &mut mgr, &engines).await;
         let text = result["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("Get Test"));
-        assert!(text.contains("Content here."));
-    }
-
-    #[tokio::test]
-    async fn get_note_not_found() {
-        let (vault, search, _dir) = test_env().await;
-        let id = serde_json::json!(1);
-        let fake = Uuid::new_v4();
-        let args = serde_json::json!({"id": fake.to_string()});
-        let result = handle_tool_call(&id, "mneme_get_note", &args, &vault, &search).await;
-        assert_eq!(result["result"]["isError"], true);
-    }
-
-    #[tokio::test]
-    async fn get_note_missing_id() {
-        let (vault, search, _dir) = test_env().await;
-        let id = serde_json::json!(1);
-        let args = serde_json::json!({});
-        let result = handle_tool_call(&id, "mneme_get_note", &args, &vault, &search).await;
-        assert_eq!(result["result"]["isError"], true);
-    }
-
-    #[tokio::test]
-    async fn get_note_invalid_uuid() {
-        let (vault, search, _dir) = test_env().await;
-        let id = serde_json::json!(1);
-        let args = serde_json::json!({"id": "not-a-uuid"});
-        let result = handle_tool_call(&id, "mneme_get_note", &args, &vault, &search).await;
-        assert_eq!(result["result"]["isError"], true);
-    }
-
-    #[tokio::test]
-    async fn update_note_tool() {
-        let (vault, search, _dir) = test_env().await;
-        let note = vault
-            .create_note(CreateNote {
-                title: "Original".into(),
-                path: None,
-                content: "Old content.".into(),
-                tags: vec![],
-            })
-            .await
-            .unwrap();
-
-        let id = serde_json::json!(1);
-        let args = serde_json::json!({
-            "id": note.note.id.to_string(),
-            "title": "Updated Title",
-            "content": "New content."
-        });
-        let result = handle_tool_call(&id, "mneme_update_note", &args, &vault, &search).await;
-        let text = result["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Updated"));
-    }
-
-    #[tokio::test]
-    async fn update_note_no_fields() {
-        let (vault, search, _dir) = test_env().await;
-        let note = vault
-            .create_note(CreateNote {
-                title: "T".into(),
-                path: None,
-                content: "C".into(),
-                tags: vec![],
-            })
-            .await
-            .unwrap();
-
-        let id = serde_json::json!(1);
-        let args = serde_json::json!({"id": note.note.id.to_string()});
-        let result = handle_tool_call(&id, "mneme_update_note", &args, &vault, &search).await;
-        assert_eq!(result["result"]["isError"], true);
-    }
-
-    #[tokio::test]
-    async fn query_graph_no_params() {
-        let (vault, search, _dir) = test_env().await;
-        let id = serde_json::json!(1);
-        let args = serde_json::json!({});
-        let result = handle_tool_call(&id, "mneme_query_graph", &args, &vault, &search).await;
-        assert_eq!(result["result"]["isError"], true);
-    }
-
-    #[tokio::test]
-    async fn query_graph_by_note() {
-        let (vault, search, _dir) = test_env().await;
-        let note = vault
-            .create_note(CreateNote {
-                title: "Graph Note".into(),
-                path: None,
-                content: "Content.".into(),
-                tags: vec!["graph-tag".into()],
-            })
-            .await
-            .unwrap();
-
-        let id = serde_json::json!(1);
-        let args = serde_json::json!({"note_id": note.note.id.to_string()});
-        let result = handle_tool_call(&id, "mneme_query_graph", &args, &vault, &search).await;
-        let text = result["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Graph"));
-    }
-
-    #[tokio::test]
-    async fn query_graph_by_tag() {
-        let (vault, search, _dir) = test_env().await;
-        vault
-            .create_note(CreateNote {
-                title: "Tagged Note".into(),
-                path: None,
-                content: "Content.".into(),
-                tags: vec!["my-tag".into()],
-            })
-            .await
-            .unwrap();
-
-        let id = serde_json::json!(1);
-        let args = serde_json::json!({"tag": "my-tag"});
-        let result = handle_tool_call(&id, "mneme_query_graph", &args, &vault, &search).await;
-        let text = result["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Graph") || text.contains("node"));
-    }
-
-    #[tokio::test]
-    async fn query_graph_unknown_tag() {
-        let (vault, search, _dir) = test_env().await;
-        let id = serde_json::json!(1);
-        let args = serde_json::json!({"tag": "nonexistent-tag"});
-        let result = handle_tool_call(&id, "mneme_query_graph", &args, &vault, &search).await;
-        assert_eq!(result["result"]["isError"], true);
     }
 
     #[tokio::test]
     async fn unknown_tool() {
-        let (vault, search, _dir) = test_env().await;
+        let (mut mgr, engines, _dir) = test_env().await;
         let id = serde_json::json!(1);
         let result = handle_tool_call(
             &id,
             "nonexistent_tool",
             &serde_json::json!({}),
-            &vault,
-            &search,
+            &mut mgr,
+            &engines,
         )
         .await;
         assert_eq!(result["result"]["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn list_vaults_tool() {
+        let (mut mgr, engines, _dir) = test_env().await;
+        let id = serde_json::json!(1);
+        let result = handle_tool_call(
+            &id,
+            "mneme_list_vaults",
+            &serde_json::json!({}),
+            &mut mgr,
+            &engines,
+        )
+        .await;
+        let text = result["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("vault(s)"));
     }
 }

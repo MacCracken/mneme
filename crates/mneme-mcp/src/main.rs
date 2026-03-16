@@ -1,16 +1,14 @@
 //! Mneme MCP server entry point — stdio JSON-RPC 2.0.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::{Value, json};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use mneme_mcp::protocol::{jsonrpc_error, tool_definitions};
-use mneme_mcp::tools::handle_tool_call;
-use mneme_search::SearchEngine;
-use mneme_store::Vault;
+use mneme_mcp::tools::{McpEngines, handle_tool_call};
+use mneme_store::VaultManager;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,12 +27,22 @@ async fn main() -> Result<()> {
                 .join("mneme")
         });
 
-    let vault = Vault::open(&vault_dir).await?;
-    let search_dir = vault_dir.join(".mneme").join("search-index");
-    let search = SearchEngine::open(&search_dir)?;
+    let models_dir = std::env::var("MNEME_MODELS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::data_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("mneme")
+                .join("models")
+        });
 
-    let vault = Arc::new(vault);
-    let search = Arc::new(search);
+    let mut manager = VaultManager::single(&vault_dir).await?;
+
+    // Create search engines for the default vault
+    let mut engines = McpEngines::new();
+    if let Some(ov) = manager.active() {
+        engines.ensure(ov.info.id, &ov.info.path, &models_dir);
+    }
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
@@ -56,7 +64,7 @@ async fn main() -> Result<()> {
             }
         };
 
-        let response = handle_request(&request, &vault, &search).await;
+        let response = handle_request(&request, &mut manager, &engines).await;
         let mut out = serde_json::to_string(&response)?;
         out.push('\n');
         stdout.write_all(out.as_bytes()).await?;
@@ -66,7 +74,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn handle_request(request: &Value, vault: &Vault, search: &SearchEngine) -> Value {
+async fn handle_request(
+    request: &Value,
+    manager: &mut VaultManager,
+    engines: &McpEngines,
+) -> Value {
     let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
     let id = request.get("id").cloned().unwrap_or(Value::Null);
 
@@ -96,7 +108,7 @@ async fn handle_request(request: &Value, vault: &Vault, search: &SearchEngine) -
             let params = request.get("params").cloned().unwrap_or(json!({}));
             let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
-            handle_tool_call(&id, tool_name, &args, vault, search).await
+            handle_tool_call(&id, tool_name, &args, manager, engines).await
         }
         _ => jsonrpc_error(&id, -32601, format!("unknown method: {method}")),
     }

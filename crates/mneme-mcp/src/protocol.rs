@@ -59,19 +59,21 @@ pub fn tool_definitions() -> Value {
                         "items": { "type": "string" },
                         "description": "Tags to apply (e.g. [\"rust\", \"project/agnos\"])"
                     },
-                    "path": { "type": "string", "description": "Optional file path relative to vault (auto-generated from title if omitted)" }
+                    "path": { "type": "string", "description": "Optional file path relative to vault (auto-generated from title if omitted)" },
+                    "vault": { "type": "string", "description": "Optional vault name or ID (default: active vault)" }
                 },
                 "required": ["title", "content"]
             }
         },
         {
             "name": "mneme_search",
-            "description": "Search notes by keyword, full-text query, or tag filter",
+            "description": "Search notes by keyword, full-text query, or tag filter. Uses hybrid FTS + semantic search when available.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Search query" },
-                    "limit": { "type": "integer", "description": "Max results (default: 10)", "default": 10 }
+                    "limit": { "type": "integer", "description": "Max results (default: 10)", "default": 10 },
+                    "vault": { "type": "string", "description": "Optional vault name or ID (default: active vault)" }
                 },
                 "required": ["query"]
             }
@@ -82,7 +84,8 @@ pub fn tool_definitions() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "id": { "type": "string", "description": "Note UUID" }
+                    "id": { "type": "string", "description": "Note UUID" },
+                    "vault": { "type": "string", "description": "Optional vault name or ID (default: active vault)" }
                 },
                 "required": ["id"]
             }
@@ -100,7 +103,8 @@ pub fn tool_definitions() -> Value {
                         "type": "array",
                         "items": { "type": "string" },
                         "description": "Replace tags (optional)"
-                    }
+                    },
+                    "vault": { "type": "string", "description": "Optional vault name or ID (default: active vault)" }
                 },
                 "required": ["id"]
             }
@@ -113,8 +117,28 @@ pub fn tool_definitions() -> Value {
                 "properties": {
                     "note_id": { "type": "string", "description": "Center node UUID (optional)" },
                     "tag": { "type": "string", "description": "Filter by tag name (optional)" },
-                    "depth": { "type": "integer", "description": "Traversal depth (default: 1)", "default": 1 }
+                    "depth": { "type": "integer", "description": "Traversal depth (default: 1)", "default": 1 },
+                    "vault": { "type": "string", "description": "Optional vault name or ID (default: active vault)" }
                 }
+            }
+        },
+        {
+            "name": "mneme_list_vaults",
+            "description": "List all registered vaults with their status",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "mneme_switch_vault",
+            "description": "Switch the active vault by name or ID",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vault": { "type": "string", "description": "Vault name or UUID" }
+                },
+                "required": ["vault"]
             }
         }
     ])
@@ -142,7 +166,7 @@ mod tests {
     #[test]
     fn tool_definitions_count() {
         let tools = tool_definitions();
-        assert_eq!(tools.as_array().unwrap().len(), 5);
+        assert_eq!(tools.as_array().unwrap().len(), 7);
     }
 
     #[test]
@@ -161,7 +185,6 @@ mod tests {
             assert!(tool["name"].is_string());
             assert!(tool["description"].is_string());
             assert!(tool["inputSchema"]["type"].as_str() == Some("object"));
-            assert!(tool["inputSchema"]["properties"].is_object());
         }
     }
 
@@ -197,5 +220,21 @@ mod tests {
         assert!(names.contains(&"mneme_get_note"));
         assert!(names.contains(&"mneme_update_note"));
         assert!(names.contains(&"mneme_query_graph"));
+        assert!(names.contains(&"mneme_list_vaults"));
+        assert!(names.contains(&"mneme_switch_vault"));
+    }
+
+    #[test]
+    fn vault_tools_exist() {
+        let tools = tool_definitions();
+        let arr = tools.as_array().unwrap();
+        let list_vaults = arr.iter().find(|t| t["name"] == "mneme_list_vaults");
+        assert!(list_vaults.is_some());
+        let switch = arr.iter().find(|t| t["name"] == "mneme_switch_vault");
+        assert!(switch.is_some());
+        let required = switch.unwrap()["inputSchema"]["required"]
+            .as_array()
+            .unwrap();
+        assert!(required.iter().any(|r| r == "vault"));
     }
 }

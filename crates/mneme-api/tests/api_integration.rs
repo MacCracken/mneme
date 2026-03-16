@@ -1,5 +1,6 @@
 //! Integration tests for the Mneme API server.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -11,18 +12,15 @@ use tower::ServiceExt;
 
 use mneme_ai::DaimonClient;
 use mneme_api::router::build_router;
-use mneme_api::state::AppState;
-use mneme_search::SearchEngine;
-use mneme_store::Vault;
+use mneme_api::state::{AppState, VaultState};
 
 async fn test_app() -> (axum::Router, TempDir) {
     let dir = TempDir::new().unwrap();
-    let vault = Vault::open(dir.path()).await.unwrap();
-    let search = SearchEngine::in_memory().unwrap();
+    let models_dir = PathBuf::from("/nonexistent");
+    let vault_state = VaultState::single(dir.path(), &models_dir).await.unwrap();
     let daimon = DaimonClient::new(None, None);
     let state = AppState {
-        vault: Arc::new(RwLock::new(vault)),
-        search: Arc::new(search),
+        vaults: Arc::new(RwLock::new(vault_state)),
         daimon: Arc::new(daimon),
     };
     (build_router(state), dir)

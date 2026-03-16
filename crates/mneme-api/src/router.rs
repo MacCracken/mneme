@@ -8,12 +8,22 @@ use crate::ai_handlers;
 use crate::handlers;
 use crate::io_handlers;
 use crate::state::AppState;
+use crate::vault_handlers;
 
 /// Build the API router with all routes.
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         // Health
         .route("/health", get(handlers::health))
+        // Vaults
+        .route("/v1/vaults", get(vault_handlers::list_vaults))
+        .route("/v1/vaults", post(vault_handlers::create_vault))
+        .route("/v1/vaults/{id}", get(vault_handlers::get_vault))
+        .route("/v1/vaults/{id}", delete(vault_handlers::delete_vault))
+        .route(
+            "/v1/vaults/{id}/switch",
+            post(vault_handlers::switch_vault),
+        )
         // Notes
         .route("/v1/notes", get(handlers::list_notes))
         .route("/v1/notes", post(handlers::create_note))

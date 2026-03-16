@@ -10,9 +10,8 @@ use tracing_subscriber::EnvFilter;
 
 use mneme_ai::DaimonClient;
 use mneme_api::router::build_router;
-use mneme_api::state::AppState;
-use mneme_search::SearchEngine;
-use mneme_store::Vault;
+use mneme_api::state::{AppState, VaultState};
+use mneme_core::config::MnemeConfig;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -20,19 +19,86 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
-    let vault_dir = std::env::var("MNEME_VAULT_DIR")
+    // Load config
+    let config_path = std::env::var("MNEME_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            dirs::home_dir()
+            dirs::config_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("mneme")
+                .join("mneme.toml")
         });
 
-    tracing::info!("Opening vault at {}", vault_dir.display());
-    let vault = Vault::open(&vault_dir).await?;
+    let config = if config_path.exists() {
+        let data = std::fs::read_to_string(&config_path)?;
+        toml::from_str::<MnemeConfig>(&data)?
+    } else {
+        MnemeConfig::default()
+    };
 
-    let search_dir = vault_dir.join(".mneme").join("search-index");
-    let search = SearchEngine::open(&search_dir)?;
+    // Models directory for ONNX embeddings
+    let models_dir = std::env::var("MNEME_MODELS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::data_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("mneme")
+                .join("models")
+        });
+
+    // Initialize vault state
+    let vault_state = if config.vaults.is_empty() {
+        // Legacy single-vault mode
+        let vault_dir = std::env::var("MNEME_VAULT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("mneme")
+            });
+
+        tracing::info!("Opening vault at {}", vault_dir.display());
+        VaultState::single(&vault_dir, &models_dir).await?
+    } else {
+        // Multi-vault mode from config
+        let registry_path = config.registry_path.clone().unwrap_or_else(|| {
+            dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("mneme")
+                .join("registry.toml")
+        });
+
+        let mut registry = mneme_store::VaultRegistry::open(&registry_path)?;
+
+        // Register vaults from config that aren't in the registry yet
+        for entry in &config.vaults {
+            if registry.get_by_name(&entry.name).is_none() {
+                let _ = registry.create(entry.name.clone(), entry.path.clone());
+            }
+        }
+
+        // Set default if specified
+        if let Some(default_name) = &config.default_vault {
+            if let Some(info) = registry.get_by_name(default_name) {
+                let id = info.id;
+                let _ = registry.set_default(id);
+            }
+        }
+
+        let mut vault_state = VaultState {
+            manager: mneme_store::VaultManager::new(registry),
+            engines: std::collections::HashMap::new(),
+            models_dir: models_dir.clone(),
+        };
+
+        // Open the default vault
+        if let Some(info) = vault_state.manager.registry().default_vault().cloned() {
+            tracing::info!("Opening default vault '{}' at {}", info.name, info.path.display());
+            vault_state.open_vault(info.id).await?;
+        }
+
+        vault_state
+    };
 
     let daimon_url = std::env::var("DAIMON_URL").ok();
     let daimon_key = std::env::var("DAIMON_API_KEY").ok();
@@ -45,8 +111,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let state = AppState {
-        vault: Arc::new(RwLock::new(vault)),
-        search: Arc::new(search),
+        vaults: Arc::new(RwLock::new(vault_state)),
         daimon: Arc::new(daimon),
     };
 

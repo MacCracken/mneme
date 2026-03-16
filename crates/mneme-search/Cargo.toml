@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 description = "Full-text search (Tantivy) and semantic/vector search integration"
 
+[features]
+default = ["local-vectors"]
+local-vectors = ["dep:usearch", "dep:ort", "dep:ndarray", "dep:tokenizers"]
+
 [dependencies]
 mneme-core = { workspace = true }
 mneme-store = { workspace = true }
@@ -17,9 +21,18 @@ reqwest = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+chrono = { workspace = true }
+
+# Local vector search (optional, default on)
+usearch = { workspace = true, optional = true }
+ort = { workspace = true, optional = true }
+ndarray = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [[bench]]
 name = "search_bench"

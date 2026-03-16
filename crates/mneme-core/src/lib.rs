@@ -4,6 +4,7 @@
 //! and the knowledge graph. It must have no I/O dependencies.
 
 pub mod calendar;
+pub mod config;
 pub mod frontmatter;
 pub mod graph;
 pub mod link;

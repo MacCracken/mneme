@@ -11,8 +11,7 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use mneme_search::SearchEngine;
-use mneme_store::Vault;
+use mneme_store::VaultManager;
 use mneme_ui::app::{App, PaneState, Panel};
 use mneme_ui::views;
 
@@ -26,21 +25,26 @@ async fn main() -> Result<()> {
                 .join("mneme")
         });
 
-    let vault = Vault::open(&vault_dir).await?;
-    let search_dir = vault_dir.join(".mneme").join("search-index");
-    let search = SearchEngine::open(&search_dir)?;
+    let models_dir = std::env::var("MNEME_MODELS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::data_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("mneme")
+                .join("models")
+        });
 
-    let mut app = App::new(vault, search);
+    let manager = VaultManager::single(&vault_dir).await?;
+
+    let mut app = App::new(manager, models_dir);
     app.load_notes().await;
     app.load_tags().await;
 
-    // Terminal setup
     enable_raw_mode()?;
     std::io::stdout().execute(EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    // Main loop
     loop {
         terminal.draw(|frame| views::render(frame, &app))?;
 
@@ -64,11 +68,9 @@ async fn main() -> Result<()> {
                         app.run_search();
                     }
                     KeyCode::Enter => {
-                        if let Some((_id, _, _)) =
+                        if let Some((id, _, _)) =
                             app.search_results.get(app.selected_index).cloned()
                         {
-                            let id = _id;
-                            // If we're picking for a split pane, load into that pane
                             if let Some(pane_idx) = app.split_pick_pane.take() {
                                 app.load_pane(pane_idx, id).await;
                                 app.panel = Panel::SplitView;
@@ -82,24 +84,12 @@ async fn main() -> Result<()> {
                     _ => {}
                 },
                 Panel::Graph => match key.code {
-                    KeyCode::Char('q') => {
-                        app.should_quit = true;
-                    }
-                    KeyCode::Esc => {
-                        app.panel = Panel::NoteList;
-                    }
-                    KeyCode::Left => {
-                        app.graph_center.0 -= 10.0 / app.graph_zoom;
-                    }
-                    KeyCode::Right => {
-                        app.graph_center.0 += 10.0 / app.graph_zoom;
-                    }
-                    KeyCode::Up => {
-                        app.graph_center.1 += 10.0 / app.graph_zoom;
-                    }
-                    KeyCode::Down => {
-                        app.graph_center.1 -= 10.0 / app.graph_zoom;
-                    }
+                    KeyCode::Char('q') => app.should_quit = true,
+                    KeyCode::Esc => app.panel = Panel::NoteList,
+                    KeyCode::Left => app.graph_center.0 -= 10.0 / app.graph_zoom,
+                    KeyCode::Right => app.graph_center.0 += 10.0 / app.graph_zoom,
+                    KeyCode::Up => app.graph_center.1 += 10.0 / app.graph_zoom,
+                    KeyCode::Down => app.graph_center.1 -= 10.0 / app.graph_zoom,
                     KeyCode::Char('+') | KeyCode::Char('=') => {
                         app.graph_zoom = (app.graph_zoom * 1.2).min(10.0);
                     }
@@ -107,7 +97,6 @@ async fn main() -> Result<()> {
                         app.graph_zoom = (app.graph_zoom / 1.2).max(0.1);
                     }
                     KeyCode::Tab => {
-                        // Cycle through nodes
                         if let Some(ref layout) = app.graph_layout {
                             if !layout.nodes.is_empty() {
                                 let next = match app.graph_selected {
@@ -119,7 +108,6 @@ async fn main() -> Result<()> {
                         }
                     }
                     KeyCode::Enter => {
-                        // Open selected node if it's a Note
                         if let (Some(sel), Some(layout)) =
                             (app.graph_selected, &app.graph_layout)
                         {
@@ -133,11 +121,8 @@ async fn main() -> Result<()> {
                     _ => {}
                 },
                 Panel::SplitView => match key.code {
-                    KeyCode::Char('q') => {
-                        app.should_quit = true;
-                    }
+                    KeyCode::Char('q') => app.should_quit = true,
                     KeyCode::Esc => {
-                        // Back to NoteView with left pane's note
                         if let Some(id) = app.split_panes[0].note_id {
                             app.select_note(id).await;
                         } else {
@@ -146,13 +131,11 @@ async fn main() -> Result<()> {
                     }
                     KeyCode::Tab => {
                         app.active_pane = 1 - app.active_pane;
-                        let pane_num = app.active_pane + 1;
-                        app.status_message = format!("Active: Pane {pane_num}");
+                        app.status_message = format!("Active: Pane {}", app.active_pane + 1);
                     }
                     KeyCode::Up | KeyCode::Char('k') => app.select_prev(),
                     KeyCode::Down | KeyCode::Char('j') => app.select_next(),
                     KeyCode::Char('o') => {
-                        // Open note picker for active pane
                         app.split_pick_pane = Some(app.active_pane);
                         app.panel = Panel::NoteList;
                         app.selected_index = 0;
@@ -162,10 +145,18 @@ async fn main() -> Result<()> {
                     }
                     _ => {}
                 },
-                _ => match key.code {
-                    KeyCode::Char('q') => {
-                        app.should_quit = true;
+                Panel::VaultPicker => match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => app.panel = Panel::NoteList,
+                    KeyCode::Up | KeyCode::Char('k') => app.select_prev(),
+                    KeyCode::Down | KeyCode::Char('j') => app.select_next(),
+                    KeyCode::Enter => {
+                        let idx = app.selected_index;
+                        app.switch_vault_by_index(idx).await;
                     }
+                    _ => {}
+                },
+                _ => match key.code {
+                    KeyCode::Char('q') => app.should_quit = true,
                     KeyCode::Char('/') => {
                         app.panel = Panel::Search;
                         app.search_query.clear();
@@ -186,14 +177,16 @@ async fn main() -> Result<()> {
                         app.panel = Panel::Graph;
                         app.load_graph().await;
                     }
+                    KeyCode::Char('v') => {
+                        app.panel = Panel::VaultPicker;
+                        app.load_vault_list();
+                    }
                     KeyCode::Char('s') => {
                         if app.panel == Panel::NoteView {
-                            // Enter split view with current note in left pane
                             if let Some(id) = app.selected_note_id {
                                 app.panel = Panel::SplitView;
                                 app.active_pane = 0;
                                 app.load_pane(0, id).await;
-                                // Clear right pane
                                 app.split_panes[1] = PaneState::default();
                                 app.status_message = "Split view — Tab to switch panes, 'o' to open note".into();
                             }
@@ -209,7 +202,6 @@ async fn main() -> Result<()> {
                     KeyCode::Enter => {
                         if app.panel == Panel::NoteList {
                             if let Some(note) = app.notes.get(app.selected_index).cloned() {
-                                // If picking for a split pane, load into that pane
                                 if let Some(pane_idx) = app.split_pick_pane.take() {
                                     app.load_pane(pane_idx, note.id).await;
                                     app.panel = Panel::SplitView;
@@ -229,7 +221,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Cleanup
     disable_raw_mode()?;
     std::io::stdout().execute(LeaveAlternateScreen)?;
 
