@@ -1,7 +1,8 @@
-//! Unified semantic search engine — local embeddings + vector store.
+//! Unified semantic search engine — pluggable embeddings + vector store.
 //!
 //! Provides a single facade for embedding notes and searching by meaning.
-//! Falls back gracefully when models are unavailable.
+//! Supports local ONNX or remote HTTP (Synapse/Ollama/OpenAI) backends,
+//! with automatic fallback.
 
 use std::path::Path;
 use std::sync::RwLock;
@@ -9,42 +10,47 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 use crate::SearchError;
+use crate::embedding_backend::{EmbeddingBackend, EmbeddingConfig, build_backend};
 use crate::semantic::SemanticResult;
 
 #[cfg(feature = "local-vectors")]
-use crate::embedder::{EMBEDDING_DIM, Embedder};
-#[cfg(feature = "local-vectors")]
 use crate::vector_store::VectorStore;
 
-/// Semantic search engine combining local embeddings + ANN index.
+/// Semantic search engine combining pluggable embeddings + ANN index.
 pub struct SemanticEngine {
-    #[cfg(feature = "local-vectors")]
-    embedder: Option<Embedder>,
+    backend: Option<Box<dyn EmbeddingBackend>>,
     #[cfg(feature = "local-vectors")]
     vector_store: Option<RwLock<VectorStore>>,
 }
 
 impl SemanticEngine {
-    /// Initialize the semantic engine.
+    /// Initialize the semantic engine with default config (local ONNX).
     ///
     /// Attempts to load models from `models_dir` and open/create a vector
     /// index at `vectors_dir`. If either fails, the engine operates in
     /// degraded mode (no local semantic search).
     pub fn open(models_dir: &Path, vectors_dir: &Path) -> Self {
+        Self::open_with_config(models_dir, vectors_dir, &EmbeddingConfig::default())
+    }
+
+    /// Initialize with explicit embedding config.
+    pub fn open_with_config(
+        models_dir: &Path,
+        vectors_dir: &Path,
+        config: &EmbeddingConfig,
+    ) -> Self {
+        let backend = build_backend(config, models_dir);
+        let dim = backend.as_ref().map(|b| b.dimension()).unwrap_or(384);
+
+        if let Some(ref b) = backend {
+            tracing::info!("Embedding backend: {} ({}d)", b.name(), b.dimension());
+        } else {
+            tracing::warn!("No embedding backend available");
+        }
+
         #[cfg(feature = "local-vectors")]
         {
-            let embedder = match Embedder::open(models_dir) {
-                Ok(e) => {
-                    tracing::info!("Local embedder ready");
-                    Some(e)
-                }
-                Err(e) => {
-                    tracing::warn!("Local embedder unavailable: {e}");
-                    None
-                }
-            };
-
-            let vector_store = match VectorStore::open(vectors_dir, EMBEDDING_DIM) {
+            let vector_store = match VectorStore::open(vectors_dir, dim) {
                 Ok(vs) => {
                     tracing::info!("Vector store ready ({} vectors)", vs.len());
                     Some(RwLock::new(vs))
@@ -56,16 +62,15 @@ impl SemanticEngine {
             };
 
             Self {
-                embedder,
+                backend,
                 vector_store,
             }
         }
 
         #[cfg(not(feature = "local-vectors"))]
         {
-            let _ = (models_dir, vectors_dir);
-            tracing::info!("Local vectors feature disabled");
-            Self {}
+            let _ = vectors_dir;
+            Self { backend }
         }
     }
 
@@ -74,28 +79,38 @@ impl SemanticEngine {
         #[cfg(feature = "local-vectors")]
         {
             Self {
-                embedder: None,
+                backend: None,
                 vector_store: None,
             }
         }
 
         #[cfg(not(feature = "local-vectors"))]
         {
-            Self {}
+            Self { backend: None }
         }
     }
 
-    /// Whether local embedding + vector search is operational.
+    /// Whether embedding + vector search is operational.
     pub fn is_available(&self) -> bool {
         #[cfg(feature = "local-vectors")]
         {
-            self.embedder.is_some() && self.vector_store.is_some()
+            self.backend.is_some() && self.vector_store.is_some()
         }
 
         #[cfg(not(feature = "local-vectors"))]
         {
-            false
+            self.backend.is_some()
         }
+    }
+
+    /// Name of the active embedding backend (for status reporting).
+    pub fn backend_name(&self) -> &str {
+        self.backend.as_ref().map(|b| b.name()).unwrap_or("none")
+    }
+
+    /// Embedding dimension of the active backend.
+    pub fn embedding_dimension(&self) -> usize {
+        self.backend.as_ref().map(|b| b.dimension()).unwrap_or(0)
     }
 
     /// Index a note: embed its content and store the vector.
@@ -107,18 +122,17 @@ impl SemanticEngine {
     ) -> Result<(), SearchError> {
         #[cfg(feature = "local-vectors")]
         {
-            let embedder = match &self.embedder {
-                Some(e) => e,
-                None => return Ok(()), // silently skip if unavailable
+            let backend = match &self.backend {
+                Some(b) => b,
+                None => return Ok(()),
             };
             let vector_store = match &self.vector_store {
                 Some(vs) => vs,
                 None => return Ok(()),
             };
 
-            // Embed title + content together for better representation
             let text = format!("{title}\n\n{content}");
-            let embedding = embedder.embed(&text)?;
+            let embedding = backend.embed(&text)?;
 
             let snippet = if content.len() > 200 {
                 &content[..200]
@@ -143,35 +157,17 @@ impl SemanticEngine {
 
     /// Embed raw text into a vector. Returns None if the engine is unavailable.
     pub fn embed(&self, text: &str) -> Result<Option<Vec<f32>>, SearchError> {
-        #[cfg(feature = "local-vectors")]
-        {
-            if let Some(embedder) = &self.embedder {
-                return Ok(Some(embedder.embed(text)?));
-            }
-            Ok(None)
-        }
-
-        #[cfg(not(feature = "local-vectors"))]
-        {
-            let _ = text;
-            Ok(None)
+        match &self.backend {
+            Some(b) => Ok(Some(b.embed(text)?)),
+            None => Ok(None),
         }
     }
 
     /// Batch-embed multiple texts. Returns None if the engine is unavailable.
     pub fn embed_batch(&self, texts: &[&str]) -> Result<Option<Vec<Vec<f32>>>, SearchError> {
-        #[cfg(feature = "local-vectors")]
-        {
-            if let Some(embedder) = &self.embedder {
-                return Ok(Some(embedder.embed_batch(texts)?));
-            }
-            Ok(None)
-        }
-
-        #[cfg(not(feature = "local-vectors"))]
-        {
-            let _ = texts;
-            Ok(None)
+        match &self.backend {
+            Some(b) => Ok(Some(b.embed_batch(texts)?)),
+            None => Ok(None),
         }
     }
 
@@ -194,9 +190,6 @@ impl SemanticEngine {
     }
 
     /// Context-aware search: fuse query embedding with context embedding before searching.
-    ///
-    /// `context_emb` is the averaged embedding of recently accessed notes.
-    /// `query_weight` (λ) controls how much to weight the query vs context.
     pub fn context_search(
         &self,
         query: &str,
@@ -206,8 +199,8 @@ impl SemanticEngine {
     ) -> Result<Vec<SemanticResult>, SearchError> {
         #[cfg(feature = "local-vectors")]
         {
-            let embedder = match &self.embedder {
-                Some(e) => e,
+            let backend = match &self.backend {
+                Some(b) => b,
                 None => return Ok(vec![]),
             };
             let vector_store = match &self.vector_store {
@@ -215,8 +208,9 @@ impl SemanticEngine {
                 None => return Ok(vec![]),
             };
 
-            let query_emb = embedder.embed(query)?;
-            let fused = crate::context_buffer::fuse_embeddings(&query_emb, context_emb, query_weight);
+            let query_emb = backend.embed(query)?;
+            let fused =
+                crate::context_buffer::fuse_embeddings(&query_emb, context_emb, query_weight);
 
             vector_store
                 .read()
@@ -232,9 +226,6 @@ impl SemanticEngine {
     }
 
     /// Find notes similar to the given text, filtered by a score threshold.
-    ///
-    /// Used for duplicate detection: embeds the text, searches the vector store,
-    /// and returns only results at or above `threshold`.
     pub fn find_similar_to(
         &self,
         text: &str,
@@ -254,8 +245,8 @@ impl SemanticEngine {
     ) -> Result<Vec<SemanticResult>, SearchError> {
         #[cfg(feature = "local-vectors")]
         {
-            let embedder = match &self.embedder {
-                Some(e) => e,
+            let backend = match &self.backend {
+                Some(b) => b,
                 None => return Ok(vec![]),
             };
             let vector_store = match &self.vector_store {
@@ -263,7 +254,7 @@ impl SemanticEngine {
                 None => return Ok(vec![]),
             };
 
-            let query_embedding = embedder.embed(query)?;
+            let query_embedding = backend.embed(query)?;
 
             vector_store
                 .read()
@@ -343,6 +334,8 @@ mod tests {
         let engine = SemanticEngine::disabled();
         assert!(!engine.is_available());
         assert_eq!(engine.vector_count(), 0);
+        assert_eq!(engine.backend_name(), "none");
+        assert_eq!(engine.embedding_dimension(), 0);
 
         let results = engine.search("test", 10).unwrap();
         assert!(results.is_empty());
@@ -359,11 +352,33 @@ mod tests {
     #[test]
     fn open_with_missing_models_degrades() {
         let dir = tempfile::TempDir::new().unwrap();
-        let engine = SemanticEngine::open(
-            &PathBuf::from("/nonexistent/models"),
-            dir.path(),
-        );
+        let engine = SemanticEngine::open(&PathBuf::from("/nonexistent/models"), dir.path());
         // Should not panic, just degrade
+        assert!(!engine.is_available());
+    }
+
+    #[test]
+    fn embed_returns_none_when_disabled() {
+        let engine = SemanticEngine::disabled();
+        assert!(engine.embed("test").unwrap().is_none());
+        assert!(engine.embed_batch(&["a", "b"]).unwrap().is_none());
+    }
+
+    #[test]
+    fn open_with_config_degrades_gracefully() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config = EmbeddingConfig {
+            backend: "remote".into(),
+            remote_url: Some("http://127.0.0.1:99999".into()),
+            model: Some("test".into()),
+            ..Default::default()
+        };
+        // Remote is unreachable, should degrade
+        let engine = SemanticEngine::open_with_config(
+            &PathBuf::from("/nonexistent"),
+            dir.path(),
+            &config,
+        );
         assert!(!engine.is_available());
     }
 }

@@ -4,6 +4,43 @@ All notable changes to Mneme will be documented in this file.
 
 ## [2026.3.15] — 2026-03-15
 
+### Phase 8 — Note Consolidation & Evolution
+- `mneme-search/src/semantic_engine.rs`: `find_similar_to()` for embedding-based duplicate detection
+- `mneme-ai/src/consolidation.rs`: `detect_duplicates_semantic()`, `MergeSuggestion` type, `DuplicatePair.detection_method` field
+- `mneme-store/migrations/002_last_accessed.sql`: `last_accessed` column + index
+- `mneme-store/src/db.rs`: `touch_note()` for lightweight access tracking
+- `mneme-store/src/vault.rs`: `get_note()` bumps `last_accessed` on full content reads
+- Content freshness scoring: `days_since_update / max(days_since_access, 1)` in `StaleNote`
+- `POST /v1/ai/consolidate/merge` endpoint for LLM merge suggestions via daimon
+- `GET /v1/notes/duplicates?method=semantic|jaccard|both` query param
+- TUI: Stale notes panel (`!` keybinding) showing days stale + freshness score
+
+### Phase 9 — Schema Clustering & Emergent Structure
+- `mneme-ai/src/clustering.rs`: K-means++ with deterministic init, Lloyd's iteration, elbow heuristic
+- `mneme-search/src/semantic_engine.rs`: `embed()`, `embed_batch()`, `indexed_note_ids()` methods
+- `mneme-search/src/vector_store.rs`: `note_ids()` method
+- `mneme-ai/src/client.rs`: `label_cluster()` for LLM-generated cluster labels/summaries
+- `GET /v1/ai/clusters?k=&max_k=&label=` endpoint
+- TUI: Clusters panel (`c` keybinding) with expand/collapse navigation
+- Types: `ClusteringResult`, `Cluster`, `NoteEmbedding`
+
+### Phase 10 — Context-Aware Retrieval
+- `mneme-search/src/context_buffer.rs`: `ContextBuffer` with bounded deque, recency-weighted averaging, `fuse_embeddings()`
+- `mneme-search/src/semantic_engine.rs`: `context_search()` fuses query + context embeddings
+- `mneme-core/src/config.rs`: `ContextRetrievalConfig` with `enabled`, `query_weight` (λ=0.7), `buffer_capacity`
+- `mneme-api/src/state.rs`: `ContextBuffer` per vault in `VaultEngines`
+- `mneme-api/src/handlers.rs`: `GET /v1/notes/{id}` pushes to context buffer; search uses it automatically; `?context=false` opt-out
+- TUI: `select_note()` pushes to context buffer, `run_search()` merges context-aware semantic results
+
+### Phase 11 — Document Provenance & Trust Scoring
+- `mneme-core/src/note.rs`: `Provenance` enum (Manual 1.0, Import 0.8, WebClip 0.6, Generated 0.4), `trust_score()` method
+- `mneme-core/src/frontmatter.rs`: `trust:` field parsing (high/medium/low or float), `parse_trust_value()`
+- `mneme-store/migrations/003_provenance.sql`: `provenance TEXT`, `trust_override REAL` columns
+- `mneme-api/src/handlers.rs`: trust as multiplicative boost on hybrid search scores, `SearchResultItem.trust` field
+- `mneme-api/src/advanced_handlers.rs`: web clipper auto-sets `Provenance::WebClip`
+- `CreateNote.provenance` optional field for origin tracking
+- TUI: [H]/[M]/[L] trust indicators (green/yellow/red) in search results
+
 ### Phase 5 — In-Process Vector Store
 - `mneme-search/src/embedder.rs`: ONNX Runtime wrapper for all-MiniLM-L6-v2 (384-dim)
 - `mneme-search/src/vector_store.rs`: usearch ANN index with persistent metadata
@@ -34,17 +71,16 @@ All notable changes to Mneme will be documented in this file.
 
 ### Phase 7 — RAG Evaluation Metrics
 - `mneme-ai/src/rag_eval.rs`: local-only token-overlap scoring (no LLM required)
-- Faithfulness (token overlap between answer and context), answer relevance (token overlap between answer and query), chunk utilization (fraction of context tokens in answer)
+- Faithfulness, answer relevance, and chunk utilization scores (0.0–1.0)
 - Weighted overall score: 50% faithfulness, 30% relevance, 20% utilization
-- Simple tokenizer with stopword filtering
 - `RagEvalAggregates` for running averages across queries per vault
-- `RagAnswer` includes optional `eval: RagEvalScores` field
 - `/v1/ai/rag/stats` returns eval aggregates
 
 ### Quality
-- 313 tests (up from 257)
+- 349 tests across 8 crates (up from 313)
+- 3 new DB migrations (001–003)
+- New modules: clustering, context_buffer
 - New deps: usearch 2, ort 2.0.0-rc.12, ndarray 0.17, tokenizers 0.21
-- 4 new ADRs (007–010)
 
 ## [2026.3.13] — 2026-03-13
 
@@ -91,6 +127,8 @@ All notable changes to Mneme will be documented in this file.
 ### UI
 - Terminal interface (ratatui + crossterm)
 - Note list, Markdown viewer, search, backlinks panel, tag browser
+- Knowledge graph visualization (force-directed layout, Canvas rendering, node cycling, zoom/pan)
+- Split-pane / multi-note view (side-by-side, pane switching, note picker)
 - Keyboard-driven navigation
 
 ### MCP

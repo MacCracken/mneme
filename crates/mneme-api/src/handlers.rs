@@ -27,6 +27,8 @@ pub struct HealthResponse {
     pub active_vault: Option<String>,
     pub semantic_available: bool,
     pub vector_count: usize,
+    pub embedding_backend: String,
+    pub embedding_dimension: usize,
 }
 
 #[derive(Deserialize)]
@@ -76,15 +78,18 @@ pub struct SearchFeedbackRequest {
 
 pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     let vs = state.vaults.read().await;
-    let (count, vault_name, semantic_available, vector_count) = match vs.active() {
-        Some(vwe) => (
-            vwe.vault.vault.count_notes().await.unwrap_or(0),
-            Some(vwe.vault.info.name.clone()),
-            vwe.semantic().is_available(),
-            vwe.semantic().vector_count(),
-        ),
-        None => (0, None, false, 0),
-    };
+    let (count, vault_name, semantic_available, vector_count, backend_name, embed_dim) =
+        match vs.active() {
+            Some(vwe) => (
+                vwe.vault.vault.count_notes().await.unwrap_or(0),
+                Some(vwe.vault.info.name.clone()),
+                vwe.semantic().is_available(),
+                vwe.semantic().vector_count(),
+                vwe.semantic().backend_name().to_string(),
+                vwe.semantic().embedding_dimension(),
+            ),
+            None => (0, None, false, 0, "none".into(), 0),
+        };
     Json(HealthResponse {
         status: "ok".into(),
         version: env!("CARGO_PKG_VERSION").into(),
@@ -92,6 +97,8 @@ pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
         active_vault: vault_name,
         semantic_available,
         vector_count,
+        embedding_backend: backend_name,
+        embedding_dimension: embed_dim,
     })
 }
 

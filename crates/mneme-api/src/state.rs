@@ -133,6 +133,14 @@ impl VaultState {
 }
 
 fn create_engines(vault_path: &Path, models_dir: &Path) -> VaultEngines {
+    create_engines_with_config(vault_path, models_dir, None)
+}
+
+fn create_engines_with_config(
+    vault_path: &Path,
+    models_dir: &Path,
+    embedding_config: Option<&mneme_search::embedding_backend::EmbeddingConfig>,
+) -> VaultEngines {
     let search_dir = vault_path.join(".mneme").join("search-index");
     let search = SearchEngine::open(&search_dir).unwrap_or_else(|e| {
         tracing::warn!("FTS engine failed for {}: {e}", vault_path.display());
@@ -140,7 +148,11 @@ fn create_engines(vault_path: &Path, models_dir: &Path) -> VaultEngines {
     });
 
     let vectors_dir = vault_path.join(".mneme").join("vectors");
-    let semantic = SemanticEngine::open(models_dir, &vectors_dir);
+    let semantic = if let Some(config) = embedding_config {
+        SemanticEngine::open_with_config(models_dir, &vectors_dir, config)
+    } else {
+        SemanticEngine::open(models_dir, &vectors_dir)
+    };
 
     // Load optimizer state from disk, or create fresh
     let optimizer_path = vault_path.join(".mneme").join("optimizer.json");

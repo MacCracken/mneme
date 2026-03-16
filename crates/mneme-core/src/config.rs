@@ -19,6 +19,45 @@ pub struct MnemeConfig {
     /// Context-aware retrieval settings.
     #[serde(default)]
     pub context_retrieval: ContextRetrievalConfig,
+    /// Embedding backend settings.
+    #[serde(default)]
+    pub embedding: EmbeddingSection,
+}
+
+/// Embedding backend configuration (plumbed to mneme-search).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingSection {
+    /// Backend: "auto" (default), "local", or "remote".
+    #[serde(default = "default_auto")]
+    pub backend: String,
+    /// URL for remote embedding service (e.g. Synapse, Ollama).
+    #[serde(default)]
+    pub remote_url: Option<String>,
+    /// Model name for the remote service.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// API key for the remote service.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Expected embedding dimension.
+    #[serde(default)]
+    pub dimensions: Option<usize>,
+}
+
+impl Default for EmbeddingSection {
+    fn default() -> Self {
+        Self {
+            backend: "auto".into(),
+            remote_url: None,
+            model: None,
+            api_key: None,
+            dimensions: None,
+        }
+    }
+}
+
+fn default_auto() -> String {
+    "auto".into()
 }
 
 /// Configuration for context-aware retrieval.
@@ -158,10 +197,12 @@ mod tests {
                 },
             ],
             context_retrieval: ContextRetrievalConfig::default(),
+            embedding: EmbeddingSection::default(),
         };
         let toml_str = toml::to_string(&config).unwrap();
         let parsed: MnemeConfig = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.default_vault, Some("work".into()));
         assert_eq!(parsed.vaults.len(), 2);
+        assert_eq!(parsed.embedding.backend, "auto");
     }
 }
