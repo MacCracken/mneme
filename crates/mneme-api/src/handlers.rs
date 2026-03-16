@@ -72,6 +72,12 @@ pub struct SearchFeedbackRequest {
     pub search_id: String,
     /// The note ID that the user engaged with.
     pub note_id: Uuid,
+    /// The original search query (optional, for training data).
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Position of the clicked result (0-indexed, optional).
+    #[serde(default)]
+    pub position: Option<usize>,
 }
 
 // --- Health ---
@@ -308,8 +314,42 @@ pub async fn search_feedback(
         .active()
         .map(|ov| ov.info.path.clone());
 
+    // Look up note title for training log (before mutable borrow)
+    let note_title = if let Some(ov) = vs.manager.active() {
+        ov.vault
+            .get_note(req.note_id)
+            .await
+            .ok()
+            .map(|n| n.note.title)
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let arm_name = vs
+        .active_engines_mut()
+        .map(|eng| {
+            let stats = eng.optimizer.arm_stats();
+            stats.get(arm_idx).map(|a| a.name.clone()).unwrap_or_default()
+        })
+        .unwrap_or_default();
+
     if let Some(eng) = vs.active_engines_mut() {
         eng.optimizer.record_feedback(arm_idx);
+
+        // Log to training data
+        if let Some(query) = &req.query {
+            let _ = eng.training_log.append(
+                &mneme_ai::training_export::TrainingRecord::SearchClick {
+                    timestamp: chrono::Utc::now(),
+                    query: query.clone(),
+                    clicked_note_id: req.note_id,
+                    clicked_note_title: note_title,
+                    search_arm: arm_name,
+                    position: req.position.unwrap_or(0),
+                },
+            );
+        }
 
         // Persist optimizer state periodically (every 10 feedbacks)
         if eng.optimizer.total_successes % 10 == 0 {

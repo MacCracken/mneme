@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use mneme_ai::DaimonClient;
 use mneme_ai::rag_eval::RagEvalAggregates;
+use mneme_ai::training_export::TrainingLog;
 use mneme_search::{ContextBuffer, RetrievalOptimizer, SearchEngine, SemanticEngine};
 use mneme_store::VaultManager;
 use mneme_store::manager::OpenVault;
@@ -19,6 +20,7 @@ pub struct VaultEngines {
     pub optimizer: RetrievalOptimizer,
     pub rag_eval: RagEvalAggregates,
     pub context_buffer: ContextBuffer,
+    pub training_log: TrainingLog,
 }
 
 /// An open vault with its search engines — convenience accessor.
@@ -165,12 +167,16 @@ fn create_engines_with_config(
         RetrievalOptimizer::default()
     };
 
+    let training_log_path = vault_path.join(".mneme").join("training.jsonl");
+    let training_log = TrainingLog::open(training_log_path);
+
     VaultEngines {
         search,
         semantic,
         optimizer,
         rag_eval: RagEvalAggregates::default(),
         context_buffer: ContextBuffer::new(7),
+        training_log,
     }
 }
 

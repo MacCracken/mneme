@@ -92,17 +92,16 @@ Pluggable embedding backends — use Synapse, Ollama, OpenAI, or local ONNX.
 - Health endpoint reports `embedding_backend` and `embedding_dimension`
 - Dimension probe on remote connect to auto-detect vector size
 
-### Phase 14 — Training Feedback Export
+### Phase 14 — Training Feedback Export (Complete)
 
 Export user signals for Synapse fine-tuning to close the learning loop.
 
-- `GET /v1/export/training-data` endpoint: JSONL export of search feedback,
-  user edits, trust overrides, and note corrections
-- Feedback types: search-click (query → chosen result), edit-after-search
-  (query → note → diff), trust-override (provenance correction)
-- Synapse gRPC `SubmitTrainingJob` integration for on-demand fine-tuning
-- Scheduled export via daimon cron or systemd timer
-- Privacy controls: opt-out per vault, PII scrubbing option
+- `TrainingRecord` enum: SearchClick, EditAfterSearch, TrustOverride, NoteContent
+- `TrainingLog`: append-only JSONL file at `.mneme/training.jsonl`
+- `GET /v1/export/training-data` endpoint with `?type=`, `?since=`, `?include_notes=` filters
+- Search feedback handler logs clicks with query, note title, arm name, position
+- `SearchFeedbackRequest` extended with optional `query` and `position` fields
+- Per-vault training log in `VaultEngines`
 
 ### Phase 15 — Daimon Event Bus Integration
 

@@ -19,6 +19,7 @@ pub mod summarizer;
 pub mod tagger;
 pub mod templates;
 pub mod temporal;
+pub mod training_export;
 pub mod translator;
 pub mod writer;
 

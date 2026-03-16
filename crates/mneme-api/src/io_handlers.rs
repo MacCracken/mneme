@@ -229,3 +229,84 @@ pub async fn export_note_pdf(
         bytes,
     ))
 }
+
+// --- Training Data Export ---
+
+#[derive(Deserialize)]
+pub struct TrainingExportParams {
+    /// Filter by record type: "search_click", "edit_after_search", "trust_override", "note_content".
+    pub r#type: Option<String>,
+    /// Only records since this ISO 8601 date.
+    pub since: Option<String>,
+    /// Include all note content as training pairs (default: false).
+    pub include_notes: Option<bool>,
+}
+
+#[derive(Serialize)]
+pub struct TrainingExportResponse {
+    pub record_count: usize,
+    pub records: Vec<mneme_ai::training_export::TrainingRecord>,
+}
+
+/// Export training data as JSONL for model fine-tuning.
+pub async fn export_training_data(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<TrainingExportParams>,
+) -> Result<Json<TrainingExportResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let vs = state.vaults.read().await;
+    let vwe = vs.active().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "No active vault".into(),
+            }),
+        )
+    })?;
+
+    let since = params.since.as_deref().and_then(|s| {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    });
+
+    let mut records = vwe
+        .engines
+        .training_log
+        .read_filtered(params.r#type.as_deref(), since)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to read training log: {e}"),
+                }),
+            )
+        })?;
+
+    // Optionally include all note content as training pairs
+    if params.include_notes.unwrap_or(false) {
+        let notes = vwe
+            .vault
+            .vault
+            .list_notes(1000, 0)
+            .await
+            .unwrap_or_default();
+        for note in &notes {
+            if let Ok(full) = vwe.vault.vault.get_note(note.id).await {
+                let tags = full.tags;
+                records.push(mneme_ai::training_export::TrainingRecord::NoteContent {
+                    timestamp: note.updated_at,
+                    note_id: note.id,
+                    title: note.title.clone(),
+                    content: full.content,
+                    tags,
+                });
+            }
+        }
+    }
+
+    let count = records.len();
+    Ok(Json(TrainingExportResponse {
+        record_count: count,
+        records,
+    }))
+}

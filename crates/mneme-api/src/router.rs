@@ -78,6 +78,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/ai/clusters", get(ai_handlers::cluster_notes))
         // Export — PDF
         .route("/v1/export/pdf/{id}", get(io_handlers::export_note_pdf))
+        // Export — Training data
+        .route(
+            "/v1/export/training-data",
+            get(io_handlers::export_training_data),
+        )
         // Tasks / Kanban
         .route("/v1/tasks", get(advanced_handlers::get_all_tasks))
         .route("/v1/tasks/{id}", get(advanced_handlers::get_note_tasks))
