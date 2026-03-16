@@ -19,9 +19,13 @@ async fn test_app() -> (axum::Router, TempDir) {
     let models_dir = PathBuf::from("/nonexistent");
     let vault_state = VaultState::single(dir.path(), &models_dir).await.unwrap();
     let daimon = DaimonClient::new(None, None);
+    let event_bus = mneme_ai::event_bus::EventBusClient::new(None, None);
+    let qa_client = mneme_ai::qa_bridge::AgnosticClient::new(None);
     let state = AppState {
         vaults: Arc::new(RwLock::new(vault_state)),
         daimon: Arc::new(daimon),
+        event_bus: Arc::new(event_bus),
+        qa_client: Arc::new(qa_client),
     };
     (build_router(state), dir)
 }

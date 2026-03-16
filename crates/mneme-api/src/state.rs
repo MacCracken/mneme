@@ -193,4 +193,6 @@ pub fn save_optimizer(vault_path: &Path, optimizer: &RetrievalOptimizer) {
 pub struct AppState {
     pub vaults: Arc<RwLock<VaultState>>,
     pub daimon: Arc<DaimonClient>,
+    pub event_bus: Arc<mneme_ai::event_bus::EventBusClient>,
+    pub qa_client: Arc<mneme_ai::qa_bridge::AgnosticClient>,
 }

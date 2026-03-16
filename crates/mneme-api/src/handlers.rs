@@ -130,6 +130,20 @@ pub async fn create_note(
         .semantic()
         .index_note(result.note.id, &result.note.title, &result.content);
 
+    // Publish event (fire-and-forget)
+    let vault_id = vwe.vault.info.id;
+    let event = mneme_ai::event_bus::MnemeEvent::NoteCreated {
+        vault_id,
+        note_id: result.note.id,
+        title: result.note.title.clone(),
+        tags: result.tags.clone(),
+    };
+    drop(vs);
+    tokio::spawn({
+        let bus = state.event_bus.clone();
+        async move { bus.publish(&event).await; }
+    });
+
     Ok((StatusCode::CREATED, Json(result)))
 }
 
@@ -184,6 +198,19 @@ pub async fn update_note(
         .semantic()
         .index_note(result.note.id, &result.note.title, &result.content);
 
+    // Publish update event
+    let vault_id = vwe.vault.info.id;
+    let event = mneme_ai::event_bus::MnemeEvent::NoteUpdated {
+        vault_id,
+        note_id: result.note.id,
+        title: result.note.title.clone(),
+    };
+    drop(vs);
+    tokio::spawn({
+        let bus = state.event_bus.clone();
+        async move { bus.publish(&event).await; }
+    });
+
     Ok(Json(result))
 }
 
@@ -194,10 +221,24 @@ pub async fn delete_note(
     let vs = state.vaults.read().await;
     let vwe = vs.active().ok_or_else(no_vault)?;
 
+    let vault_id = vwe.vault.info.id;
     let _ = vwe.search().remove_note(id);
     let _ = vwe.semantic().remove_note(id);
 
     vwe.vault.vault.delete_note(id).await.map_err(not_found)?;
+
+    // Publish delete event
+    drop(vs);
+    tokio::spawn({
+        let bus = state.event_bus.clone();
+        async move {
+            bus.publish(&mneme_ai::event_bus::MnemeEvent::NoteDeleted {
+                vault_id,
+                note_id: id,
+            }).await;
+        }
+    });
+
     Ok(StatusCode::NO_CONTENT)
 }
 

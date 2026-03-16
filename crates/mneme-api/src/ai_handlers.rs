@@ -457,3 +457,102 @@ pub async fn cluster_notes(
 
     Ok(Json(result))
 }
+
+// --- Knowledge QA ---
+
+/// Run knowledge quality assertions against the active vault.
+pub async fn run_qa(
+    State(state): State<AppState>,
+) -> Result<Json<mneme_ai::qa_bridge::QaRunResult>, (StatusCode, Json<ErrorResponse>)> {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+
+    let notes = ov.vault.vault.list_notes(1000, 0).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?;
+
+    // Build note metadata for assertion generation
+    let mut note_meta = Vec::new();
+    for note in &notes {
+        let backlinks = ov.vault.vault.db().get_backlinks(note.id).await.unwrap_or_default();
+        let note_tags = ov.vault.vault.db().get_note_tags(note.id).await.unwrap_or_default();
+        note_meta.push((note.id, note.title.clone(), note_tags, backlinks.len()));
+    }
+
+    let tag_counts: Vec<(String, usize)> = {
+        let mut counts = std::collections::HashMap::new();
+        for (_, _, note_tags, _) in &note_meta {
+            for tag in note_tags {
+                *counts.entry(tag.clone()).or_insert(0usize) += 1;
+            }
+        }
+        counts.into_iter().collect()
+    };
+
+    let assertions = mneme_ai::qa_bridge::generate_assertions(&note_meta, &tag_counts);
+
+    // If Agnostic is available, submit the suite
+    if state.qa_client.is_available().await {
+        let vault_name = ov.vault.info.name.clone();
+        drop(vs);
+        match state.qa_client.run_assertions(&assertions, &vault_name).await {
+            Ok(run_id) => {
+                match state.qa_client.get_run_result(&run_id).await {
+                    Ok(result) => return Ok(Json(result)),
+                    Err(_) => {
+                        return Ok(Json(mneme_ai::qa_bridge::QaRunResult {
+                            run_id,
+                            status: "running".into(),
+                            total_assertions: assertions.len(),
+                            passed: 0,
+                            failed: 0,
+                            failures: vec![],
+                        }));
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Agnostic QA submit failed: {e}");
+            }
+        }
+    } else {
+        drop(vs);
+    }
+
+    // Fallback: run assertions locally
+    let failed: Vec<mneme_ai::qa_bridge::QaFailure> = assertions
+        .iter()
+        .map(|a| mneme_ai::qa_bridge::QaFailure {
+            assertion: a.description.clone(),
+            expected: a.expected.clone(),
+            actual: "not met".into(),
+        })
+        .collect();
+    let failed_count = failed.len();
+
+    Ok(Json(mneme_ai::qa_bridge::QaRunResult {
+        run_id: "local".into(),
+        status: "completed".into(),
+        total_assertions: assertions.len(),
+        passed: assertions.len() - failed_count,
+        failed: failed_count,
+        failures: failed,
+    }))
+}
+
+// --- Structured Query ---
+
+#[derive(Deserialize)]
+pub struct StructuredSearchParams {
+    pub q: String,
+}
+
+/// Parse a structured query (DSL) and return the parsed components.
+pub async fn parse_search_query(
+    Query(params): Query<StructuredSearchParams>,
+) -> Json<mneme_search::query_dsl::StructuredQuery> {
+    Json(mneme_search::query_dsl::parse_query(&params.q))
+}

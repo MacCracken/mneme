@@ -8,6 +8,9 @@ pub mod client;
 pub mod clustering;
 pub mod concepts;
 pub mod consolidation;
+pub mod event_bus;
+pub mod qa_bridge;
+
 pub mod creative;
 pub mod error;
 pub mod flashcards;

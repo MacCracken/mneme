@@ -110,9 +110,17 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("Daimon agent runtime not available — AI features will be limited");
     }
 
+    let event_bus_url = std::env::var("DAIMON_URL").ok();
+    let event_bus = mneme_ai::event_bus::EventBusClient::new(event_bus_url, None);
+
+    let agnostic_url = std::env::var("AGNOSTIC_URL").ok();
+    let qa_client = mneme_ai::qa_bridge::AgnosticClient::new(agnostic_url);
+
     let state = AppState {
         vaults: Arc::new(RwLock::new(vault_state)),
         daimon: Arc::new(daimon),
+        event_bus: Arc::new(event_bus),
+        qa_client: Arc::new(qa_client),
     };
 
     let app = build_router(state)

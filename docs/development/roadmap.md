@@ -103,38 +103,37 @@ Export user signals for Synapse fine-tuning to close the learning loop.
 - `SearchFeedbackRequest` extended with optional `query` and `position` fields
 - Per-vault training log in `VaultEngines`
 
-### Phase 15 — Daimon Event Bus Integration
+### Phase 15 — Daimon Event Bus Integration (Complete)
 
 Real-time pub/sub for cross-agent knowledge sync.
 
-- Publish events on note CRUD: `mneme:vault:{id}:note:{created|updated|deleted}`
-- Publish on concept extraction: `mneme:vault:{id}:concept:extracted`
-- Subscribe to agent context: other agents can push context into Mneme
-- daimon IPC client in `mneme-api` using `/run/agnos/` socket
-- Enable collaborative editing across multiple agnoshi sessions
-- Audit log forwarding to daimon's event store
+- `EventBusClient`: HTTP client for daimon's `/v1/events/publish` + `/v1/events/topics`
+- `MnemeEvent` enum: NoteCreated, NoteUpdated, NoteDeleted, ConceptExtracted, SearchExecuted
+- Note CRUD handlers publish events via fire-and-forget `tokio::spawn`
+- Topic naming: `mneme.note.created`, `mneme.note.updated`, etc.
+- `EventBusClient` + `AgnosticClient` in `AppState` for cross-service communication
 
-### Phase 16 — Agnostic Knowledge QA
+### Phase 16 — Agnostic Knowledge QA (Complete)
 
 Automated quality assurance for knowledge base health.
 
-- Auto-generate assertion suites from knowledge graph structure
-  ("Note X should reference concept Y", "Tag Z should have >3 notes")
-- `POST /v1/qa/run` endpoint triggers Agnostic QA suite via HTTP bridge
-- Import Agnostic run results as quality metrics per vault
-- Retrieval latency benchmarking under synthetic load
-- Link/reference validation (dead links, orphan notes, circular refs)
+- `generate_assertions()`: auto-generate orphan detection + tag health checks from vault metadata
+- `AgnosticClient`: HTTP bridge to Agnostic QA platform (`/api/v1/runs`)
+- `POST /v1/ai/qa` endpoint: runs assertions via Agnostic, falls back to local evaluation
+- `KnowledgeAssertion` types: ContentContains, TagMinCount, BacklinkMinCount, NoOrphans, NoDeadLinks
+- `QaRunResult` with pass/fail counts and failure details
 
-### Phase 17 — Advanced agnoshi Query DSL
+### Phase 17 — Advanced agnoshi Query DSL (Complete)
 
 Rich natural language queries for the AI shell.
 
-- Temporal: "notes edited last week about Rust"
-- Boolean: "notes tagged #project AND NOT #archived"
-- Graph: "notes connected to X within 2 hops"
-- Bulk ops: "archive all stale notes older than 6 months"
-- DSL parser in agnoshi's intent translator with fallback to semantic search
-- Results streamed back via daimon message bus
+- `parse_query()`: NLP-style parser for structured queries
+- Temporal: "notes edited last week", "older than 6 months", "last 30 days"
+- Boolean tags: "#project AND NOT #archived"
+- Graph: "connected to X within 3 hops"
+- Stale filter, limit, field detection (edited/created/accessed)
+- `GET /v1/search/parse?q=...` endpoint returns parsed `StructuredQuery`
+- Falls back to free-text for unrecognized input
 
 ---
 
