@@ -89,6 +89,8 @@ impl Vault {
     /// Get a note with its full content.
     pub async fn get_note(&self, id: Uuid) -> Result<NoteWithContent, StoreError> {
         let note = self.db.get_note(id).await?;
+        // Bump last_accessed on full content reads
+        let _ = self.db.touch_note(id).await;
         let document = self.files.read_note(&note.path).await?;
         let (yaml, body) = split_frontmatter(&document);
 

@@ -153,6 +153,31 @@ impl DaimonClient {
         Ok(resp)
     }
 
+    // --- Merge suggestions ---
+
+    /// Ask the LLM to suggest how to merge two duplicate notes.
+    pub async fn suggest_merge(
+        &self,
+        a_title: &str,
+        a_content: &str,
+        b_title: &str,
+        b_content: &str,
+    ) -> Result<MergeResponse, AiError> {
+        let body = MergeRequest {
+            note_a_title: a_title.to_string(),
+            note_a_content: a_content.to_string(),
+            note_b_title: b_title.to_string(),
+            note_b_content: b_content.to_string(),
+        };
+
+        let resp = self
+            .request_post("/v1/knowledge/merge", &body)
+            .await?
+            .json::<MergeResponse>()
+            .await?;
+        Ok(resp)
+    }
+
     // --- HTTP helpers ---
 
     async fn request_post<T: Serialize>(
@@ -315,6 +340,25 @@ pub struct KnowledgeResult {
     pub path: String,
     pub relevance: f64,
     pub content_preview: String,
+}
+
+// --- Merge types ---
+
+#[derive(Serialize)]
+struct MergeRequest {
+    note_a_title: String,
+    note_a_content: String,
+    note_b_title: String,
+    note_b_content: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MergeResponse {
+    pub keep: String,
+    pub merged_title: String,
+    pub merged_content: String,
+    pub rationale: String,
+    pub confidence: f64,
 }
 
 #[cfg(test)]

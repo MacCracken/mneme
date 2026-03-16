@@ -15,6 +15,7 @@ pub struct Note {
     pub content_hash: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub last_accessed: DateTime<Utc>,
 }
 
 impl Note {
@@ -27,6 +28,7 @@ impl Note {
             content_hash,
             created_at: now,
             updated_at: now,
+            last_accessed: now,
         }
     }
 }
@@ -76,6 +78,7 @@ mod tests {
     fn new_note_has_matching_timestamps() {
         let note = Note::new("Test".into(), "test.md".into(), "abc123".into());
         assert_eq!(note.created_at, note.updated_at);
+        assert_eq!(note.created_at, note.last_accessed);
         assert_eq!(note.title, "Test");
     }
 }

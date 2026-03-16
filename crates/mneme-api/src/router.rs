@@ -48,6 +48,10 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/ai/consolidate",
             get(consolidation_handlers::consolidate),
         )
+        .route(
+            "/v1/ai/consolidate/merge",
+            post(consolidation_handlers::suggest_merge),
+        )
         // AI — RAG
         .route("/v1/ai/rag/query", get(ai_handlers::rag_query))
         .route("/v1/ai/rag/stats", get(ai_handlers::rag_stats))

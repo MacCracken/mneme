@@ -23,6 +23,7 @@ pub enum Panel {
     Graph,
     SplitView,
     VaultPicker,
+    Stale,
 }
 
 /// State for one pane in split view.
@@ -76,6 +77,9 @@ pub struct App {
     pub split_pick_pane: Option<usize>,
     // Vault picker state
     pub vault_list: Vec<VaultInfo>,
+    // Stale notes state
+    pub stale_notes: Vec<(Uuid, String, i64, f64)>, // id, title, days_since_update, freshness
+    pub stale_selected: usize,
 }
 
 fn create_engines(vault_path: &Path, models_dir: &Path) -> (SearchEngine, SemanticEngine) {
@@ -119,6 +123,8 @@ impl App {
             active_pane: 0,
             split_pick_pane: None,
             vault_list: Vec::new(),
+            stale_notes: Vec::new(),
+            stale_selected: 0,
         }
     }
 
@@ -302,6 +308,42 @@ impl App {
         }
     }
 
+    /// Load stale notes from the active vault.
+    pub async fn load_stale_notes(&mut self) {
+        let Some(ov) = self.manager.active() else {
+            self.status_message = "No active vault".into();
+            return;
+        };
+        let notes = match ov.vault.list_notes(1000, 0).await {
+            Ok(n) => n,
+            Err(e) => {
+                self.status_message = format!("Error: {e}");
+                return;
+            }
+        };
+
+        // Build NoteContent entries (use note metadata only — no full content needed for staleness)
+        let note_contents: Vec<mneme_ai::consolidation::NoteContent> = notes
+            .iter()
+            .map(|n| mneme_ai::consolidation::NoteContent {
+                id: n.id,
+                title: n.title.clone(),
+                path: n.path.clone(),
+                content: String::new(),
+                updated_at: n.updated_at,
+                last_accessed: n.last_accessed,
+            })
+            .collect();
+
+        let stale = mneme_ai::consolidation::detect_stale(&note_contents, 30);
+        self.stale_notes = stale
+            .into_iter()
+            .map(|s| (s.note_id, s.title, s.days_since_update, s.freshness_score))
+            .collect();
+        self.stale_selected = 0;
+        self.status_message = format!("{} stale note(s)", self.stale_notes.len());
+    }
+
     /// Load the vault list for the picker.
     pub fn load_vault_list(&mut self) {
         self.vault_list = self.manager.registry().list().to_vec();
@@ -374,6 +416,7 @@ impl App {
                     Panel::Search => self.search_results.len(),
                     Panel::Tags => self.tag_list.len(),
                     Panel::VaultPicker => self.vault_list.len(),
+                    Panel::Stale => self.stale_notes.len(),
                     _ => return,
                 };
                 if self.selected_index + 1 < max {

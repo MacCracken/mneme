@@ -141,6 +141,21 @@ impl SemanticEngine {
         }
     }
 
+    /// Find notes similar to the given text, filtered by a score threshold.
+    ///
+    /// Used for duplicate detection: embeds the text, searches the vector store,
+    /// and returns only results at or above `threshold`.
+    pub fn find_similar_to(
+        &self,
+        text: &str,
+        threshold: f64,
+        limit: usize,
+    ) -> Result<Vec<SemanticResult>, SearchError> {
+        let mut results = self.search(text, limit)?;
+        results.retain(|r| r.score >= threshold);
+        Ok(results)
+    }
+
     /// Search for notes similar to the query text.
     pub fn search(
         &self,

@@ -34,6 +34,20 @@ impl Database {
         sqlx::query(include_str!("../migrations/001_initial.sql"))
             .execute(&self.pool)
             .await?;
+
+        // 002: add last_accessed column (idempotent — ignore "duplicate column")
+        for statement in include_str!("../migrations/002_last_accessed.sql").split(';') {
+            let stmt = statement.trim();
+            if stmt.is_empty() {
+                continue;
+            }
+            if let Err(e) = sqlx::query(stmt).execute(&self.pool).await {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column") && !msg.contains("already exists") {
+                    return Err(e.into());
+                }
+            }
+        }
         Ok(())
     }
 
@@ -42,8 +56,8 @@ impl Database {
     /// Insert a new note record.
     pub async fn insert_note(&self, note: &Note) -> Result<(), StoreError> {
         sqlx::query(
-            "INSERT INTO notes (id, title, path, content_hash, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO notes (id, title, path, content_hash, created_at, updated_at, last_accessed)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(note.id.to_string())
         .bind(&note.title)
@@ -51,6 +65,7 @@ impl Database {
         .bind(&note.content_hash)
         .bind(note.created_at.to_rfc3339())
         .bind(note.updated_at.to_rfc3339())
+        .bind(note.last_accessed.to_rfc3339())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -59,7 +74,7 @@ impl Database {
     /// Get a note by ID.
     pub async fn get_note(&self, id: Uuid) -> Result<Note, StoreError> {
         let row = sqlx::query(
-            "SELECT id, title, path, content_hash, created_at, updated_at
+            "SELECT id, title, path, content_hash, created_at, updated_at, last_accessed
              FROM notes WHERE id = ?",
         )
         .bind(id.to_string())
@@ -73,7 +88,7 @@ impl Database {
     /// Get a note by its file path.
     pub async fn get_note_by_path(&self, path: &str) -> Result<Note, StoreError> {
         let row = sqlx::query(
-            "SELECT id, title, path, content_hash, created_at, updated_at
+            "SELECT id, title, path, content_hash, created_at, updated_at, last_accessed
              FROM notes WHERE path = ?",
         )
         .bind(path)
@@ -87,7 +102,7 @@ impl Database {
     /// List all notes, ordered by updated_at descending.
     pub async fn list_notes(&self, limit: i64, offset: i64) -> Result<Vec<Note>, StoreError> {
         let rows = sqlx::query(
-            "SELECT id, title, path, content_hash, created_at, updated_at
+            "SELECT id, title, path, content_hash, created_at, updated_at, last_accessed
              FROM notes ORDER BY updated_at DESC LIMIT ? OFFSET ?",
         )
         .bind(limit)
@@ -132,6 +147,16 @@ impl Database {
         if result.rows_affected() == 0 {
             return Err(StoreError::NoteNotFound(id.to_string()));
         }
+        Ok(())
+    }
+
+    /// Bump a note's `last_accessed` timestamp (lightweight read-touch).
+    pub async fn touch_note(&self, id: Uuid) -> Result<(), StoreError> {
+        sqlx::query("UPDATE notes SET last_accessed = ? WHERE id = ?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -326,6 +351,7 @@ fn row_to_note(row: &sqlx::sqlite::SqliteRow) -> Result<Note, StoreError> {
         content_hash: row.get("content_hash"),
         created_at: parse_datetime(&row.get::<String, _>("created_at")),
         updated_at: parse_datetime(&row.get::<String, _>("updated_at")),
+        last_accessed: parse_datetime(&row.get::<String, _>("last_accessed")),
     })
 }
 

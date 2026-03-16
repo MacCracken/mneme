@@ -155,6 +155,20 @@ async fn main() -> Result<()> {
                     }
                     _ => {}
                 },
+                Panel::Stale => match key.code {
+                    KeyCode::Esc => app.panel = Panel::NoteList,
+                    KeyCode::Char('q') => app.should_quit = true,
+                    KeyCode::Up | KeyCode::Char('k') => app.select_prev(),
+                    KeyCode::Down | KeyCode::Char('j') => app.select_next(),
+                    KeyCode::Enter => {
+                        if let Some((id, _, _, _)) =
+                            app.stale_notes.get(app.selected_index).cloned()
+                        {
+                            app.select_note(id).await;
+                        }
+                    }
+                    _ => {}
+                },
                 _ => match key.code {
                     KeyCode::Char('q') => app.should_quit = true,
                     KeyCode::Char('/') => {
@@ -180,6 +194,11 @@ async fn main() -> Result<()> {
                     KeyCode::Char('v') => {
                         app.panel = Panel::VaultPicker;
                         app.load_vault_list();
+                    }
+                    KeyCode::Char('!') => {
+                        app.panel = Panel::Stale;
+                        app.selected_index = 0;
+                        app.load_stale_notes().await;
                     }
                     KeyCode::Char('s') => {
                         if app.panel == Panel::NoteView {

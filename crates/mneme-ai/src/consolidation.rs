@@ -22,6 +22,20 @@ pub struct DuplicatePair {
     pub similarity: f64,
     /// Suggested action: "merge", "review", or "keep".
     pub suggestion: String,
+    /// Detection method: "jaccard" or "semantic".
+    pub detection_method: String,
+}
+
+/// LLM-generated merge suggestion for two duplicate notes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeSuggestion {
+    pub note_a_id: Uuid,
+    pub note_b_id: Uuid,
+    pub keep_id: Uuid,
+    pub merged_title: String,
+    pub merged_content: String,
+    pub rationale: String,
+    pub confidence: f64,
 }
 
 /// A note identified as stale.
@@ -32,6 +46,12 @@ pub struct StaleNote {
     pub path: String,
     pub updated_at: DateTime<Utc>,
     pub days_since_update: i64,
+    pub last_accessed: DateTime<Utc>,
+    pub days_since_access: i64,
+    /// Content freshness score: days_since_update / max(days_since_access, 1).
+    /// >> 1.0 = accessed recently but old content (priority refresh);
+    /// ~1.0 = normal; high absolute age = archive candidate.
+    pub freshness_score: f64,
 }
 
 /// Summary of a consolidation pass.
@@ -51,6 +71,7 @@ pub struct NoteContent {
     pub path: String,
     pub content: String,
     pub updated_at: DateTime<Utc>,
+    pub last_accessed: DateTime<Utc>,
 }
 
 /// Detect near-duplicate note pairs based on token overlap.
@@ -89,6 +110,7 @@ pub fn detect_duplicates(
                     note_b_title: tokenized[j].1.to_string(),
                     similarity: sim,
                     suggestion: suggestion.into(),
+                    detection_method: "jaccard".into(),
                 });
             }
         }
@@ -98,7 +120,61 @@ pub fn detect_duplicates(
     duplicates
 }
 
+/// Detect near-duplicate note pairs from pre-computed semantic similarity results.
+///
+/// `similarity_map` is a list of (note_id, note_title, similar_notes) tuples,
+/// where each similar_note is (other_id, cosine_score).
+/// Deduplicates symmetric pairs (A,B) == (B,A).
+pub fn detect_duplicates_semantic(
+    similarity_map: &[(Uuid, String, Vec<(Uuid, String, f64)>)],
+    threshold: f64,
+) -> Vec<DuplicatePair> {
+    let mut seen = HashSet::new();
+    let mut duplicates = Vec::new();
+
+    for (note_id, note_title, similars) in similarity_map {
+        for (other_id, other_title, score) in similars {
+            if note_id == other_id || *score < threshold {
+                continue;
+            }
+            // Canonical pair ordering to deduplicate
+            let pair = if note_id < other_id {
+                (*note_id, *other_id)
+            } else {
+                (*other_id, *note_id)
+            };
+            if !seen.insert(pair) {
+                continue;
+            }
+            let suggestion = if *score > 0.95 {
+                "merge"
+            } else if *score > 0.85 {
+                "review"
+            } else {
+                "keep"
+            };
+            duplicates.push(DuplicatePair {
+                note_a_id: *note_id,
+                note_a_title: note_title.clone(),
+                note_b_id: *other_id,
+                note_b_title: other_title.clone(),
+                similarity: *score,
+                suggestion: suggestion.into(),
+                detection_method: "semantic".into(),
+            });
+        }
+    }
+
+    duplicates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap());
+    duplicates
+}
+
 /// Find notes that haven't been updated in `days` or more.
+///
+/// Computes a freshness score: `days_since_update / max(days_since_access, 1)`.
+/// - Score >> 1.0: accessed recently but content is old → priority refresh
+/// - Score ~1.0: normal staleness
+/// - High absolute age with low access: archive candidate
 pub fn detect_stale(notes: &[NoteContent], days: i64) -> Vec<StaleNote> {
     let now = Utc::now();
     let mut stale: Vec<StaleNote> = notes
@@ -106,12 +182,17 @@ pub fn detect_stale(notes: &[NoteContent], days: i64) -> Vec<StaleNote> {
         .filter_map(|n| {
             let age = (now - n.updated_at).num_days();
             if age >= days {
+                let days_since_access = (now - n.last_accessed).num_days();
+                let freshness_score = age as f64 / (days_since_access.max(1) as f64);
                 Some(StaleNote {
                     note_id: n.id,
                     title: n.title.clone(),
                     path: n.path.clone(),
                     updated_at: n.updated_at,
                     days_since_update: age,
+                    last_accessed: n.last_accessed,
+                    days_since_access,
+                    freshness_score,
                 })
             } else {
                 None
@@ -172,12 +253,14 @@ mod tests {
     use chrono::Duration;
 
     fn make_note(title: &str, content: &str, days_ago: i64) -> NoteContent {
+        let updated = Utc::now() - Duration::days(days_ago);
         NoteContent {
             id: Uuid::new_v4(),
             title: title.into(),
             path: format!("{}.md", title.to_lowercase().replace(' ', "-")),
             content: content.into(),
-            updated_at: Utc::now() - Duration::days(days_ago),
+            updated_at: updated,
+            last_accessed: updated, // default: accessed when updated
         }
     }
 

@@ -29,6 +29,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Panel::Graph => render_graph(frame, app, chunks[0]),
         Panel::SplitView => render_split_view(frame, app, chunks[0]),
         Panel::VaultPicker => render_vault_picker(frame, app, chunks[0]),
+        Panel::Stale => render_stale(frame, app, chunks[0]),
     }
 
     // Status bar
@@ -422,6 +423,44 @@ fn render_vault_picker(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(list, area);
 }
 
+fn render_stale(frame: &mut Frame, app: &App, area: Rect) {
+    let items: Vec<ListItem> = app
+        .stale_notes
+        .iter()
+        .enumerate()
+        .map(|(i, (_, title, days, freshness))| {
+            let style = if i == app.selected_index {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("{days:>4}d  "),
+                    Style::default().fg(Color::Red),
+                ),
+                Span::styled(
+                    format!("{freshness:>5.1}  "),
+                    Style::default().fg(Color::Magenta),
+                ),
+                Span::styled(title, style),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(
+                " Stale Notes ({}) — days | freshness | title ",
+                app.stale_notes.len()
+            )),
+    );
+    frame.render_widget(list, area);
+}
+
 fn panel_name(panel: Panel) -> &'static str {
     match panel {
         Panel::NoteList => "NOTES",
@@ -431,6 +470,7 @@ fn panel_name(panel: Panel) -> &'static str {
         Panel::Graph => "GRAPH",
         Panel::SplitView => "SPLIT",
         Panel::VaultPicker => "VAULTS",
+        Panel::Stale => "STALE",
     }
 }
 
@@ -438,6 +478,7 @@ fn help_text(panel: Panel) -> &'static str {
     match panel {
         Panel::Graph => "[q]uit [Esc]back [arrows]pan [+/-]zoom [Tab]cycle [Enter]open",
         Panel::SplitView => "[q]uit [Esc]back [Tab]switch pane [j/k]scroll [o]open note",
-        _ => "[q]uit [/]search [n]otes [t]ags [g]raph [s]plit [?]help",
+        Panel::Stale => "[q]uit [Esc]back [Enter]open [j/k]navigate",
+        _ => "[q]uit [/]search [n]otes [t]ags [g]raph [s]plit [!]stale [?]help",
     }
 }

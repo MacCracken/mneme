@@ -48,6 +48,16 @@ All planned phases and post-MVP features have been implemented.
 - TUI: VaultPicker panel (`v` key)
 - Config: `mneme.toml` with `[vaults]` table
 
+### Phase 8 — Note Consolidation & Evolution
+- Embedding-based duplicate detection (`find_similar_to` on SemanticEngine)
+- `detect_duplicates_semantic()` with deduped symmetric pairs
+- `last_accessed` column + migration, `touch_note()` on full-content reads
+- Content freshness scoring: `days_since_update / max(days_since_access, 1)`
+- LLM merge suggestions via daimon (`POST /v1/ai/consolidate/merge`)
+- `/v1/notes/duplicates?method=semantic|jaccard|both` query param
+- Stale notes panel in TUI (`!` keybinding) with freshness scores
+- `MergeSuggestion` and `DuplicatePair.detection_method` types
+
 ### Post-MVP
 - Import: Obsidian, Notion, Markdown directories
 - Export: HTML static site, PDF (printpdf)
@@ -63,16 +73,6 @@ All planned phases and post-MVP features have been implemented.
 
 Improvements informed by SecureYeoman's brain/KB architecture to make Mneme a
 smarter, more self-maintaining knowledge base.
-
-### Phase 8 — Note Consolidation & Evolution
-
-Keep the vault healthy as it grows — reduce staleness and duplication.
-
-- Periodic consolidation pass: detect near-duplicate notes (cosine > 0.92)
-  and surface merge/split/update suggestions
-- LLM-powered via daimon: evaluate overlap, propose edits, respect user approval
-- Track content freshness (last-edited vs. last-accessed ratio)
-- Surface stale notes in TUI and API (`/v1/notes/stale?days=90`)
 
 ### Phase 9 — Schema Clustering & Emergent Structure
 
