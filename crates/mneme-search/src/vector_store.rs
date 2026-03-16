@@ -210,6 +210,11 @@ impl VectorStore {
         self.metadata.len()
     }
 
+    /// All note IDs currently stored.
+    pub fn note_ids(&self) -> Vec<Uuid> {
+        self.note_keys.keys().copied().collect()
+    }
+
     /// Whether the store is empty.
     pub fn is_empty(&self) -> bool {
         self.metadata.is_empty()

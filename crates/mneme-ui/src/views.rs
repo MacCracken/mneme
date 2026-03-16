@@ -30,6 +30,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Panel::SplitView => render_split_view(frame, app, chunks[0]),
         Panel::VaultPicker => render_vault_picker(frame, app, chunks[0]),
         Panel::Stale => render_stale(frame, app, chunks[0]),
+        Panel::Clusters => render_clusters(frame, app, chunks[0]),
     }
 
     // Status bar
@@ -423,6 +424,72 @@ fn render_vault_picker(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(list, area);
 }
 
+fn render_clusters(frame: &mut Frame, app: &App, area: Rect) {
+    if let Some(expanded_idx) = app.cluster_expanded {
+        // Show notes within a cluster
+        let cluster = &app.clusters[expanded_idx];
+        let items: Vec<ListItem> = cluster
+            .1
+            .iter()
+            .enumerate()
+            .map(|(i, (_, title))| {
+                let style = if i == app.selected_index {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(Span::styled(format!("  {title}"), style))
+            })
+            .collect();
+
+        let list = List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(
+                    " {} ({} notes) — Esc to go back ",
+                    cluster.0,
+                    cluster.1.len()
+                )),
+        );
+        frame.render_widget(list, area);
+    } else {
+        // Show cluster list
+        let items: Vec<ListItem> = app
+            .clusters
+            .iter()
+            .enumerate()
+            .map(|(i, (label, notes))| {
+                let style = if i == app.selected_index {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{:>3}  ", notes.len()),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(label, style),
+                ]))
+            })
+            .collect();
+
+        let list = List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(
+                    " Clusters ({}) — Enter to expand ",
+                    app.clusters.len()
+                )),
+        );
+        frame.render_widget(list, area);
+    }
+}
+
 fn render_stale(frame: &mut Frame, app: &App, area: Rect) {
     let items: Vec<ListItem> = app
         .stale_notes
@@ -471,6 +538,7 @@ fn panel_name(panel: Panel) -> &'static str {
         Panel::SplitView => "SPLIT",
         Panel::VaultPicker => "VAULTS",
         Panel::Stale => "STALE",
+        Panel::Clusters => "CLUSTERS",
     }
 }
 
@@ -479,6 +547,7 @@ fn help_text(panel: Panel) -> &'static str {
         Panel::Graph => "[q]uit [Esc]back [arrows]pan [+/-]zoom [Tab]cycle [Enter]open",
         Panel::SplitView => "[q]uit [Esc]back [Tab]switch pane [j/k]scroll [o]open note",
         Panel::Stale => "[q]uit [Esc]back [Enter]open [j/k]navigate",
-        _ => "[q]uit [/]search [n]otes [t]ags [g]raph [s]plit [!]stale [?]help",
+        Panel::Clusters => "[q]uit [Esc]back [Enter]expand/open [j/k]navigate",
+        _ => "[q]uit [/]search [n]otes [t]ags [g]raph [s]plit [!]stale [c]lusters [?]help",
     }
 }

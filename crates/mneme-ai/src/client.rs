@@ -153,6 +153,25 @@ impl DaimonClient {
         Ok(resp)
     }
 
+    // --- Cluster labeling ---
+
+    /// Ask the LLM to generate a label and summary for a cluster of note titles.
+    pub async fn label_cluster(
+        &self,
+        note_titles: &[String],
+    ) -> Result<ClusterLabelResponse, AiError> {
+        let body = ClusterLabelRequest {
+            note_titles: note_titles.to_vec(),
+        };
+
+        let resp = self
+            .request_post("/v1/knowledge/cluster-label", &body)
+            .await?
+            .json::<ClusterLabelResponse>()
+            .await?;
+        Ok(resp)
+    }
+
     // --- Merge suggestions ---
 
     /// Ask the LLM to suggest how to merge two duplicate notes.
@@ -340,6 +359,19 @@ pub struct KnowledgeResult {
     pub path: String,
     pub relevance: f64,
     pub content_preview: String,
+}
+
+// --- Cluster label types ---
+
+#[derive(Serialize)]
+struct ClusterLabelRequest {
+    note_titles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ClusterLabelResponse {
+    pub label: String,
+    pub summary: String,
 }
 
 // --- Merge types ---

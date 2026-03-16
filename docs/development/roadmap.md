@@ -67,21 +67,22 @@ All planned phases and post-MVP features have been implemented.
 - Knowledge graph visualization (force-directed layout, Canvas rendering, node cycling, zoom/pan)
 - Split-pane / multi-note view in TUI (side-by-side, pane switching, note picker)
 
+### Phase 9 — Schema Clustering & Emergent Structure
+- K-means++ clustering on note embeddings (deterministic init, Lloyd's iteration)
+- Elbow heuristic for automatic k selection (second derivative of inertia)
+- `SemanticEngine::embed()` / `embed_batch()` for raw embedding access
+- `VectorStore::note_ids()` for listing indexed notes
+- `DaimonClient::label_cluster()` for LLM-generated cluster labels/summaries
+- `GET /v1/ai/clusters?k=&max_k=&label=` API endpoint
+- Clusters panel in TUI (`c` keybinding) with expand/collapse navigation
+- `ClusteringResult`, `Cluster`, `NoteEmbedding` types in `mneme-ai::clustering`
+
 ---
 
 ## Next: Knowledge Effectiveness
 
 Improvements informed by SecureYeoman's brain/KB architecture to make Mneme a
 smarter, more self-maintaining knowledge base.
-
-### Phase 9 — Schema Clustering & Emergent Structure
-
-Automatically discover topic structure in the vault.
-
-- K-means++ clustering on note embeddings (configurable k or elbow heuristic)
-- LLM-generated cluster labels and one-line summaries
-- Surface as "suggested folders" or virtual tags in TUI and API
-- Re-cluster incrementally as notes are added/updated
 
 ### Phase 10 — Context-Aware Retrieval
 

@@ -74,6 +74,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/ai/languages", get(ai_handlers::list_languages))
         // AI — Temporal
         .route("/v1/ai/temporal", get(ai_handlers::temporal_analysis))
+        // AI — Clustering
+        .route("/v1/ai/clusters", get(ai_handlers::cluster_notes))
         // Export — PDF
         .route("/v1/export/pdf/{id}", get(io_handlers::export_note_pdf))
         // Tasks / Kanban

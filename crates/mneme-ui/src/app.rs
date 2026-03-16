@@ -24,6 +24,7 @@ pub enum Panel {
     SplitView,
     VaultPicker,
     Stale,
+    Clusters,
 }
 
 /// State for one pane in split view.
@@ -80,6 +81,10 @@ pub struct App {
     // Stale notes state
     pub stale_notes: Vec<(Uuid, String, i64, f64)>, // id, title, days_since_update, freshness
     pub stale_selected: usize,
+    // Cluster state
+    pub clusters: Vec<(String, Vec<(Uuid, String)>)>, // (label, [(note_id, title)])
+    pub cluster_selected: usize,
+    pub cluster_expanded: Option<usize>,
 }
 
 fn create_engines(vault_path: &Path, models_dir: &Path) -> (SearchEngine, SemanticEngine) {
@@ -125,6 +130,9 @@ impl App {
             vault_list: Vec::new(),
             stale_notes: Vec::new(),
             stale_selected: 0,
+            clusters: Vec::new(),
+            cluster_selected: 0,
+            cluster_expanded: None,
         }
     }
 
@@ -308,6 +316,63 @@ impl App {
         }
     }
 
+    fn active_semantic(&self) -> Option<&SemanticEngine> {
+        let id = self.manager.active_id()?;
+        self.engines.get(&id).map(|(_, s)| s)
+    }
+
+    /// Load clusters from the active vault using K-means++ on embeddings.
+    pub async fn load_clusters(&mut self) {
+        let Some(ov) = self.manager.active() else {
+            self.status_message = "No active vault".into();
+            return;
+        };
+        let notes = match ov.vault.list_notes(1000, 0).await {
+            Ok(n) => n,
+            Err(e) => {
+                self.status_message = format!("Error: {e}");
+                return;
+            }
+        };
+
+        let Some(semantic) = self.active_semantic() else {
+            self.status_message = "Semantic engine unavailable".into();
+            return;
+        };
+
+        // Embed each note
+        let mut note_embeddings = Vec::new();
+        for note in &notes {
+            let text = format!("{}\n", note.title);
+            if let Ok(Some(emb)) = semantic.embed(&text) {
+                note_embeddings.push(mneme_ai::clustering::NoteEmbedding {
+                    id: note.id,
+                    title: note.title.clone(),
+                    embedding: emb,
+                });
+            }
+        }
+
+        if note_embeddings.is_empty() {
+            self.status_message = "No embeddings available for clustering".into();
+            return;
+        }
+
+        let result = mneme_ai::clustering::cluster_notes(&note_embeddings, None, 8);
+        self.clusters = result
+            .clusters
+            .into_iter()
+            .map(|c| {
+                let notes: Vec<(Uuid, String)> =
+                    c.note_ids.into_iter().zip(c.note_titles).collect();
+                (c.label, notes)
+            })
+            .collect();
+        self.cluster_selected = 0;
+        self.cluster_expanded = None;
+        self.status_message = format!("{} cluster(s) found", self.clusters.len());
+    }
+
     /// Load stale notes from the active vault.
     pub async fn load_stale_notes(&mut self) {
         let Some(ov) = self.manager.active() else {
@@ -417,6 +482,13 @@ impl App {
                     Panel::Tags => self.tag_list.len(),
                     Panel::VaultPicker => self.vault_list.len(),
                     Panel::Stale => self.stale_notes.len(),
+                    Panel::Clusters => {
+                        if let Some(idx) = self.cluster_expanded {
+                            self.clusters.get(idx).map(|(_, n)| n.len()).unwrap_or(0)
+                        } else {
+                            self.clusters.len()
+                        }
+                    }
                     _ => return,
                 };
                 if self.selected_index + 1 < max {

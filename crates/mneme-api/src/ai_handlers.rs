@@ -377,3 +377,83 @@ pub async fn temporal_analysis(
     })?;
     Ok(Json(report))
 }
+
+// --- Clustering ---
+
+#[derive(Deserialize)]
+pub struct ClusterParams {
+    /// Number of clusters. If omitted, uses elbow heuristic.
+    pub k: Option<usize>,
+    /// Maximum k to try when using the elbow heuristic (default: 8).
+    pub max_k: Option<usize>,
+    /// Whether to request LLM-generated labels from daimon (default: false).
+    pub label: Option<bool>,
+}
+
+/// Cluster notes by embedding similarity.
+pub async fn cluster_notes(
+    State(state): State<AppState>,
+    Query(params): Query<ClusterParams>,
+) -> Result<Json<mneme_ai::clustering::ClusteringResult>, (StatusCode, Json<ErrorResponse>)> {
+    let vs = state.vaults.read().await;
+    let ov = active_vault!(vs);
+
+    let max_k = params.max_k.unwrap_or(8);
+
+    // Load all notes
+    let notes = ov.vault.vault.list_notes(1000, 0).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if notes.is_empty() {
+        return Ok(Json(mneme_ai::clustering::ClusteringResult {
+            k: 0,
+            total_notes: 0,
+            total_inertia: 0.0,
+            clusters: vec![],
+        }));
+    }
+
+    // Embed each note
+    let semantic = ov.semantic();
+    let mut note_embeddings = Vec::new();
+
+    for note in &notes {
+        let text = format!("{}\n", note.title);
+        if let Ok(Some(emb)) = semantic.embed(&text) {
+            note_embeddings.push(mneme_ai::clustering::NoteEmbedding {
+                id: note.id,
+                title: note.title.clone(),
+                embedding: emb,
+            });
+        }
+    }
+
+    if note_embeddings.is_empty() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "Semantic engine unavailable — cannot embed notes for clustering".into(),
+            }),
+        ));
+    }
+
+    let mut result = mneme_ai::clustering::cluster_notes(&note_embeddings, params.k, max_k);
+
+    // Optionally label clusters via LLM
+    if params.label.unwrap_or(false) {
+        for cluster in &mut result.clusters {
+            if let Ok(resp) = state.daimon.label_cluster(&cluster.note_titles).await {
+                cluster.label = resp.label;
+                cluster.summary = resp.summary;
+            }
+        }
+    }
+
+    Ok(Json(result))
+}

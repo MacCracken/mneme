@@ -169,6 +169,37 @@ async fn main() -> Result<()> {
                     }
                     _ => {}
                 },
+                Panel::Clusters => match key.code {
+                    KeyCode::Char('q') => app.should_quit = true,
+                    KeyCode::Esc => {
+                        if app.cluster_expanded.is_some() {
+                            app.cluster_expanded = None;
+                            app.selected_index = app.cluster_selected;
+                        } else {
+                            app.panel = Panel::NoteList;
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => app.select_prev(),
+                    KeyCode::Down | KeyCode::Char('j') => app.select_next(),
+                    KeyCode::Enter => {
+                        if let Some(expanded_idx) = app.cluster_expanded {
+                            // Open note from within a cluster
+                            if let Some((id, _)) = app
+                                .clusters
+                                .get(expanded_idx)
+                                .and_then(|(_, notes)| notes.get(app.selected_index))
+                            {
+                                app.select_note(*id).await;
+                            }
+                        } else {
+                            // Expand cluster
+                            app.cluster_selected = app.selected_index;
+                            app.cluster_expanded = Some(app.selected_index);
+                            app.selected_index = 0;
+                        }
+                    }
+                    _ => {}
+                },
                 _ => match key.code {
                     KeyCode::Char('q') => app.should_quit = true,
                     KeyCode::Char('/') => {
@@ -199,6 +230,12 @@ async fn main() -> Result<()> {
                         app.panel = Panel::Stale;
                         app.selected_index = 0;
                         app.load_stale_notes().await;
+                    }
+                    KeyCode::Char('c') => {
+                        app.panel = Panel::Clusters;
+                        app.selected_index = 0;
+                        app.status_message = "Clustering notes...".into();
+                        app.load_clusters().await;
                     }
                     KeyCode::Char('s') => {
                         if app.panel == Panel::NoteView {

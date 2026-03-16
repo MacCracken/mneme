@@ -141,6 +141,58 @@ impl SemanticEngine {
         }
     }
 
+    /// Embed raw text into a vector. Returns None if the engine is unavailable.
+    pub fn embed(&self, text: &str) -> Result<Option<Vec<f32>>, SearchError> {
+        #[cfg(feature = "local-vectors")]
+        {
+            if let Some(embedder) = &self.embedder {
+                return Ok(Some(embedder.embed(text)?));
+            }
+            Ok(None)
+        }
+
+        #[cfg(not(feature = "local-vectors"))]
+        {
+            let _ = text;
+            Ok(None)
+        }
+    }
+
+    /// Batch-embed multiple texts. Returns None if the engine is unavailable.
+    pub fn embed_batch(&self, texts: &[&str]) -> Result<Option<Vec<Vec<f32>>>, SearchError> {
+        #[cfg(feature = "local-vectors")]
+        {
+            if let Some(embedder) = &self.embedder {
+                return Ok(Some(embedder.embed_batch(texts)?));
+            }
+            Ok(None)
+        }
+
+        #[cfg(not(feature = "local-vectors"))]
+        {
+            let _ = texts;
+            Ok(None)
+        }
+    }
+
+    /// List all note IDs currently in the vector store.
+    pub fn indexed_note_ids(&self) -> Vec<Uuid> {
+        #[cfg(feature = "local-vectors")]
+        {
+            if let Some(vs) = &self.vector_store {
+                if let Ok(store) = vs.read() {
+                    return store.note_ids();
+                }
+            }
+            vec![]
+        }
+
+        #[cfg(not(feature = "local-vectors"))]
+        {
+            vec![]
+        }
+    }
+
     /// Find notes similar to the given text, filtered by a score threshold.
     ///
     /// Used for duplicate detection: embeds the text, searches the vector store,

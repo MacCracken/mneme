@@ -5,6 +5,7 @@
 //! and local models via Synapse.
 
 pub mod client;
+pub mod clustering;
 pub mod concepts;
 pub mod consolidation;
 pub mod creative;
