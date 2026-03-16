@@ -5,17 +5,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mneme_ai::DaimonClient;
+use mneme_ai::rag_eval::RagEvalAggregates;
 use mneme_search::{RetrievalOptimizer, SearchEngine, SemanticEngine};
 use mneme_store::VaultManager;
 use mneme_store::manager::OpenVault;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-/// Search engines and optimizer associated with an open vault.
+/// Search engines, optimizer, and RAG eval aggregates for an open vault.
 pub struct VaultEngines {
     pub search: SearchEngine,
     pub semantic: SemanticEngine,
     pub optimizer: RetrievalOptimizer,
+    pub rag_eval: RagEvalAggregates,
 }
 
 /// An open vault with its search engines — convenience accessor.
@@ -154,6 +156,7 @@ fn create_engines(vault_path: &Path, models_dir: &Path) -> VaultEngines {
         search,
         semantic,
         optimizer,
+        rag_eval: RagEvalAggregates::default(),
     }
 }
 

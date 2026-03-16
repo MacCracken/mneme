@@ -168,8 +168,37 @@ Delete a tag.
 ### GET /v1/ai/rag/query?q=question&top_k=5
 Ask a question across all ingested notes (requires daimon).
 
+**Response:**
+```json
+{
+  "answer": "The answer text...",
+  "sources": ["note-id-1", "note-id-2"],
+  "eval": {
+    "faithfulness": 0.82,
+    "answer_relevance": 0.75,
+    "chunk_utilization": 0.61,
+    "overall": 0.76
+  }
+}
+```
+
+The `eval` field contains local-only token-overlap scores (0.0–1.0). The `overall` score is a weighted average: 50% faithfulness, 30% relevance, 20% utilization.
+
 ### GET /v1/ai/rag/stats
-RAG pipeline statistics and daimon availability.
+RAG pipeline statistics, daimon availability, and evaluation aggregates.
+
+**Response includes:**
+```json
+{
+  "eval_aggregates": {
+    "avg_faithfulness": 0.78,
+    "avg_relevance": 0.71,
+    "avg_utilization": 0.55,
+    "avg_overall": 0.71,
+    "query_count": 42
+  }
+}
+```
 
 ### POST /v1/ai/rag/ingest/{id}
 Ingest a specific note into the RAG pipeline.

@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::AiError;
 use crate::client::{DaimonClient, RagQueryResponse};
+use crate::rag_eval::{self, RagEvalScores};
 
 /// Result from asking a question across the knowledge base.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -14,6 +15,9 @@ pub struct RagAnswer {
     pub context: String,
     pub source_chunks: Vec<SourceChunk>,
     pub token_estimate: usize,
+    /// Quality evaluation scores (computed locally, always present).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eval: Option<RagEvalScores>,
 }
 
 /// A chunk of context retrieved from the knowledge base.
@@ -59,7 +63,7 @@ impl RagPipeline {
     pub async fn query(&self, question: &str, top_k: Option<usize>) -> Result<RagAnswer, AiError> {
         let resp: RagQueryResponse = self.client.rag_query(question, top_k).await?;
 
-        let source_chunks = resp
+        let source_chunks: Vec<SourceChunk> = resp
             .chunks
             .into_iter()
             .map(|c| {
@@ -77,11 +81,16 @@ impl RagPipeline {
             })
             .collect();
 
+        // Compute evaluation scores
+        let chunk_texts: Vec<&str> = source_chunks.iter().map(|c| c.content.as_str()).collect();
+        let eval = rag_eval::evaluate(question, &resp.formatted_context, &chunk_texts);
+
         Ok(RagAnswer {
             query: resp.query,
             context: resp.formatted_context,
             source_chunks,
             token_estimate: resp.token_estimate,
+            eval: Some(eval),
         })
     }
 
@@ -120,10 +129,39 @@ mod tests {
                 note_title: None,
             }],
             token_estimate: 100,
+            eval: None,
         };
         let json = serde_json::to_string(&answer).unwrap();
         assert!(json.contains("test question"));
         assert!(json.contains("token_estimate"));
+        // eval is None, should be omitted
+        assert!(!json.contains("eval"));
+    }
+
+    #[test]
+    fn rag_answer_with_eval_scores() {
+        let answer = RagAnswer {
+            query: "What is Rust?".into(),
+            context: "Rust is a systems programming language".into(),
+            source_chunks: vec![SourceChunk {
+                content: "Rust is a systems programming language".into(),
+                score: 0.95,
+                note_id: None,
+                note_title: None,
+            }],
+            token_estimate: 50,
+            eval: Some(RagEvalScores {
+                faithfulness: 0.9,
+                answer_relevance: 0.8,
+                chunk_utilization: 0.7,
+                overall: 0.83,
+            }),
+        };
+        let json = serde_json::to_string(&answer).unwrap();
+        assert!(json.contains("faithfulness"));
+        assert!(json.contains("answer_relevance"));
+        assert!(json.contains("chunk_utilization"));
+        assert!(json.contains("overall"));
     }
 
     #[test]

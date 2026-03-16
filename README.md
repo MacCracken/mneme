@@ -74,6 +74,7 @@ make check
 - **Auto-Linking** — automatically discover and suggest links between related notes
 - **Summarization** — generate summaries of long notes or collections
 - **RAG** — ask questions across your entire knowledge base
+- **RAG Quality Metrics** — per-query faithfulness, relevance, and chunk utilization scores with vault-level aggregates
 - **Concept Extraction** — automatically extract entities, topics, and key concepts
 - **AI-Assisted Writing** — completions, rewording, expansion, and translation
 - **Knowledge Graph** — visualize connections between notes, concepts, and tags

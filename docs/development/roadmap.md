@@ -13,7 +13,7 @@ All planned phases and post-MVP features have been implemented.
 - Tantivy full-text search, hybrid BM25 + semantic ranking
 - AI pipelines: RAG, summarization, auto-linking, concept extraction, tagging, templates
 - Axum HTTP API (30+ endpoints), TUI (ratatui), MCP server (5 tools)
-- 297 tests, Criterion benchmarks, 9 ADRs, full documentation
+- 313 tests, Criterion benchmarks, 10 ADRs, full documentation
 - AGNOS marketplace recipe, systemd service, agnoshi intents
 
 ### Phase 5 — In-Process Vector Store
@@ -31,6 +31,14 @@ All planned phases and post-MVP features have been implemented.
 - `/v1/search/optimizer` endpoint exposes arm stats
 - MCP `mneme_search_feedback` tool
 - Optimizer state persists in `.mneme/optimizer.json`
+
+### Phase 7 — RAG Evaluation Metrics
+- `mneme-ai/src/rag_eval.rs`: local-only token-overlap scoring (no LLM required)
+- Faithfulness, answer relevance, and chunk utilization scores (0.0–1.0)
+- Weighted overall score (50% faithfulness, 30% relevance, 20% utilization)
+- `RagAnswer` includes optional `eval: RagEvalScores` field
+- `/v1/ai/rag/stats` returns eval aggregates per vault
+- `RagEvalAggregates` for running averages across queries
 
 ### Phase 12 — Multi-Vault Support
 - `VaultRegistry` with TOML persistence, `VaultManager` for lifecycle
@@ -55,15 +63,6 @@ All planned phases and post-MVP features have been implemented.
 
 Improvements informed by SecureYeoman's brain/KB architecture to make Mneme a
 smarter, more self-maintaining knowledge base.
-
-### Phase 7 — RAG Evaluation Metrics
-
-Measure RAG quality so users know when to trust answers.
-
-- Score each RAG response on: faithfulness (token overlap), answer relevance
-  (cosine to query), and chunk utilization (% of retrieved context used)
-- Expose per-query scores in API response and MCP tool output
-- Log aggregate p50/p95 to `/v1/ai/rag/stats` for vault-level health
 
 ### Phase 8 — Note Consolidation & Evolution
 
@@ -123,6 +122,6 @@ Items that may be explored in future versions:
 
 | Version | Date | Milestone |
 |---------|------|-----------|
-| 2026.3.15 | 2026-03-15 | Phase 5 (in-process vectors) + Phase 6 (retrieval optimizer) + Phase 12 (multi-vault) |
+| 2026.3.15 | 2026-03-15 | Phase 5 (in-process vectors) + Phase 6 (retrieval optimizer) + Phase 7 (RAG eval metrics) + Phase 12 (multi-vault) |
 | 2026.3.15 | 2026-03-15 | Knowledge graph visualization + split-pane multi-note view |
 | 2026.3.13 | 2026-03-13 | All phases complete — full feature set |

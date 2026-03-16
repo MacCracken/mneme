@@ -29,7 +29,7 @@
 | `mneme-core` | None | Pure types: Note, Link, Tag, Graph, Frontmatter, tasks, calendar, plugins, config (`MnemeConfig`, `VaultConfigEntry`, `VaultInfo`) |
 | `mneme-store` | SQLite, filesystem | Persistence: DB operations, file I/O, Vault, versioning, sharing, `VaultRegistry` (TOML), `VaultManager` (multi-vault lifecycle) |
 | `mneme-search` | Tantivy, ONNX, usearch | Full-text index, `Embedder` (ONNX all-MiniLM-L6-v2), `VectorStore` (usearch ANN), `SemanticEngine` (facade), `RetrievalOptimizer` (Thompson Sampling), `CrossVaultSearch` (RRF merge), hybrid merge with `BlendWeights` |
-| `mneme-ai` | HTTP (daimon) | RAG, summarization, auto-linking, concepts, writing, translation, temporal, multi-modal, creative suite, flashcards |
+| `mneme-ai` | HTTP (daimon) | RAG, `rag_eval` (token-overlap scoring: faithfulness, relevance, utilization), summarization, auto-linking, concepts, writing, translation, temporal, multi-modal, creative suite, flashcards |
 | `mneme-api` | HTTP (axum) | REST API server, `VaultState` + `VaultWithEngines`, vault handlers |
 | `mneme-ui` | Terminal (crossterm) | TUI application |
 | `mneme-mcp` | Stdio | MCP server for Claude |
@@ -74,6 +74,7 @@ See `docs/adr/` for Architecture Decision Records:
 - **ADR-007**: In-process vector store (usearch + ONNX Runtime)
 - **ADR-008**: Retrieval optimizer (Thompson Sampling feedback loop)
 - **ADR-009**: Multi-vault support (VaultRegistry, VaultManager, cross-vault search)
+- **ADR-010**: RAG evaluation metrics (token-overlap scoring, weighted overall, aggregation)
 
 ## AGNOS Integration
 

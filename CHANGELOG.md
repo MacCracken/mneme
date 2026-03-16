@@ -32,10 +32,19 @@ All notable changes to Mneme will be documented in this file.
 - TUI: VaultPicker panel (press `v`)
 - Config: `mneme.toml` with `[vaults]` table
 
+### Phase 7 — RAG Evaluation Metrics
+- `mneme-ai/src/rag_eval.rs`: local-only token-overlap scoring (no LLM required)
+- Faithfulness (token overlap between answer and context), answer relevance (token overlap between answer and query), chunk utilization (fraction of context tokens in answer)
+- Weighted overall score: 50% faithfulness, 30% relevance, 20% utilization
+- Simple tokenizer with stopword filtering
+- `RagEvalAggregates` for running averages across queries per vault
+- `RagAnswer` includes optional `eval: RagEvalScores` field
+- `/v1/ai/rag/stats` returns eval aggregates
+
 ### Quality
-- 297 tests (up from 257)
+- 313 tests (up from 257)
 - New deps: usearch 2, ort 2.0.0-rc.12, ndarray 0.17, tokenizers 0.21
-- 3 new ADRs (007–009)
+- 4 new ADRs (007–010)
 
 ## [2026.3.13] — 2026-03-13
 

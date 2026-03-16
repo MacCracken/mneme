@@ -12,6 +12,7 @@ pub mod flashcards;
 pub mod linker;
 pub mod multimodal;
 pub mod rag;
+pub mod rag_eval;
 pub mod summarizer;
 pub mod tagger;
 pub mod templates;

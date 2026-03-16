@@ -39,6 +39,7 @@ pub struct RagStatsResponse {
     pub daimon_available: bool,
     pub local_vectors: usize,
     pub local_available: bool,
+    pub eval: mneme_ai::rag_eval::RagEvalAggregates,
 }
 
 /// Helper to get the active vault.
@@ -71,6 +72,15 @@ pub async fn rag_query(
             }),
         )
     })?;
+
+    // Record eval scores in aggregates
+    if let Some(ref eval) = answer.eval {
+        let mut vs = state.vaults.write().await;
+        if let Some(eng) = vs.active_engines_mut() {
+            eng.rag_eval.record(eval);
+        }
+    }
+
     Ok(Json(answer))
 }
 
@@ -121,9 +131,13 @@ pub async fn rag_stats(
 ) -> Result<Json<RagStatsResponse>, (StatusCode, Json<ErrorResponse>)> {
     let vs = state.vaults.read().await;
 
-    let (local_vectors, local_available) = match vs.active() {
-        Some(ov) => (ov.semantic().vector_count(), ov.semantic().is_available()),
-        None => (0, false),
+    let (local_vectors, local_available, eval) = match vs.active() {
+        Some(ov) => (
+            ov.semantic().vector_count(),
+            ov.semantic().is_available(),
+            ov.engines.rag_eval.clone(),
+        ),
+        None => (0, false, mneme_ai::rag_eval::RagEvalAggregates::default()),
     };
 
     let pipeline = RagPipeline::new((*state.daimon).clone());
@@ -133,12 +147,14 @@ pub async fn rag_stats(
             daimon_available: true,
             local_vectors,
             local_available,
+            eval,
         })),
         Err(_) => Ok(Json(RagStatsResponse {
             index_size: 0,
             daimon_available: false,
             local_vectors,
             local_available,
+            eval,
         })),
     }
 }
