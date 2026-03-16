@@ -5,6 +5,7 @@ use axum::routing::{delete, get, post, put};
 
 use crate::advanced_handlers;
 use crate::ai_handlers;
+use crate::consolidation_handlers;
 use crate::handlers;
 use crate::io_handlers;
 use crate::state::AppState;
@@ -37,6 +38,16 @@ pub fn build_router(state: AppState) -> Router {
         // Tags
         .route("/v1/tags", get(handlers::list_tags))
         .route("/v1/tags/{id}", delete(handlers::delete_tag))
+        // Consolidation
+        .route("/v1/notes/stale", get(consolidation_handlers::stale_notes))
+        .route(
+            "/v1/notes/duplicates",
+            get(consolidation_handlers::duplicate_notes),
+        )
+        .route(
+            "/v1/ai/consolidate",
+            get(consolidation_handlers::consolidate),
+        )
         // AI — RAG
         .route("/v1/ai/rag/query", get(ai_handlers::rag_query))
         .route("/v1/ai/rag/stats", get(ai_handlers::rag_stats))

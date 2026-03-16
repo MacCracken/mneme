@@ -5,6 +5,7 @@
 
 pub mod advanced_handlers;
 pub mod ai_handlers;
+pub mod consolidation_handlers;
 pub mod handlers;
 pub mod io_handlers;
 pub mod router;

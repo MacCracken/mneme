@@ -6,6 +6,7 @@
 
 pub mod client;
 pub mod concepts;
+pub mod consolidation;
 pub mod creative;
 pub mod error;
 pub mod flashcards;
