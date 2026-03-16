@@ -20,6 +20,7 @@ fn bench_create_note(c: &mut Criterion) {
                 path: None,
                 content: "Benchmark content for testing note creation performance.".into(),
                 tags: vec!["bench".into()],
+                provenance: None,
             }))
             .unwrap();
         });
@@ -38,6 +39,7 @@ fn bench_list_notes(c: &mut Criterion) {
             path: None,
             content: format!("Content {i}"),
             tags: vec![],
+            provenance: None,
         }))
         .unwrap();
     }

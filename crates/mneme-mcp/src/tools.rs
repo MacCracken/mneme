@@ -141,6 +141,7 @@ async fn handle_create_note(
         path,
         content,
         tags,
+        provenance: None,
     };
 
     match rv.vault.vault.create_note(req).await {
@@ -675,6 +676,7 @@ mod tests {
                 path: None,
                 content: "Content here.".into(),
                 tags: vec!["test".into()],
+                provenance: None,
             })
             .await
             .unwrap();

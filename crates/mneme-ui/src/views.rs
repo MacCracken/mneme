@@ -172,7 +172,7 @@ fn render_search(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .search_results
         .iter()
         .enumerate()
-        .map(|(i, (_id, title, score))| {
+        .map(|(i, (id, title, score))| {
             let style = if i == app.selected_index {
                 Style::default()
                     .fg(Color::Yellow)
@@ -180,10 +180,35 @@ fn render_search(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             } else {
                 Style::default()
             };
+            // Trust indicator from note provenance
+            let trust = app
+                .notes
+                .iter()
+                .find(|n| n.id == *id)
+                .map(|n| n.trust_score())
+                .unwrap_or(1.0);
+            let trust_indicator = if trust >= 0.9 {
+                "H"
+            } else if trust >= 0.6 {
+                "M"
+            } else {
+                "L"
+            };
+            let trust_color = if trust >= 0.9 {
+                Color::Green
+            } else if trust >= 0.6 {
+                Color::Yellow
+            } else {
+                Color::Red
+            };
             ListItem::new(Line::from(vec![
                 Span::styled(
-                    format!("{score:.2}  "),
+                    format!("{score:.2} "),
                     Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!("[{trust_indicator}] "),
+                    Style::default().fg(trust_color),
                 ),
                 Span::styled(title, style),
             ]))

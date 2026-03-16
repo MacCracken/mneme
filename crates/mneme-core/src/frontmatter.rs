@@ -8,6 +8,8 @@ use std::collections::HashMap;
 pub struct Frontmatter {
     pub title: Option<String>,
     pub tags: Vec<String>,
+    /// User-specified trust level: "high", "medium", "low", or a float 0.0–1.0.
+    pub trust: Option<String>,
     /// Arbitrary key-value metadata.
     pub extra: HashMap<String, String>,
 }
@@ -70,6 +72,9 @@ pub fn parse_frontmatter(yaml: &str) -> Frontmatter {
                 "tags" => {
                     fm.tags = parse_tag_list(value);
                 }
+                "trust" => {
+                    fm.trust = Some(unquote(value).to_string());
+                }
                 _ => {
                     fm.extra.insert(key.to_string(), unquote(value).to_string());
                 }
@@ -118,6 +123,10 @@ pub fn render_frontmatter(fm: &Frontmatter) -> String {
         lines.push(format!("tags: [{tags}]"));
     }
 
+    if let Some(trust) = &fm.trust {
+        lines.push(format!("trust: {trust}"));
+    }
+
     for (key, value) in &fm.extra {
         lines.push(format!("{key}: {value}"));
     }
@@ -132,6 +141,16 @@ pub fn compose_document(fm: &Frontmatter, body: &str) -> String {
         body.to_string()
     } else {
         format!("---\n{yaml}\n---\n{body}")
+    }
+}
+
+/// Parse a trust string ("high", "medium", "low", or a float) into a score.
+pub fn parse_trust_value(s: &str) -> Option<f64> {
+    match s.trim().to_lowercase().as_str() {
+        "high" => Some(1.0),
+        "medium" | "med" => Some(0.7),
+        "low" => Some(0.4),
+        other => other.parse::<f64>().ok().map(|v| v.clamp(0.0, 1.0)),
     }
 }
 
@@ -192,6 +211,7 @@ mod tests {
         let fm = Frontmatter {
             title: Some("Test Note".into()),
             tags: vec!["a".into(), "b".into()],
+            trust: None,
             extra: HashMap::new(),
         };
         let doc = compose_document(&fm, "Hello world.\n");

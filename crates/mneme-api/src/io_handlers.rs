@@ -81,6 +81,7 @@ pub async fn render_template(
             path: rendered.path.clone(),
             content: rendered.content.clone(),
             tags: rendered.tags.clone(),
+            provenance: None,
         };
 
         match ov.vault.vault.create_note(create_req).await {

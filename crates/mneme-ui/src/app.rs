@@ -580,6 +580,7 @@ mod tests {
                     path: None,
                     content: format!("Content {i}"),
                     tags: vec![],
+                    provenance: None,
                 })
                 .await
                 .unwrap();
@@ -600,6 +601,7 @@ mod tests {
                     path: None,
                     content: format!("Content {i}"),
                     tags: vec![],
+                    provenance: None,
                 })
                 .await
                 .unwrap();

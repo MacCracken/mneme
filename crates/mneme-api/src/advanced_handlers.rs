@@ -172,6 +172,7 @@ pub async fn clip_html(
                 path: None,
                 content: clipped.content_md.clone(),
                 tags: clipped.tags.clone(),
+                provenance: Some(mneme_core::note::Provenance::WebClip),
             };
             if let Ok(note) = ov.vault.vault.create_note(create_req).await {
                 let _ = ov.search().index_note(
@@ -209,6 +210,7 @@ pub async fn clip_bookmark(
                 path: None,
                 content: clipped.content_md.clone(),
                 tags: clipped.tags.clone(),
+                provenance: Some(mneme_core::note::Provenance::WebClip),
             };
             if let Ok(note) = ov.vault.vault.create_note(create_req).await {
                 let _ = ov.search().index_note(

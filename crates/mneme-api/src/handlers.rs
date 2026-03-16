@@ -60,6 +60,8 @@ pub struct SearchResultItem {
     pub snippet: String,
     pub score: f64,
     pub source: String,
+    /// Trust score from provenance (0.0–1.0).
+    pub trust: f64,
 }
 
 #[derive(Deserialize)]
@@ -227,16 +229,31 @@ pub async fn search_notes(
         vwe.semantic().search(&params.q, limit).unwrap_or_default()
     };
 
-    let items = if sem_results.is_empty() {
+    // Build trust map for provenance-based scoring
+    let trust_map: std::collections::HashMap<Uuid, f64> = vwe
+        .vault
+        .vault
+        .list_notes(1000, 0)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|n| (n.id, n.trust_score()))
+        .collect();
+
+    let mut items: Vec<SearchResultItem> = if sem_results.is_empty() {
         ft_results
             .into_iter()
-            .map(|r| SearchResultItem {
-                note_id: r.note_id,
-                title: r.title,
-                path: r.path,
-                snippet: r.snippet,
-                score: r.score as f64,
-                source: "fulltext".into(),
+            .map(|r| {
+                let trust = trust_map.get(&r.note_id).copied().unwrap_or(1.0);
+                SearchResultItem {
+                    note_id: r.note_id,
+                    title: r.title,
+                    path: r.path,
+                    snippet: r.snippet,
+                    score: r.score as f64 * trust,
+                    source: "fulltext".into(),
+                    trust,
+                }
             })
             .collect()
     } else {
@@ -246,8 +263,11 @@ pub async fn search_notes(
             .collect();
         let hybrid =
             mneme_search::semantic::weighted_hybrid_merge(ft_tuples, sem_results, limit, &weights);
-        hybrid_to_items(hybrid)
+        hybrid_to_items(hybrid, &trust_map)
     };
+
+    // Re-sort after trust boost
+    items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
 
     // Drop the read lock before acquiring write for recording
     drop(vs);
@@ -309,16 +329,23 @@ pub async fn optimizer_stats(
     })))
 }
 
-fn hybrid_to_items(results: Vec<HybridResult>) -> Vec<SearchResultItem> {
+fn hybrid_to_items(
+    results: Vec<HybridResult>,
+    trust_map: &std::collections::HashMap<Uuid, f64>,
+) -> Vec<SearchResultItem> {
     results
         .into_iter()
-        .map(|r| SearchResultItem {
-            note_id: r.note_id,
-            title: r.title,
-            path: r.path,
-            snippet: r.snippet,
-            score: r.score,
-            source: format!("{:?}", r.source).to_lowercase(),
+        .map(|r| {
+            let trust = trust_map.get(&r.note_id).copied().unwrap_or(1.0);
+            SearchResultItem {
+                note_id: r.note_id,
+                title: r.title,
+                path: r.path,
+                snippet: r.snippet,
+                score: r.score * trust,
+                source: format!("{:?}", r.source).to_lowercase(),
+                trust,
+            }
         })
         .collect()
 }

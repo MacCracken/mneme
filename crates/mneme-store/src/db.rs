@@ -6,7 +6,7 @@ use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use uuid::Uuid;
 
 use mneme_core::link::Link;
-use mneme_core::note::{BacklinkInfo, Note};
+use mneme_core::note::{BacklinkInfo, Note, Provenance};
 use mneme_core::tag::Tag;
 
 use crate::StoreError;
@@ -35,16 +35,22 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
-        // 002: add last_accessed column (idempotent — ignore "duplicate column")
-        for statement in include_str!("../migrations/002_last_accessed.sql").split(';') {
-            let stmt = statement.trim();
-            if stmt.is_empty() {
-                continue;
-            }
-            if let Err(e) = sqlx::query(stmt).execute(&self.pool).await {
-                let msg = e.to_string();
-                if !msg.contains("duplicate column") && !msg.contains("already exists") {
-                    return Err(e.into());
+        // Run idempotent ALTER TABLE migrations (002, 003)
+        let migrations = [
+            include_str!("../migrations/002_last_accessed.sql"),
+            include_str!("../migrations/003_provenance.sql"),
+        ];
+        for migration in &migrations {
+            for statement in migration.split(';') {
+                let stmt = statement.trim();
+                if stmt.is_empty() {
+                    continue;
+                }
+                if let Err(e) = sqlx::query(stmt).execute(&self.pool).await {
+                    let msg = e.to_string();
+                    if !msg.contains("duplicate column") && !msg.contains("already exists") {
+                        return Err(e.into());
+                    }
                 }
             }
         }
@@ -56,8 +62,8 @@ impl Database {
     /// Insert a new note record.
     pub async fn insert_note(&self, note: &Note) -> Result<(), StoreError> {
         sqlx::query(
-            "INSERT INTO notes (id, title, path, content_hash, created_at, updated_at, last_accessed)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO notes (id, title, path, content_hash, created_at, updated_at, last_accessed, provenance, trust_override)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(note.id.to_string())
         .bind(&note.title)
@@ -66,6 +72,8 @@ impl Database {
         .bind(note.created_at.to_rfc3339())
         .bind(note.updated_at.to_rfc3339())
         .bind(note.last_accessed.to_rfc3339())
+        .bind(note.provenance.as_str())
+        .bind(note.trust_override)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -74,7 +82,7 @@ impl Database {
     /// Get a note by ID.
     pub async fn get_note(&self, id: Uuid) -> Result<Note, StoreError> {
         let row = sqlx::query(
-            "SELECT id, title, path, content_hash, created_at, updated_at, last_accessed
+            "SELECT id, title, path, content_hash, created_at, updated_at, last_accessed, provenance, trust_override
              FROM notes WHERE id = ?",
         )
         .bind(id.to_string())
@@ -88,7 +96,7 @@ impl Database {
     /// Get a note by its file path.
     pub async fn get_note_by_path(&self, path: &str) -> Result<Note, StoreError> {
         let row = sqlx::query(
-            "SELECT id, title, path, content_hash, created_at, updated_at, last_accessed
+            "SELECT id, title, path, content_hash, created_at, updated_at, last_accessed, provenance, trust_override
              FROM notes WHERE path = ?",
         )
         .bind(path)
@@ -102,7 +110,7 @@ impl Database {
     /// List all notes, ordered by updated_at descending.
     pub async fn list_notes(&self, limit: i64, offset: i64) -> Result<Vec<Note>, StoreError> {
         let rows = sqlx::query(
-            "SELECT id, title, path, content_hash, created_at, updated_at, last_accessed
+            "SELECT id, title, path, content_hash, created_at, updated_at, last_accessed, provenance, trust_override
              FROM notes ORDER BY updated_at DESC LIMIT ? OFFSET ?",
         )
         .bind(limit)
@@ -352,6 +360,8 @@ fn row_to_note(row: &sqlx::sqlite::SqliteRow) -> Result<Note, StoreError> {
         created_at: parse_datetime(&row.get::<String, _>("created_at")),
         updated_at: parse_datetime(&row.get::<String, _>("updated_at")),
         last_accessed: parse_datetime(&row.get::<String, _>("last_accessed")),
+        provenance: Provenance::from_str(&row.get::<String, _>("provenance")),
+        trust_override: row.get::<Option<f64>, _>("trust_override"),
     })
 }
 

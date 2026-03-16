@@ -94,14 +94,15 @@ smarter, more self-maintaining knowledge base.
 - TUI: `select_note()` pushes to context buffer, `run_search()` merges context-aware results
 
 ### Phase 11 — Document Provenance & Trust Scoring
-
-Not all notes are equal — weight retrieval by source quality.
-
-- Assign provenance scores to notes by origin: manual (high), import (medium),
-  web clip (lower), auto-generated (lowest)
-- Allow user overrides per-note via frontmatter (`trust: high`)
-- Factor provenance into hybrid search ranking as a multiplicative boost
-- Display trust indicators in TUI search results
+- `Provenance` enum: Manual (1.0), Import (0.8), WebClip (0.6), Generated (0.4)
+- `Note.provenance` + `trust_override` fields, DB migration 003
+- `trust_score()` method: user override via frontmatter (`trust: high/medium/low/0.8`)
+- Frontmatter parser handles `trust:` field with named levels or float values
+- Search ranking applies trust as multiplicative boost on hybrid scores
+- `SearchResultItem.trust` field in API responses
+- TUI search results show [H]/[M]/[L] trust indicators (green/yellow/red)
+- Web clipper auto-sets `Provenance::WebClip` on clipped notes
+- `CreateNote.provenance` optional field for origin tracking
 
 ---
 

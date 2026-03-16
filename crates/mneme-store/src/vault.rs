@@ -69,7 +69,10 @@ impl Vault {
         self.files.write_note(&path, &document).await?;
 
         // Create DB record
-        let note = Note::new(req.title, path, hash);
+        let mut note = Note::new(req.title, path, hash);
+        if let Some(prov) = req.provenance {
+            note.provenance = prov;
+        }
         self.db.insert_note(&note).await?;
 
         // Create tags and associations
@@ -214,6 +217,7 @@ mod tests {
                 path: None,
                 content: "This is a test note.".into(),
                 tags: vec!["test".into(), "demo".into()],
+                provenance: None,
             })
             .await
             .unwrap();
@@ -240,6 +244,7 @@ mod tests {
                 path: None,
                 content: "Original content.".into(),
                 tags: vec![],
+                provenance: None,
             })
             .await
             .unwrap();
@@ -271,6 +276,7 @@ mod tests {
                 path: None,
                 content: "Goodbye.".into(),
                 tags: vec![],
+                provenance: None,
             })
             .await
             .unwrap();
@@ -290,6 +296,7 @@ mod tests {
                     path: None,
                     content: format!("Content {i}"),
                     tags: vec![],
+                    provenance: None,
                 })
                 .await
                 .unwrap();
@@ -310,6 +317,7 @@ mod tests {
                 path: Some("same.md".into()),
                 content: "First".into(),
                 tags: vec![],
+                provenance: None,
             })
             .await
             .unwrap();
@@ -320,6 +328,7 @@ mod tests {
                 path: Some("same.md".into()),
                 content: "Second".into(),
                 tags: vec![],
+                provenance: None,
             })
             .await;
 
@@ -335,6 +344,7 @@ mod tests {
                 path: None,
                 content: "Content.".into(),
                 tags: vec!["alpha".into(), "beta".into()],
+                provenance: None,
             })
             .await
             .unwrap();
@@ -357,6 +367,7 @@ mod tests {
                 path: None,
                 content: "Original content.".into(),
                 tags: vec!["tag1".into()],
+                provenance: None,
             })
             .await
             .unwrap();
