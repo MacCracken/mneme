@@ -32,6 +32,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/notes/{id}", delete(handlers::delete_note))
         // Search
         .route("/v1/search", get(handlers::search_notes))
+        .route("/v1/search/feedback", post(handlers::search_feedback))
+        .route("/v1/search/optimizer", get(handlers::optimizer_stats))
         // Tags
         .route("/v1/tags", get(handlers::list_tags))
         .route("/v1/tags/{id}", delete(handlers::delete_tag))

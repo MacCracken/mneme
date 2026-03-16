@@ -217,8 +217,9 @@ async fn search_notes() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let results = response_json(resp).await;
-    assert!(!results.as_array().unwrap().is_empty());
+    let body = response_json(resp).await;
+    assert!(body["search_id"].is_string());
+    assert!(!body["results"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

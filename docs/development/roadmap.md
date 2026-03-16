@@ -13,8 +13,32 @@ All planned phases and post-MVP features have been implemented.
 - Tantivy full-text search, hybrid BM25 + semantic ranking
 - AI pipelines: RAG, summarization, auto-linking, concept extraction, tagging, templates
 - Axum HTTP API (30+ endpoints), TUI (ratatui), MCP server (5 tools)
-- 257 tests, Criterion benchmarks, 6 ADRs, full documentation
+- 297 tests, Criterion benchmarks, 9 ADRs, full documentation
 - AGNOS marketplace recipe, systemd service, agnoshi intents
+
+### Phase 5 — In-Process Vector Store
+- ONNX Runtime wrapper for all-MiniLM-L6-v2 (384-dim embeddings)
+- usearch ANN index with persistent metadata in `.mneme/vectors/`
+- SemanticEngine facade: embedder + vector store, graceful daimon fallback
+- Feature-gated behind `local-vectors` (default on)
+- Models loaded from `MNEME_MODELS_DIR`
+
+### Phase 6 — Retrieval Quality & Feedback Loop
+- Thompson Sampling bandit with 4 arms (balanced, fulltext_heavy, semantic_heavy, recency_boost)
+- `weighted_hybrid_merge` with `BlendWeights` for adaptive ranking
+- Search response includes `search_id` for feedback correlation
+- `/v1/search/feedback` endpoint records clicks, improves future ranking
+- `/v1/search/optimizer` endpoint exposes arm stats
+- MCP `mneme_search_feedback` tool
+- Optimizer state persists in `.mneme/optimizer.json`
+
+### Phase 12 — Multi-Vault Support
+- `VaultRegistry` with TOML persistence, `VaultManager` for lifecycle
+- Cross-vault search: fan-out + RRF merge with vault-weight multipliers
+- API: `/v1/vaults` CRUD, `/v1/vaults/{id}/switch`, all endpoints accept `?vault=`
+- MCP: `mneme_list_vaults`, `mneme_switch_vault` tools (8 total now)
+- TUI: VaultPicker panel (`v` key)
+- Config: `mneme.toml` with `[vaults]` table
 
 ### Post-MVP
 - Import: Obsidian, Notion, Markdown directories
@@ -31,25 +55,6 @@ All planned phases and post-MVP features have been implemented.
 
 Improvements informed by SecureYeoman's brain/KB architecture to make Mneme a
 smarter, more self-maintaining knowledge base.
-
-### Phase 5 — In-Process Vector Store
-
-Remove hard dependency on daimon for semantic search so Mneme works standalone.
-
-- Embed a Rust-native ANN index (usearch or instant-distance) in `mneme-search`
-- Add local embedding via ONNX Runtime (all-MiniLM-L6-v2, 384-dim)
-- Fall back to daimon when available; run fully offline when not
-- Persist index alongside Tantivy in `.mneme/vectors/`
-
-### Phase 6 — Retrieval Quality & Feedback Loop
-
-Learn from user behavior to improve search over time.
-
-- Track which results the user opens/uses after a search (click-through signal)
-- Implement lightweight Thompson Sampling over RRF blend weights
-  (full-text weight, semantic weight, recency boost)
-- Store arm stats in SQLite; decay toward priors on cold start
-- Add `/v1/search/feedback` endpoint and MCP `mneme_search_feedback` tool
 
 ### Phase 7 — RAG Evaluation Metrics
 
@@ -99,25 +104,6 @@ Not all notes are equal — weight retrieval by source quality.
 - Factor provenance into hybrid search ranking as a multiplicative boost
 - Display trust indicators in TUI search results
 
-### Phase 12 — Multi-Vault Support
-
-Manage multiple knowledge bases with unified cross-vault operations.
-
-- `VaultRegistry` in mneme-store: track multiple vault roots with metadata
-  (name, path, description, last-opened)
-- Each vault is fully independent: own `.mneme/` dir, SQLite DB, search index,
-  vector store
-- Cross-vault search: fan out queries to all (or selected) vaults, merge results
-  via RRF with vault-weight multipliers
-- Cross-vault linking: `[[vault:note-title]]` syntax in Markdown, resolved at
-  render time
-- TUI vault switcher: quick-switch between vaults, vault picker on startup
-- API: `/v1/vaults` CRUD, all existing endpoints accept optional `?vault=` param
-- MCP: `mneme_list_vaults`, `mneme_switch_vault` tools; default vault from config
-- CLI: `mneme vault create|list|switch|remove`
-- Config in `mneme.toml`: `[vaults]` table with default vault and registry path
-- Use cases: separate work/personal, per-project knowledge, shared team vaults
-
 ---
 
 ## Future Considerations
@@ -137,6 +123,6 @@ Items that may be explored in future versions:
 
 | Version | Date | Milestone |
 |---------|------|-----------|
-| 2026.3.15 | 2026-03-15 | Phase 5 (in-process vector store) + Phase 12 (multi-vault support) |
+| 2026.3.15 | 2026-03-15 | Phase 5 (in-process vectors) + Phase 6 (retrieval optimizer) + Phase 12 (multi-vault) |
 | 2026.3.15 | 2026-03-15 | Knowledge graph visualization + split-pane multi-note view |
 | 2026.3.13 | 2026-03-13 | All phases complete — full feature set |

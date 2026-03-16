@@ -123,6 +123,18 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "mneme_search_feedback",
+            "description": "Record that a search result was useful (clicked/opened). Improves future search ranking.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "search_id": { "type": "string", "description": "The search_id from a previous mneme_search result" },
+                    "note_id": { "type": "string", "description": "The note UUID that was useful" }
+                },
+                "required": ["search_id", "note_id"]
+            }
+        },
+        {
             "name": "mneme_list_vaults",
             "description": "List all registered vaults with their status",
             "inputSchema": {
@@ -166,7 +178,7 @@ mod tests {
     #[test]
     fn tool_definitions_count() {
         let tools = tool_definitions();
-        assert_eq!(tools.as_array().unwrap().len(), 7);
+        assert_eq!(tools.as_array().unwrap().len(), 8);
     }
 
     #[test]

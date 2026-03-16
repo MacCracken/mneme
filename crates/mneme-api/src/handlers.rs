@@ -44,13 +44,28 @@ pub struct SearchParams {
 }
 
 #[derive(Serialize)]
-pub struct SearchResultResponse {
+pub struct SearchResponse {
+    /// Opaque ID for feedback correlation (encodes arm index).
+    pub search_id: String,
+    pub results: Vec<SearchResultItem>,
+}
+
+#[derive(Serialize)]
+pub struct SearchResultItem {
     pub note_id: Uuid,
     pub title: String,
     pub path: String,
     pub snippet: String,
     pub score: f64,
     pub source: String,
+}
+
+#[derive(Deserialize)]
+pub struct SearchFeedbackRequest {
+    /// The search_id returned from the search endpoint.
+    pub search_id: String,
+    /// The note ID that the user engaged with.
+    pub note_id: Uuid,
 }
 
 // --- Health ---
@@ -165,42 +180,104 @@ pub async fn delete_note(
 pub async fn search_notes(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
-) -> Result<Json<Vec<SearchResultResponse>>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<SearchResponse>, (StatusCode, Json<ErrorResponse>)> {
     let vs = state.vaults.read().await;
     let vwe = vs.resolve(params.vault.as_deref()).ok_or_else(no_vault)?;
     let limit = params.limit.unwrap_or(20);
 
+    // Select blend weights from the optimizer
+    let (arm_idx, weights) = vwe.optimizer().select_arm();
+    let search_id = format!("s:{}:{}", arm_idx, vwe.optimizer().total_searches);
+
     let ft_results = vwe.search().search(&params.q, limit).map_err(bad_request)?;
     let sem_results = vwe.semantic().search(&params.q, limit).unwrap_or_default();
 
-    if sem_results.is_empty() {
-        Ok(Json(
-            ft_results
-                .into_iter()
-                .map(|r| SearchResultResponse {
-                    note_id: r.note_id,
-                    title: r.title,
-                    path: r.path,
-                    snippet: r.snippet,
-                    score: r.score as f64,
-                    source: "fulltext".into(),
-                })
-                .collect(),
-        ))
+    let items = if sem_results.is_empty() {
+        ft_results
+            .into_iter()
+            .map(|r| SearchResultItem {
+                note_id: r.note_id,
+                title: r.title,
+                path: r.path,
+                snippet: r.snippet,
+                score: r.score as f64,
+                source: "fulltext".into(),
+            })
+            .collect()
     } else {
         let ft_tuples: Vec<_> = ft_results
             .into_iter()
             .map(|r| (r.note_id, r.title, r.path, r.snippet, r.score))
             .collect();
-        let hybrid = mneme_search::semantic::hybrid_merge(ft_tuples, sem_results, limit);
-        Ok(Json(hybrid_to_response(hybrid)))
+        let hybrid =
+            mneme_search::semantic::weighted_hybrid_merge(ft_tuples, sem_results, limit, &weights);
+        hybrid_to_items(hybrid)
+    };
+
+    // Drop the read lock before acquiring write for recording
+    drop(vs);
+
+    // Record that this arm was used for a search
+    let mut vs = state.vaults.write().await;
+    if let Some(eng) = vs.active_engines_mut() {
+        eng.optimizer.record_search(arm_idx);
     }
+
+    Ok(Json(SearchResponse { search_id, results: items }))
 }
 
-fn hybrid_to_response(results: Vec<HybridResult>) -> Vec<SearchResultResponse> {
+/// Record search feedback — the user clicked on a result.
+pub async fn search_feedback(
+    State(state): State<AppState>,
+    Json(req): Json<SearchFeedbackRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    // Parse arm index from search_id (format: "s:{arm_idx}:{search_count}")
+    let arm_idx: usize = req
+        .search_id
+        .strip_prefix("s:")
+        .and_then(|s| s.split(':').next())
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| bad_request("Invalid search_id format"))?;
+
+    let mut vs = state.vaults.write().await;
+    // Get vault path before mutable borrow of engines
+    let vault_path = vs
+        .manager
+        .active()
+        .map(|ov| ov.info.path.clone());
+
+    if let Some(eng) = vs.active_engines_mut() {
+        eng.optimizer.record_feedback(arm_idx);
+
+        // Persist optimizer state periodically (every 10 feedbacks)
+        if eng.optimizer.total_successes % 10 == 0 {
+            if let Some(path) = &vault_path {
+                crate::state::save_optimizer(path, &eng.optimizer);
+            }
+        }
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Get retrieval optimizer stats.
+pub async fn optimizer_stats(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let vs = state.vaults.read().await;
+    let vwe = vs.active().ok_or_else(no_vault)?;
+    let opt = vwe.optimizer();
+    Ok(Json(serde_json::json!({
+        "total_searches": opt.total_searches,
+        "total_successes": opt.total_successes,
+        "arms": opt.arm_stats(),
+    })))
+}
+
+fn hybrid_to_items(results: Vec<HybridResult>) -> Vec<SearchResultItem> {
     results
         .into_iter()
-        .map(|r| SearchResultResponse {
+        .map(|r| SearchResultItem {
             note_id: r.note_id,
             title: r.title,
             path: r.path,

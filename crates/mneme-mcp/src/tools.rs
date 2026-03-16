@@ -14,9 +14,9 @@ use mneme_store::manager::OpenVault;
 
 use crate::protocol::{mcp_error, mcp_success};
 
-/// Search engines for open vaults.
+/// Search engines and optimizer for open vaults.
 pub struct McpEngines {
-    pub engines: HashMap<Uuid, (SearchEngine, SemanticEngine)>,
+    pub engines: HashMap<Uuid, (SearchEngine, SemanticEngine, std::sync::Mutex<mneme_search::RetrievalOptimizer>)>,
 }
 
 impl McpEngines {
@@ -33,12 +33,13 @@ impl McpEngines {
                 .unwrap_or_else(|_| SearchEngine::in_memory().unwrap());
             let vectors_dir = vault_path.join(".mneme").join("vectors");
             let semantic = SemanticEngine::open(models_dir, &vectors_dir);
-            self.engines.insert(id, (search, semantic));
+            let optimizer = mneme_search::RetrievalOptimizer::new();
+            self.engines.insert(id, (search, semantic, std::sync::Mutex::new(optimizer)));
         }
     }
 
-    pub fn get(&self, id: Uuid) -> Option<(&SearchEngine, &SemanticEngine)> {
-        self.engines.get(&id).map(|(s, se)| (s, se))
+    pub fn get(&self, id: Uuid) -> Option<(&SearchEngine, &SemanticEngine, &std::sync::Mutex<mneme_search::RetrievalOptimizer>)> {
+        self.engines.get(&id).map(|(s, se, o)| (s, se, o))
     }
 }
 
@@ -47,6 +48,7 @@ struct ResolvedVault<'a> {
     vault: &'a OpenVault,
     search: &'a SearchEngine,
     semantic: &'a SemanticEngine,
+    optimizer: &'a std::sync::Mutex<mneme_search::RetrievalOptimizer>,
 }
 
 fn resolve<'a>(
@@ -68,7 +70,7 @@ fn resolve<'a>(
             .ok_or_else(|| "No active vault".to_string())?
     };
 
-    let (search, semantic) = engines
+    let (search, semantic, optimizer) = engines
         .get(ov.info.id)
         .ok_or_else(|| "Search engines not initialized".to_string())?;
 
@@ -76,6 +78,7 @@ fn resolve<'a>(
         vault: ov,
         search,
         semantic,
+        optimizer,
     })
 }
 
@@ -93,6 +96,7 @@ pub async fn handle_tool_call(
         "mneme_get_note" => handle_get_note(id, args, manager, engines).await,
         "mneme_update_note" => handle_update_note(id, args, manager, engines).await,
         "mneme_query_graph" => handle_query_graph(id, args, manager, engines).await,
+        "mneme_search_feedback" => handle_search_feedback(id, args, engines),
         "mneme_list_vaults" => handle_list_vaults(id, manager),
         "mneme_switch_vault" => handle_switch_vault(id, args, manager).await,
         _ => mcp_error(id, format!("Unknown tool: {tool}")),
@@ -182,6 +186,13 @@ fn handle_search(
 
     let limit = args.get("limit").and_then(|l| l.as_u64()).unwrap_or(10) as usize;
 
+    // Select arm from optimizer
+    let (arm_idx, weights) = rv
+        .optimizer
+        .lock()
+        .map(|opt| opt.select_arm())
+        .unwrap_or((0, mneme_search::retrieval_optimizer::BlendWeights::default()));
+
     let ft_results = match rv.search.search(query, limit) {
         Ok(r) => r,
         Err(e) => return mcp_error(id, format!("Search failed: {e}")),
@@ -193,7 +204,13 @@ fn handle_search(
         return mcp_success(id, "No notes found matching your query.");
     }
 
-    let mut text = String::new();
+    // Record search
+    if let Ok(mut opt) = rv.optimizer.lock() {
+        opt.record_search(arm_idx);
+    }
+
+    let search_id = format!("s:{arm_idx}");
+    let mut text = format!("search_id: {search_id}\n\n");
 
     if !sem_results.is_empty() {
         let ft_tuples: Vec<_> = ft_results
@@ -201,7 +218,7 @@ fn handle_search(
             .map(|r| (r.note_id, r.title, r.path, r.snippet, r.score))
             .collect();
         let hybrid =
-            mneme_search::semantic::hybrid_merge(ft_tuples, sem_results, limit);
+            mneme_search::semantic::weighted_hybrid_merge(ft_tuples, sem_results, limit, &weights);
 
         text.push_str(&format!("Found {} result(s) (hybrid):\n\n", hybrid.len()));
         for (i, r) in hybrid.iter().enumerate() {
@@ -470,6 +487,35 @@ async fn handle_query_graph(
     )
 }
 
+fn handle_search_feedback(id: &Value, args: &Value, engines: &McpEngines) -> Value {
+    let search_id = match args.get("search_id").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return mcp_error(id, "Missing required parameter: search_id"),
+    };
+
+    let _note_id = match args.get("note_id").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return mcp_error(id, "Missing required parameter: note_id"),
+    };
+
+    // Parse arm index from search_id
+    let arm_idx: usize = search_id
+        .strip_prefix("s:")
+        .and_then(|s| s.split(':').next())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    // Record feedback in the first available optimizer
+    for (_, (_, _, optimizer)) in &engines.engines {
+        if let Ok(mut opt) = optimizer.lock() {
+            opt.record_feedback(arm_idx);
+            break;
+        }
+    }
+
+    mcp_success(id, "Feedback recorded. Thank you!")
+}
+
 fn handle_list_vaults(id: &Value, manager: &VaultManager) -> Value {
     let vaults = manager.registry().list();
     let active_id = manager.active_id();
@@ -547,6 +593,7 @@ mod tests {
             (
                 SearchEngine::in_memory().unwrap(),
                 SemanticEngine::disabled(),
+                std::sync::Mutex::new(mneme_search::RetrievalOptimizer::new()),
             ),
         );
         (mgr, engines, dir)

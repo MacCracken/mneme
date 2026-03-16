@@ -79,6 +79,7 @@ Launch with `mneme-ui`. Keyboard shortcuts:
 | Key | Action |
 |-----|--------|
 | `q` | Quit |
+| `v` | Vault picker |
 | `/` | Search |
 | `n` | Notes list |
 | `t` | Tag browser |
@@ -274,6 +275,84 @@ curl -X POST http://localhost:3838/v1/clip/bookmark \
   -d '{"url": "https://example.com", "title": "Example", "create": true}'
 ```
 
+## Multi-Vault
+
+Mneme supports managing multiple knowledge bases (vaults) with unified search across them.
+
+### Setting Up Multiple Vaults
+
+Configure vaults in `mneme.toml`:
+```toml
+[vaults]
+default = "personal"
+
+[vaults.personal]
+path = "/home/user/notes"
+description = "Personal knowledge base"
+
+[vaults.work]
+path = "/home/user/work-notes"
+description = "Work projects"
+```
+
+Or manage vaults via the API:
+```bash
+# Create a new vault
+curl -X POST http://localhost:3838/v1/vaults \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "work", "path": "/home/user/work-notes", "description": "Work projects"}'
+
+# List vaults
+curl http://localhost:3838/v1/vaults
+
+# Switch active vault
+curl -X POST http://localhost:3838/v1/vaults/{id}/switch
+```
+
+Any endpoint accepts `?vault=<name>` to target a specific vault without switching.
+
+### Cross-Vault Search
+
+Searches can span all vaults. Results are merged using Reciprocal Rank Fusion with per-vault weight multipliers.
+
+### TUI Vault Switcher
+
+Press `v` in the TUI to open the VaultPicker panel and switch between vaults.
+
+## Search Feedback
+
+Mneme learns from your search behavior to improve ranking over time.
+
+When you click a search result, the feedback is recorded and used by a Thompson Sampling bandit to optimize the blend weights between full-text, semantic, and recency ranking signals.
+
+```bash
+# Submit feedback after clicking a search result
+curl -X POST http://localhost:3838/v1/search/feedback \
+  -H 'Content-Type: application/json' \
+  -d '{"search_id": "uuid-from-search-response", "note_id": "clicked-note-uuid", "action": "click"}'
+
+# View optimizer statistics
+curl http://localhost:3838/v1/search/optimizer
+```
+
+The optimizer state persists in `.mneme/optimizer.json` and improves with use.
+
+## Local Vector Search
+
+Mneme includes an in-process vector search engine that works without daimon.
+
+- Uses ONNX Runtime with the all-MiniLM-L6-v2 model (384-dimensional embeddings)
+- ANN index powered by usearch, persisted in `.mneme/vectors/`
+- Feature-gated behind `local-vectors` (enabled by default)
+- Falls back to daimon when `local-vectors` is disabled or for advanced operations
+
+Set the model directory:
+```bash
+export MNEME_MODELS_DIR=/path/to/models
+```
+
+When daimon is available, Mneme uses it. When it is not, local vector search provides semantic capabilities offline.
+
 ## Configuration
 
 Environment variables:
@@ -284,6 +363,7 @@ Environment variables:
 | `MNEME_BIND` | `127.0.0.1:3838` | API server address |
 | `DAIMON_URL` | `http://127.0.0.1:8090` | Daimon agent runtime |
 | `DAIMON_API_KEY` | (none) | Daimon API key |
+| `MNEME_MODELS_DIR` | (none) | Directory for ONNX embedding models |
 | `RUST_LOG` | `info` | Log level |
 
 ## Data Storage
@@ -295,7 +375,9 @@ Environment variables:
 ├── attachments/     # Binary attachments
 └── .mneme/
     ├── db.sqlite    # Metadata index (rebuildable)
-    └── search-index/ # Tantivy index (rebuildable)
+    ├── search-index/ # Tantivy index (rebuildable)
+    ├── vectors/      # usearch ANN index (rebuildable)
+    └── optimizer.json # Retrieval optimizer state
 ```
 
 Your notes are always plain Markdown files. The database and search index are derived and can be rebuilt from the files at any time.

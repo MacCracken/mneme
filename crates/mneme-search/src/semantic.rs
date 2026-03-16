@@ -1,12 +1,14 @@
-//! Semantic search via daimon vector store.
+//! Semantic search types and hybrid merge logic.
 //!
-//! Provides vector-based similarity search by delegating to
-//! daimon's `/v1/vectors/*` and `/v1/rag/*` endpoints.
+//! Provides vector-based similarity search results and the RRF
+//! merge algorithm that combines full-text + semantic signals.
 
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::retrieval_optimizer::BlendWeights;
 
 /// A semantic search result with similarity score.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,20 +42,29 @@ pub enum ResultSource {
 
 /// Merge full-text and semantic results into a ranked hybrid list.
 ///
-/// Uses reciprocal rank fusion (RRF) to combine scores from
-/// both sources into a single ranking.
+/// Uses reciprocal rank fusion (RRF) with the default blend weights.
 pub fn hybrid_merge(
     fulltext_results: Vec<(Uuid, String, String, String, f32)>,
     semantic_results: Vec<SemanticResult>,
     limit: usize,
 ) -> Vec<HybridResult> {
+    weighted_hybrid_merge(fulltext_results, semantic_results, limit, &BlendWeights::default())
+}
+
+/// Merge with explicit blend weights from the retrieval optimizer.
+pub fn weighted_hybrid_merge(
+    fulltext_results: Vec<(Uuid, String, String, String, f32)>,
+    semantic_results: Vec<SemanticResult>,
+    limit: usize,
+    weights: &BlendWeights,
+) -> Vec<HybridResult> {
     let k = 60.0_f64; // RRF constant
 
     let mut scores: HashMap<Uuid, HybridEntry> = HashMap::new();
 
-    // Score full-text results by rank
+    // Score full-text results by rank, weighted
     for (rank, (id, title, path, snippet, _ft_score)) in fulltext_results.iter().enumerate() {
-        let rrf = 1.0 / (k + rank as f64 + 1.0);
+        let rrf = weights.fulltext / (k + rank as f64 + 1.0);
         let entry = scores.entry(*id).or_insert_with(|| HybridEntry {
             title: title.clone(),
             path: path.clone(),
@@ -66,10 +77,10 @@ pub fn hybrid_merge(
         entry.has_fulltext = true;
     }
 
-    // Score semantic results by rank
+    // Score semantic results by rank, weighted
     for (rank, result) in semantic_results.iter().enumerate() {
         if let Some(id) = result.note_id {
-            let rrf = 1.0 / (k + rank as f64 + 1.0);
+            let rrf = weights.semantic / (k + rank as f64 + 1.0);
             let entry = scores.entry(id).or_insert_with(|| HybridEntry {
                 title: result.title.clone().unwrap_or_default(),
                 path: String::new(),
@@ -80,6 +91,16 @@ pub fn hybrid_merge(
             });
             entry.score += rrf;
             entry.has_semantic = true;
+        }
+    }
+
+    // Apply recency boost (based on rank position — lower rank = more recent assumption)
+    if weights.recency > 0.0 {
+        let total = scores.len() as f64;
+        for (i, (_id, entry)) in scores.iter_mut().enumerate() {
+            // Boost inversely proportional to position
+            let recency_factor = 1.0 - (i as f64 / total.max(1.0));
+            entry.score += weights.recency * recency_factor;
         }
     }
 
@@ -165,7 +186,6 @@ mod tests {
         let results = hybrid_merge(ft, sem, 10);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].source, ResultSource::Both);
-        // Score should be higher than either alone
         assert!(results[0].score > 1.0 / 61.0);
     }
 
@@ -185,7 +205,6 @@ mod tests {
         }];
         let results = hybrid_merge(ft, sem, 10);
         assert_eq!(results.len(), 2);
-        // id1 should rank first (appears in both)
         assert_eq!(results[0].note_id, id1);
     }
 
@@ -204,5 +223,68 @@ mod tests {
             .collect();
         let results = hybrid_merge(ft, vec![], 5);
         assert_eq!(results.len(), 5);
+    }
+
+    #[test]
+    fn weighted_merge_fulltext_heavy() {
+        let id_ft = Uuid::new_v4();
+        let id_sem = Uuid::new_v4();
+        let ft = vec![(id_ft, "FT".into(), "ft.md".into(), "ft".into(), 1.0)];
+        let sem = vec![SemanticResult {
+            note_id: Some(id_sem),
+            title: Some("Sem".into()),
+            content: "semantic".into(),
+            score: 0.9,
+        }];
+        let weights = BlendWeights {
+            fulltext: 2.0,
+            semantic: 0.5,
+            recency: 0.0,
+        };
+        let results = weighted_hybrid_merge(ft, sem, 10, &weights);
+        assert_eq!(results.len(), 2);
+        // FT result should rank first due to higher weight
+        assert_eq!(results[0].note_id, id_ft);
+    }
+
+    #[test]
+    fn weighted_merge_semantic_heavy() {
+        let id_ft = Uuid::new_v4();
+        let id_sem = Uuid::new_v4();
+        let ft = vec![(id_ft, "FT".into(), "ft.md".into(), "ft".into(), 1.0)];
+        let sem = vec![SemanticResult {
+            note_id: Some(id_sem),
+            title: Some("Sem".into()),
+            content: "semantic".into(),
+            score: 0.9,
+        }];
+        let weights = BlendWeights {
+            fulltext: 0.5,
+            semantic: 2.0,
+            recency: 0.0,
+        };
+        let results = weighted_hybrid_merge(ft, sem, 10, &weights);
+        assert_eq!(results.len(), 2);
+        // Semantic result should rank first
+        assert_eq!(results[0].note_id, id_sem);
+    }
+
+    #[test]
+    fn recency_boost_adds_to_score() {
+        let id = Uuid::new_v4();
+        let ft = vec![(id, "Note".into(), "n.md".into(), "c".into(), 1.0)];
+        let no_boost = weighted_hybrid_merge(
+            ft.clone(),
+            vec![],
+            10,
+            &BlendWeights { fulltext: 1.0, semantic: 1.0, recency: 0.0 },
+        );
+        let with_boost = weighted_hybrid_merge(
+            ft,
+            vec![],
+            10,
+            &BlendWeights { fulltext: 1.0, semantic: 1.0, recency: 0.01 },
+        );
+        assert!(with_boost[0].score >= no_boost[0].score);
     }
 }

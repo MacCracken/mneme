@@ -50,22 +50,109 @@ Update a note. All fields optional.
 ### DELETE /v1/notes/{id}
 Delete a note. Returns `204 No Content`.
 
-## Search
+## Vaults
 
-### GET /v1/search?q=query&limit=20
-Full-text search across note titles, bodies, and tags.
+### GET /v1/vaults
+List all registered vaults.
 
 **Response:**
 ```json
 [
   {
-    "note_id": "uuid",
-    "title": "Note Title",
-    "path": "note.md",
-    "snippet": "...matching text...",
-    "score": 1.23
+    "id": "uuid",
+    "name": "Personal",
+    "path": "/home/user/notes",
+    "description": "Personal knowledge base",
+    "is_default": true,
+    "last_opened": "2026-03-15T10:00:00Z"
   }
 ]
+```
+
+### POST /v1/vaults
+Register a new vault.
+
+**Request:**
+```json
+{
+  "name": "Work",
+  "path": "/home/user/work-notes",
+  "description": "Work knowledge base"
+}
+```
+
+**Response:** `201 Created` with the vault object.
+
+### GET /v1/vaults/{id}
+Get vault details.
+
+### PUT /v1/vaults/{id}
+Update vault metadata (name, description).
+
+### DELETE /v1/vaults/{id}
+Unregister a vault. Returns `204 No Content`. Does not delete files.
+
+### POST /v1/vaults/{id}/switch
+Switch the active vault. Subsequent requests without `?vault=` use this vault.
+
+**Response:**
+```json
+{"status": "switched", "vault_id": "uuid", "vault_name": "Work"}
+```
+
+> **Note:** All existing endpoints accept an optional `?vault=<name-or-id>` query parameter to target a specific vault without switching.
+
+## Search
+
+### GET /v1/search?q=query&limit=20
+Full-text search across note titles, bodies, and tags. Supports `?vault=` parameter for vault-scoped search.
+
+**Response:**
+```json
+{
+  "search_id": "uuid",
+  "results": [
+    {
+      "note_id": "uuid",
+      "title": "Note Title",
+      "path": "note.md",
+      "snippet": "...matching text...",
+      "score": 1.23,
+      "vault": "Personal"
+    }
+  ]
+}
+```
+
+The `search_id` can be used with the feedback endpoint to improve future ranking.
+
+### POST /v1/search/feedback
+Record search result feedback (click-through signal) to improve ranking over time.
+
+**Request:**
+```json
+{
+  "search_id": "uuid",
+  "note_id": "uuid",
+  "action": "click"
+}
+```
+
+**Response:** `200 OK`
+
+### GET /v1/search/optimizer
+View retrieval optimizer arm statistics (Thompson Sampling bandit state).
+
+**Response:**
+```json
+{
+  "arms": [
+    {"name": "balanced", "alpha": 10.5, "beta": 3.2, "selections": 42},
+    {"name": "fulltext_heavy", "alpha": 5.1, "beta": 4.8, "selections": 20},
+    {"name": "semantic_heavy", "alpha": 7.3, "beta": 2.1, "selections": 31},
+    {"name": "recency_boost", "alpha": 3.0, "beta": 5.5, "selections": 12}
+  ]
+}
 ```
 
 ## Tags

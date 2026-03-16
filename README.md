@@ -25,12 +25,12 @@ AI-native knowledge base and personal notes built in Rust with semantic search, 
 | Crate | Purpose |
 |-------|---------|
 | `mneme-core` | Zero-I/O core types: notes, links, tags, graph, markdown AST |
-| `mneme-store` | Persistence layer: SQLite metadata, file-backed note storage |
-| `mneme-search` | Full-text search (Tantivy) + vector/semantic search integration |
+| `mneme-store` | Persistence layer: SQLite metadata, file-backed note storage, multi-vault registry |
+| `mneme-search` | Full-text search (Tantivy) + in-process vector search (usearch/ONNX) + adaptive retrieval optimizer |
 | `mneme-ai` | AI pipelines: summarization, auto-linking, concept extraction, RAG |
 | `mneme-api` | HTTP API server, integrates with daimon RAG/vector/knowledge endpoints |
 | `mneme-ui` | GUI: editor, graph visualization, search, backlinks panel |
-| `mneme-mcp` | MCP 2.0 server exposing 5 tools for Claude integration |
+| `mneme-mcp` | MCP 2.0 server exposing 8 tools for Claude integration |
 
 ## Tech Stack
 
@@ -38,7 +38,7 @@ AI-native knowledge base and personal notes built in Rust with semantic search, 
 |-------|-----------|
 | Language | Rust (2024 edition) |
 | Full-text Search | Tantivy |
-| Vector Search | daimon `/v1/vectors/*` API |
+| Vector Search | In-process (usearch + ONNX Runtime), daimon fallback |
 | RAG | daimon `/v1/rag/*` API |
 | Knowledge Graph | daimon `/v1/knowledge/*` API |
 | Markdown | `comrak` (GFM-compatible) |
@@ -67,7 +67,10 @@ make check
 
 ## AI Features
 
+- **Local Vector Search** — in-process ONNX embeddings + usearch ANN, works offline
 - **Semantic Search** — find notes by meaning, not just keywords
+- **Adaptive Ranking** — Thompson Sampling learns from your clicks to improve search over time
+- **Multi-Vault** — manage multiple knowledge bases with cross-vault search (RRF merge)
 - **Auto-Linking** — automatically discover and suggest links between related notes
 - **Summarization** — generate summaries of long notes or collections
 - **RAG** — ask questions across your entire knowledge base
@@ -84,6 +87,9 @@ make check
 | `mneme_get_note` | Retrieve a note with its content, backlinks, and metadata |
 | `mneme_update_note` | Update note content, tags, or metadata |
 | `mneme_query_graph` | Query the knowledge graph for related concepts |
+| `mneme_search_feedback` | Record search result feedback to improve ranking |
+| `mneme_list_vaults` | List all registered vaults |
+| `mneme_switch_vault` | Switch the active vault |
 
 ## Ecosystem
 

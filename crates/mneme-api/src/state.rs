@@ -5,16 +5,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mneme_ai::DaimonClient;
-use mneme_search::{SearchEngine, SemanticEngine};
+use mneme_search::{RetrievalOptimizer, SearchEngine, SemanticEngine};
 use mneme_store::VaultManager;
 use mneme_store::manager::OpenVault;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-/// Search engines associated with an open vault.
+/// Search engines and optimizer associated with an open vault.
 pub struct VaultEngines {
     pub search: SearchEngine,
     pub semantic: SemanticEngine,
+    pub optimizer: RetrievalOptimizer,
 }
 
 /// An open vault with its search engines — convenience accessor.
@@ -30,6 +31,10 @@ impl VaultWithEngines<'_> {
 
     pub fn semantic(&self) -> &SemanticEngine {
         &self.engines.semantic
+    }
+
+    pub fn optimizer(&self) -> &RetrievalOptimizer {
+        &self.engines.optimizer
     }
 }
 
@@ -63,6 +68,12 @@ impl VaultState {
         let ov = self.manager.active()?;
         let engines = self.engines.get(&ov.info.id)?;
         Some(VaultWithEngines { vault: ov, engines })
+    }
+
+    /// Get mutable engines for the active vault (for recording feedback).
+    pub fn active_engines_mut(&mut self) -> Option<&mut VaultEngines> {
+        let id = self.manager.active_id()?;
+        self.engines.get_mut(&id)
     }
 
     /// Resolve a vault by name/ID, or fall back to active.
@@ -128,7 +139,30 @@ fn create_engines(vault_path: &Path, models_dir: &Path) -> VaultEngines {
     let vectors_dir = vault_path.join(".mneme").join("vectors");
     let semantic = SemanticEngine::open(models_dir, &vectors_dir);
 
-    VaultEngines { search, semantic }
+    // Load optimizer state from disk, or create fresh
+    let optimizer_path = vault_path.join(".mneme").join("optimizer.json");
+    let optimizer = if optimizer_path.exists() {
+        std::fs::read_to_string(&optimizer_path)
+            .ok()
+            .and_then(|data| serde_json::from_str::<RetrievalOptimizer>(&data).ok())
+            .unwrap_or_default()
+    } else {
+        RetrievalOptimizer::default()
+    };
+
+    VaultEngines {
+        search,
+        semantic,
+        optimizer,
+    }
+}
+
+/// Persist the optimizer state for a vault.
+pub fn save_optimizer(vault_path: &Path, optimizer: &RetrievalOptimizer) {
+    let optimizer_path = vault_path.join(".mneme").join("optimizer.json");
+    if let Ok(data) = serde_json::to_string_pretty(optimizer) {
+        let _ = std::fs::write(&optimizer_path, data);
+    }
 }
 
 /// Shared application state.

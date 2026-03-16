@@ -6,6 +6,7 @@
 
 pub mod engine;
 pub mod error;
+pub mod retrieval_optimizer;
 pub mod semantic;
 pub mod semantic_engine;
 
@@ -18,4 +19,5 @@ pub mod cross_vault;
 
 pub use engine::SearchEngine;
 pub use error::SearchError;
+pub use retrieval_optimizer::RetrievalOptimizer;
 pub use semantic_engine::SemanticEngine;
