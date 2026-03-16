@@ -26,10 +26,10 @@
 
 | Crate | I/O | Responsibility |
 |-------|-----|---------------|
-| `mneme-core` | None | Pure types: Note, Link, Tag, Graph, Frontmatter, tasks, calendar, plugins, config (`MnemeConfig`, `VaultConfigEntry`, `VaultInfo`) |
+| `mneme-core` | None | Pure types: Note, Link, Tag, Graph, Frontmatter, tasks, calendar, plugins, config (`MnemeConfig`, `VaultConfigEntry`, `VaultInfo`), `Provenance`, `EmbeddingSection`, `ContextRetrievalConfig` |
 | `mneme-store` | SQLite, filesystem | Persistence: DB operations, file I/O, Vault, versioning, sharing, `VaultRegistry` (TOML), `VaultManager` (multi-vault lifecycle) |
-| `mneme-search` | Tantivy, ONNX, usearch | Full-text index, `Embedder` (ONNX all-MiniLM-L6-v2), `VectorStore` (usearch ANN), `SemanticEngine` (facade), `RetrievalOptimizer` (Thompson Sampling), `CrossVaultSearch` (RRF merge), hybrid merge with `BlendWeights` |
-| `mneme-ai` | HTTP (daimon) | RAG, `rag_eval` (token-overlap scoring: faithfulness, relevance, utilization), summarization, auto-linking, concepts, writing, translation, temporal, multi-modal, creative suite, flashcards |
+| `mneme-search` | Tantivy, ONNX, usearch | Full-text index, `Embedder` (ONNX all-MiniLM-L6-v2), `VectorStore` (usearch ANN), `SemanticEngine` (facade), `RetrievalOptimizer` (Thompson Sampling), `CrossVaultSearch` (RRF merge), hybrid merge with `BlendWeights`, `context_buffer` (sliding-window context assembly), `embedding_backend` (`EmbeddingBackend` trait, `LocalOnnx`, `RemoteHttp`) |
+| `mneme-ai` | HTTP (daimon) | RAG, `rag_eval` (token-overlap scoring: faithfulness, relevance, utilization), summarization, auto-linking, concepts, writing, translation, temporal, multi-modal, creative suite, flashcards, `clustering` (topic clustering via embeddings), `training_export` (JSONL export for fine-tuning) |
 | `mneme-api` | HTTP (axum) | REST API server, `VaultState` + `VaultWithEngines`, vault handlers |
 | `mneme-ui` | Terminal (crossterm) | TUI application |
 | `mneme-mcp` | Stdio | MCP server for Claude |
@@ -63,6 +63,28 @@ Ingest: Note → DaimonClient.rag_ingest() → daimon chunks + indexes
 Query:  Question → DaimonClient.rag_query() → context + source chunks
 ```
 
+### Embedding Backend Pipeline
+```
+SemanticEngine → EmbeddingBackend (trait)
+                   ├── LocalOnnx   (in-process ONNX Runtime, default)
+                   └── RemoteHttp  (Synapse /v1/embeddings)
+                   │
+                   └── Auto-selection: health probe on startup
+                       ├── RemoteHttp reachable → prefer RemoteHttp
+                       └── RemoteHttp down      → fallback to LocalOnnx
+```
+
+### Training Feedback Loop
+```
+User search → click result → TrainingLog (SQLite)
+                                  │
+                                  ▼
+                          training_export → JSONL file
+                                  │
+                                  ▼
+                          Synapse SubmitTrainingJob → fine-tuned model
+```
+
 ## Design Decisions
 
 See `docs/adr/` for Architecture Decision Records:
@@ -75,6 +97,10 @@ See `docs/adr/` for Architecture Decision Records:
 - **ADR-008**: Retrieval optimizer (Thompson Sampling feedback loop)
 - **ADR-009**: Multi-vault support (VaultRegistry, VaultManager, cross-vault search)
 - **ADR-010**: RAG evaluation metrics (token-overlap scoring, weighted overall, aggregation)
+- **ADR-011**: Embedding backend abstraction (LocalOnnx / RemoteHttp with health-probe fallback)
+- **ADR-012**: Context buffer (sliding-window context assembly for retrieval)
+- **ADR-013**: Training feedback loop (search clicks → JSONL export → Synapse fine-tuning)
+- **ADR-014**: Clustering and topic extraction (embedding-based topic clustering)
 
 ## AGNOS Integration
 
@@ -83,10 +109,15 @@ See `docs/adr/` for Architecture Decision Records:
 │                  AGNOS                    │
 │                                           │
 │  ┌──────────┐  ┌──────────┐  ┌────────┐ │
-│  │  Mneme   │  │  Daimon  │  │Synapse │ │
-│  │  :3838   │──│  :8090   │──│(local) │ │
+│  │  Mneme   │──│  Daimon  │──│Synapse │ │
+│  │  :3838   │  │  :8090   │  │(local) │ │
 │  │          │  │ RAG/Vec  │  │ models │ │
 │  └──────────┘  └──────────┘  └────────┘ │
+│       │              │             ▲     │
+│       │              │             │     │
+│       ├──────────────┼─── /v1/embeddings │
+│       │              │             │     │
+│       └──── SubmitTrainingJob ─────┘     │
 │       │                                   │
 │  ┌──────────┐                            │
 │  │SecureYeo │                            │
@@ -96,6 +127,6 @@ See `docs/adr/` for Architecture Decision Records:
 ```
 
 - **Daimon**: RAG, vector store, knowledge endpoints
-- **Synapse**: Local LLM inference for AI features
+- **Synapse**: Local LLM inference for AI features; embedding backend (`/v1/embeddings`); training job runner (`SubmitTrainingJob`)
 - **SecureYeoman**: Sandbox enforcement, MCP tool registration
 - **Marketplace**: `.agnos-agent` bundle distribution

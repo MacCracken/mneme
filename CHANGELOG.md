@@ -4,6 +4,22 @@ All notable changes to Mneme will be documented in this file.
 
 ## [2026.3.15] — 2026-03-15
 
+### Phase 13 — Synapse Direct Embedding Pipeline
+- `mneme-search/src/embedding_backend.rs`: `EmbeddingBackend` trait with `LocalOnnxBackend` and `RemoteHttpBackend`
+- `RemoteHttpBackend`: OpenAI-compatible `/v1/embeddings` client (works with Synapse, Ollama, OpenAI)
+- `build_backend()` factory: "auto" tries remote first, falls back to local ONNX
+- `SemanticEngine::open_with_config()` accepts `EmbeddingConfig` for backend selection
+- `mneme-core/src/config.rs`: `EmbeddingSection` in `MnemeConfig` (backend, remote_url, model, api_key, dimensions)
+- Health endpoint reports `embedding_backend` name and `embedding_dimension`
+- Dimension probe on remote connect to auto-detect vector size
+
+### Phase 14 — Training Feedback Export
+- `mneme-ai/src/training_export.rs`: `TrainingRecord` enum (SearchClick, EditAfterSearch, TrustOverride, NoteContent)
+- `TrainingLog`: append-only JSONL at `.mneme/training.jsonl` per vault
+- `GET /v1/export/training-data` endpoint with `?type=`, `?since=`, `?include_notes=` filters
+- Search feedback handler logs clicks with query, note title, arm name, position
+- `SearchFeedbackRequest` extended with optional `query` and `position` fields
+
 ### Phase 8 — Note Consolidation & Evolution
 - `mneme-search/src/semantic_engine.rs`: `find_similar_to()` for embedding-based duplicate detection
 - `mneme-ai/src/consolidation.rs`: `detect_duplicates_semantic()`, `MergeSuggestion` type, `DuplicatePair.detection_method` field
@@ -77,9 +93,10 @@ All notable changes to Mneme will be documented in this file.
 - `/v1/ai/rag/stats` returns eval aggregates
 
 ### Quality
-- 349 tests across 8 crates (up from 313)
+- 362 tests across 8 crates (up from 313)
 - 3 new DB migrations (001–003)
-- New modules: clustering, context_buffer
+- New modules: clustering, context_buffer, embedding_backend, training_export
+- 4 new ADRs (011–014): consolidation, clustering, embedding backends, training export
 - New deps: usearch 2, ort 2.0.0-rc.12, ndarray 0.17, tokenizers 0.21
 
 ## [2026.3.13] — 2026-03-13

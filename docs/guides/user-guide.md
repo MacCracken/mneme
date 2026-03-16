@@ -353,6 +353,106 @@ export MNEME_MODELS_DIR=/path/to/models
 
 When daimon is available, Mneme uses it. When it is not, local vector search provides semantic capabilities offline.
 
+## Note Consolidation (Phase 8)
+
+Mneme detects stale and duplicate notes so your vault stays clean.
+
+- **Stale detection** scores freshness as `days_since_update / days_since_access`. Higher scores mean more neglected notes.
+- **Duplicate detection** supports two methods: Jaccard token-overlap and embedding-based cosine similarity.
+- **LLM merge** generates a merged draft from two notes using daimon.
+
+```bash
+# Find notes untouched for 30+ days
+curl http://localhost:3838/v1/notes/stale?days=30
+
+# Find semantic duplicates above 0.92 similarity
+curl http://localhost:3838/v1/notes/duplicates?method=semantic&threshold=0.92
+
+# Request an AI-generated merge of two notes
+curl -X POST http://localhost:3838/v1/ai/consolidate/merge \
+  -H 'Content-Type: application/json' \
+  -d '{"note_a": "uuid-1", "note_b": "uuid-2"}'
+```
+
+In the TUI, press `!` to open the stale notes panel. Each entry shows days stale and freshness score.
+
+## Schema Clustering (Phase 9)
+
+Discover topic structure across your vault with K-means++ clustering.
+
+- The elbow heuristic auto-selects optimal k, or pass k explicitly.
+- Set `label=true` to have daimon generate human-readable cluster names.
+
+```bash
+# Cluster notes into 5 groups with AI-generated labels
+curl http://localhost:3838/v1/ai/clusters?k=5&label=true
+```
+
+In the TUI, press `c` to open the clusters panel. Press `Enter` to expand a cluster, then `Enter` again to open a note.
+
+## Context-Aware Retrieval (Phase 10)
+
+Mneme maintains a working-memory buffer of your 7 most recently viewed notes. Search queries are automatically fused with this context embedding using a weighted blend (default: 0.7 query, 0.3 context).
+
+Configure in `mneme.toml`:
+```toml
+[context_retrieval]
+enabled = true
+query_weight = 0.7
+buffer_capacity = 7
+```
+
+Disable per-search by appending `?context=false` to any search request.
+
+## Document Provenance & Trust (Phase 11)
+
+Every note carries a provenance that determines its default trust score:
+
+| Provenance | Default Trust |
+|------------|---------------|
+| `manual` | 1.0 |
+| `import` | 0.8 |
+| `web_clip` | 0.6 |
+| `generated` | 0.4 |
+
+Override trust per-note in frontmatter:
+```markdown
+---
+trust: high
+---
+```
+
+Accepted values: `high`, `medium`, `low`, or a float between 0.0 and 1.0. Search results are boosted multiplicatively by trust score. The TUI displays `[H]`, `[M]`, or `[L]` trust indicators next to each result. The web clipper automatically sets provenance to `web_clip`.
+
+## Pluggable Embedding Backends (Phase 13)
+
+Mneme supports local ONNX inference (bundled all-MiniLM-L6-v2) or any remote OpenAI-compatible `/v1/embeddings` provider — including Synapse, Ollama, and OpenAI.
+
+Configure in `mneme.toml`:
+```toml
+[embedding]
+backend = "auto"       # "local", "remote", or "auto"
+remote_url = "http://localhost:11434"
+model = "all-minilm"
+api_key = ""
+```
+
+In `auto` mode Mneme tries the remote backend first and falls back to local ONNX. The health endpoint reports the active backend and embedding dimension.
+
+## Training Data Export (Phase 14)
+
+Mneme logs search clicks, trust overrides, and note content for model fine-tuning.
+
+```bash
+# Export search-click events since a given date
+curl "http://localhost:3838/v1/export/training-data?type=search_click&since=2026-03-01"
+
+# Include full note content in the export
+curl "http://localhost:3838/v1/export/training-data?type=search_click&since=2026-03-01&include_notes=true"
+```
+
+Export format is JSONL. Feed the output to the Synapse fine-tuning pipeline for domain-specific models. Training logs are stored at `.mneme/training.jsonl` per vault.
+
 ## Configuration
 
 Environment variables:

@@ -9,8 +9,10 @@ Returns server status and note count.
 
 **Response:**
 ```json
-{"status": "ok", "version": "2026.3.13", "notes_count": 42}
+{"status": "ok", "version": "2026.3.13", "notes_count": 42, "embedding_backend": "local", "embedding_dimension": 384}
 ```
+
+> **Note:** The `embedding_backend` (string) and `embedding_dimension` (number) fields are also returned.
 
 ## Notes
 
@@ -118,13 +120,14 @@ Full-text search across note titles, bodies, and tags. Supports `?vault=` parame
       "path": "note.md",
       "snippet": "...matching text...",
       "score": 1.23,
+      "trust": 0.87,
       "vault": "Personal"
     }
   ]
 }
 ```
 
-The `search_id` can be used with the feedback endpoint to improve future ranking.
+The `search_id` can be used with the feedback endpoint to improve future ranking. Each result includes a `trust` field (float 0.0–1.0). Use `?context=false` to disable context-aware retrieval.
 
 ### POST /v1/search/feedback
 Record search result feedback (click-through signal) to improve ranking over time.
@@ -134,9 +137,13 @@ Record search result feedback (click-through signal) to improve ranking over tim
 {
   "search_id": "uuid",
   "note_id": "uuid",
-  "action": "click"
+  "action": "click",
+  "query": "optional original query",
+  "position": 2
 }
 ```
+
+The `query` and `position` fields are optional and used for richer click-through signals.
 
 **Response:** `200 OK`
 
@@ -407,3 +414,109 @@ Save a bookmark as a note.
 
 ### GET /v1/plugins
 List installed plugins.
+
+## Consolidation
+
+### GET /v1/notes/stale?days=90&limit=50
+List notes that have not been updated or accessed recently.
+
+**Response:**
+```json
+[
+  {
+    "note_id": "uuid",
+    "title": "Old Note",
+    "path": "old-note.md",
+    "updated_at": "2025-12-01T10:00:00Z",
+    "days_since_update": 104,
+    "last_accessed": "2025-12-15T08:00:00Z",
+    "days_since_access": 90,
+    "freshness_score": 0.12
+  }
+]
+```
+
+### GET /v1/notes/duplicates?method=both&threshold=0.7&limit=20
+Detect duplicate or near-duplicate notes.
+
+`method`: `jaccard`, `semantic`, or `both`.
+
+**Response:**
+```json
+[
+  {
+    "note_a_id": "uuid",
+    "note_b_id": "uuid",
+    "similarity": 0.85,
+    "suggestion": "merge",
+    "detection_method": "both"
+  }
+]
+```
+
+### POST /v1/ai/consolidate/merge
+Suggest a merged version of two duplicate notes.
+
+**Request:**
+```json
+{
+  "note_a_id": "uuid",
+  "note_b_id": "uuid"
+}
+```
+
+**Response:**
+```json
+{
+  "keep_id": "uuid",
+  "merged_title": "Combined Note Title",
+  "merged_content": "# Combined Note Title\n...",
+  "rationale": "Note A is more recent and comprehensive; note B adds two unique paragraphs.",
+  "confidence": 0.91
+}
+```
+
+## Clustering
+
+### GET /v1/ai/clusters?k=5&max_k=8&label=true
+Cluster notes by semantic similarity.
+
+**Response:**
+```json
+{
+  "k": 5,
+  "total_notes": 42,
+  "total_inertia": 12.34,
+  "clusters": [
+    {
+      "id": 0,
+      "label": "Rust Systems Programming",
+      "summary": "Notes about Rust language features and systems design.",
+      "note_ids": ["uuid-1", "uuid-2"],
+      "note_titles": ["Rust Ownership", "Borrow Checker Deep Dive"],
+      "inertia": 2.45
+    }
+  ]
+}
+```
+
+## Export (Training Data)
+
+### GET /v1/export/training-data?type=search_click&since=2026-03-01T00:00:00Z&include_notes=true
+Export training data records for downstream model fine-tuning.
+
+Record types: `search_click`, `edit_after_search`, `trust_override`, `note_content`.
+
+**Response:**
+```json
+{
+  "record_count": 150,
+  "records": [
+    {
+      "type": "search_click",
+      "timestamp": "2026-03-10T14:22:00Z",
+      "data": {}
+    }
+  ]
+}
+```

@@ -26,8 +26,8 @@ AI-native knowledge base and personal notes built in Rust with semantic search, 
 |-------|---------|
 | `mneme-core` | Zero-I/O core types: notes, links, tags, graph, markdown AST |
 | `mneme-store` | Persistence layer: SQLite metadata, file-backed note storage, multi-vault registry |
-| `mneme-search` | Full-text search (Tantivy) + in-process vector search (usearch/ONNX) + adaptive retrieval optimizer |
-| `mneme-ai` | AI pipelines: summarization, auto-linking, concept extraction, RAG |
+| `mneme-search` | Full-text search (Tantivy) + pluggable vector search (local ONNX or remote HTTP) + adaptive retrieval optimizer + context buffer |
+| `mneme-ai` | AI pipelines: summarization, auto-linking, concept extraction, RAG, clustering, consolidation, training export |
 | `mneme-api` | HTTP API server, integrates with daimon RAG/vector/knowledge endpoints |
 | `mneme-ui` | GUI: editor, graph visualization, search, backlinks panel |
 | `mneme-mcp` | MCP 2.0 server exposing 8 tools for Claude integration |
@@ -38,7 +38,7 @@ AI-native knowledge base and personal notes built in Rust with semantic search, 
 |-------|-----------|
 | Language | Rust (2024 edition) |
 | Full-text Search | Tantivy |
-| Vector Search | In-process (usearch + ONNX Runtime), daimon fallback |
+| Vector Search | Pluggable: local (usearch + ONNX) or remote HTTP (Synapse/Ollama/OpenAI) |
 | RAG | daimon `/v1/rag/*` API |
 | Knowledge Graph | daimon `/v1/knowledge/*` API |
 | Markdown | `comrak` (GFM-compatible) |
@@ -67,14 +67,18 @@ make check
 
 ## AI Features
 
-- **Local Vector Search** — in-process ONNX embeddings + usearch ANN, works offline
+- **Pluggable Embeddings** — local ONNX (offline) or remote HTTP (Synapse, Ollama, OpenAI) with auto-fallback
 - **Semantic Search** — find notes by meaning, not just keywords
+- **Context-Aware Retrieval** — session context biases search toward your working topic
 - **Adaptive Ranking** — Thompson Sampling learns from your clicks to improve search over time
 - **Multi-Vault** — manage multiple knowledge bases with cross-vault search (RRF merge)
+- **Note Consolidation** — detect duplicates (Jaccard + cosine), track freshness, LLM merge suggestions
+- **Schema Clustering** — K-means++ discovers topic structure; elbow heuristic auto-selects k
+- **Document Provenance** — trust scoring by origin (manual, import, web clip, AI-generated) with frontmatter overrides
+- **Training Export** — JSONL export of search feedback and note content for model fine-tuning
 - **Auto-Linking** — automatically discover and suggest links between related notes
 - **Summarization** — generate summaries of long notes or collections
-- **RAG** — ask questions across your entire knowledge base
-- **RAG Quality Metrics** — per-query faithfulness, relevance, and chunk utilization scores with vault-level aggregates
+- **RAG** — ask questions across your entire knowledge base with quality metrics
 - **Concept Extraction** — automatically extract entities, topics, and key concepts
 - **AI-Assisted Writing** — completions, rewording, expansion, and translation
 - **Knowledge Graph** — visualize connections between notes, concepts, and tags
