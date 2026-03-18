@@ -28,10 +28,8 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             arch: amd64
-            use-cross: false
           - target: aarch64-unknown-linux-gnu
             arch: arm64
-            use-cross: true
     steps:
       - uses: actions/checkout@v4
 
@@ -41,15 +39,28 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           cache-prefix: release-${{ matrix.target }}
-          install-cross: ${{ matrix.use-cross }}
+
+      - name: Install cross-compilation tools (arm64)
+        if: matrix.arch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
 
       - name: Build (native)
-        if: ${{ !matrix.use-cross }}
+        if: matrix.arch == 'amd64'
         run: cargo build --release --workspace
 
-      - name: Build (cross)
-        if: ${{ matrix.use-cross }}
-        run: cross build --release --target ${{ matrix.target }} --workspace
+      - name: Build (cross — no local-vectors)
+        if: matrix.arch == 'arm64'
+        run: |
+          # usearch/simsimd requires SVE headers not available in cross-compilers.
+          # local-vectors (usearch + ort) should be built natively on aarch64.
+          cargo build --release --target ${{ matrix.target }} --workspace --no-default-features
 
       - name: Package release
         run: |
@@ -57,7 +68,7 @@ jobs:
           RELEASE_DIR="mneme-${VERSION}-linux-${{ matrix.arch }}"
           mkdir -p "${RELEASE_DIR}"
 
-          if [ "${{ matrix.use-cross }}" = "true" ]; then
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
             BIN_DIR="target/${{ matrix.target }}/release"
           else
             BIN_DIR="target/release"
