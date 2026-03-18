@@ -171,6 +171,35 @@ Full audit of the codebase for correctness, security, and maintainability.
 
 ---
 
+## Engineering Backlog
+
+Ongoing infrastructure and quality improvements.
+
+### Test Coverage → 80%+
+
+Current: ~65% (CI threshold: 60%). The `mneme-ui` crate (0% on 770 lines)
+is the primary drag. Reaching 80%+ requires:
+
+- UI integration test harness (ratatui/crossterm) — biggest single win
+- Additional `mneme-mcp` handler tests (tools.rs ~38%, main.rs 0%)
+- `mneme-search` embedder and semantic engine integration tests
+- `mneme-store` manager edge cases and vault lifecycle tests
+- `mneme-api` handler tests with mocked state
+
+### Cross-Compilation Hardening
+
+- aarch64 builds currently exclude `local-vectors` (usearch SVE issue)
+- Investigate newer gcc-aarch64 with SVE support, or cross Docker images
+- Add aarch64 native CI runner when available
+
+### Dependency Hygiene
+
+- Evaluate alternatives to `usearch` for better cross-compilation support
+- Monitor `ort` for stable releases (currently on rc.12)
+- Weekly `cargo outdated` via dependency-update workflow
+
+---
+
 ## Next: Knowledge Base Intelligence
 
 Improvements to how Mneme understands and manages knowledge over time.

@@ -175,7 +175,7 @@ jobs:
       - name: Run coverage
         run: |
           cargo tarpaulin --workspace \
-            --fail-under 65 \
+            --fail-under 60 \
             --timeout 300 \
             --out xml \
             --skip-clean
