@@ -71,8 +71,7 @@ impl VectorStore {
         if meta_path.exists() {
             let data = std::fs::read_to_string(&meta_path)
                 .map_err(|e| SearchError::VectorStore(e.to_string()))?;
-            let persisted: PersistedMeta =
-                serde_json::from_str(&data).unwrap_or_default();
+            let persisted: PersistedMeta = serde_json::from_str(&data).unwrap_or_default();
             store.metadata = persisted.entries;
             store.next_key = persisted.next_key;
             // Rebuild note_keys from metadata
@@ -239,8 +238,7 @@ impl VectorStore {
         };
         let data = serde_json::to_string(&persisted)
             .map_err(|e| SearchError::VectorStore(e.to_string()))?;
-        std::fs::write(&meta_path, data)
-            .map_err(|e| SearchError::VectorStore(e.to_string()))?;
+        std::fs::write(&meta_path, data).map_err(|e| SearchError::VectorStore(e.to_string()))?;
 
         Ok(())
     }
@@ -248,10 +246,10 @@ impl VectorStore {
 
 impl Drop for VectorStore {
     fn drop(&mut self) {
-        if self.persist_dir.is_some() {
-            if let Err(e) = self.save() {
-                tracing::warn!("Failed to persist vector store on drop: {e}");
-            }
+        if self.persist_dir.is_some()
+            && let Err(e) = self.save()
+        {
+            tracing::warn!("Failed to persist vector store on drop: {e}");
         }
     }
 }
@@ -343,9 +341,7 @@ mod tests {
         let id2 = Uuid::new_v4();
         let id3 = Uuid::new_v4();
 
-        store
-            .insert(id1, "North", "up", &[0.0, 1.0, 0.0])
-            .unwrap();
+        store.insert(id1, "North", "up", &[0.0, 1.0, 0.0]).unwrap();
         store
             .insert(id2, "East", "right", &[1.0, 0.0, 0.0])
             .unwrap();

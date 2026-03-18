@@ -114,12 +114,7 @@ impl SemanticEngine {
     }
 
     /// Index a note: embed its content and store the vector.
-    pub fn index_note(
-        &self,
-        note_id: Uuid,
-        title: &str,
-        content: &str,
-    ) -> Result<(), SearchError> {
+    pub fn index_note(&self, note_id: Uuid, title: &str, content: &str) -> Result<(), SearchError> {
         #[cfg(feature = "local-vectors")]
         {
             let backend = match &self.backend {
@@ -175,10 +170,10 @@ impl SemanticEngine {
     pub fn indexed_note_ids(&self) -> Vec<Uuid> {
         #[cfg(feature = "local-vectors")]
         {
-            if let Some(vs) = &self.vector_store {
-                if let Ok(store) = vs.read() {
-                    return store.note_ids();
-                }
+            if let Some(vs) = &self.vector_store
+                && let Ok(store) = vs.read()
+            {
+                return store.note_ids();
             }
             vec![]
         }
@@ -238,11 +233,7 @@ impl SemanticEngine {
     }
 
     /// Search for notes similar to the query text.
-    pub fn search(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<SemanticResult>, SearchError> {
+    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SemanticResult>, SearchError> {
         #[cfg(feature = "local-vectors")]
         {
             let backend = match &self.backend {
@@ -374,11 +365,52 @@ mod tests {
             ..Default::default()
         };
         // Remote is unreachable, should degrade
+        let engine =
+            SemanticEngine::open_with_config(&PathBuf::from("/nonexistent"), dir.path(), &config);
+        assert!(!engine.is_available());
+    }
+
+    #[test]
+    fn find_similar_to_empty_when_disabled() {
+        let engine = SemanticEngine::disabled();
+        let results = engine.find_similar_to("test", 0.5, 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn context_search_empty_when_disabled() {
+        let engine = SemanticEngine::disabled();
+        let context = vec![0.0f32; 384];
+        let results = engine.context_search("test", &context, 0.7, 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn indexed_note_ids_empty_when_disabled() {
+        let engine = SemanticEngine::disabled();
+        assert!(engine.indexed_note_ids().is_empty());
+    }
+
+    #[test]
+    fn open_with_local_config_nonexistent_models() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config = EmbeddingConfig {
+            backend: "local".into(),
+            ..Default::default()
+        };
         let engine = SemanticEngine::open_with_config(
-            &PathBuf::from("/nonexistent"),
+            &PathBuf::from("/nonexistent/models"),
             dir.path(),
             &config,
         );
         assert!(!engine.is_available());
+        assert_eq!(engine.backend_name(), "none");
+        assert_eq!(engine.embedding_dimension(), 0);
+    }
+
+    #[test]
+    fn save_disabled_engine() {
+        let engine = SemanticEngine::disabled();
+        assert!(engine.save().is_ok());
     }
 }

@@ -96,11 +96,11 @@ impl VaultState {
     /// Open a vault and create its search engines.
     pub async fn open_vault(&mut self, id: Uuid) -> Result<(), anyhow::Error> {
         self.manager.open_vault(id).await?;
-        if !self.engines.contains_key(&id) {
-            if let Some(ov) = self.manager.get(id) {
-                let eng = create_engines(&ov.info.path, &self.models_dir);
-                self.engines.insert(id, eng);
-            }
+        if !self.engines.contains_key(&id)
+            && let Some(ov) = self.manager.get(id)
+        {
+            let eng = create_engines(&ov.info.path, &self.models_dir);
+            self.engines.insert(id, eng);
         }
         Ok(())
     }
@@ -115,11 +115,7 @@ impl VaultState {
     }
 
     /// Create and open a new vault.
-    pub async fn create_vault(
-        &mut self,
-        name: String,
-        path: PathBuf,
-    ) -> Result<(), anyhow::Error> {
+    pub async fn create_vault(&mut self, name: String, path: PathBuf) -> Result<(), anyhow::Error> {
         let info = self.manager.create_vault(name, path).await?.clone();
         let eng = create_engines(&info.path, &self.models_dir);
         self.engines.insert(info.id, eng);

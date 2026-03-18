@@ -40,10 +40,7 @@ pub struct VaultResults {
 ///
 /// Each vault's results are RRF-ranked internally, then the vault weight
 /// is applied as a multiplier.
-pub fn cross_vault_merge(
-    vault_results: Vec<VaultResults>,
-    limit: usize,
-) -> Vec<CrossVaultResult> {
+pub fn cross_vault_merge(vault_results: Vec<VaultResults>, limit: usize) -> Vec<CrossVaultResult> {
     let k = 60.0_f64;
     let mut all: Vec<CrossVaultResult> = Vec::new();
 
@@ -54,16 +51,16 @@ pub fn cross_vault_merge(
         // Score fulltext results by rank
         for (rank, result) in vr.fulltext.iter().enumerate() {
             let rrf = 1.0 / (k + rank as f64 + 1.0);
-            let entry = note_scores.entry(result.note_id).or_insert_with(|| {
-                CrossVaultEntry {
+            let entry = note_scores
+                .entry(result.note_id)
+                .or_insert_with(|| CrossVaultEntry {
                     title: result.title.clone(),
                     path: result.path.clone(),
                     snippet: result.snippet.clone(),
                     score: 0.0,
                     has_fulltext: false,
                     has_semantic: false,
-                }
-            });
+                });
             entry.score += rrf;
             entry.has_fulltext = true;
         }
@@ -72,16 +69,16 @@ pub fn cross_vault_merge(
         for (rank, result) in vr.semantic.iter().enumerate() {
             if let Some(note_id) = result.note_id {
                 let rrf = 1.0 / (k + rank as f64 + 1.0);
-                let entry = note_scores.entry(note_id).or_insert_with(|| {
-                    CrossVaultEntry {
+                let entry = note_scores
+                    .entry(note_id)
+                    .or_insert_with(|| CrossVaultEntry {
                         title: result.title.clone().unwrap_or_default(),
                         path: String::new(),
                         snippet: truncate(&result.content, 200),
                         score: 0.0,
                         has_fulltext: false,
                         has_semantic: false,
-                    }
-                });
+                    });
                 entry.score += rrf;
                 entry.has_semantic = true;
             }
@@ -109,7 +106,11 @@ pub fn cross_vault_merge(
         }
     }
 
-    all.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    all.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     all.truncate(limit);
     all
 }
@@ -243,7 +244,9 @@ mod tests {
     #[test]
     fn respects_limit() {
         let vault_id = Uuid::new_v4();
-        let ft: Vec<_> = (0..20).map(|i| make_ft(Uuid::new_v4(), &format!("N{i}"), 1.0)).collect();
+        let ft: Vec<_> = (0..20)
+            .map(|i| make_ft(Uuid::new_v4(), &format!("N{i}"), 1.0))
+            .collect();
 
         let results = cross_vault_merge(
             vec![VaultResults {

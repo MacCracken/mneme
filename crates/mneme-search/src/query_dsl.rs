@@ -98,7 +98,8 @@ pub fn parse_query(input: &str) -> StructuredQuery {
         }
 
         // NOT #tag
-        if (lower == "not" || lower == "!") && i + 1 < words.len() && words[i + 1].starts_with('#') {
+        if (lower == "not" || lower == "!") && i + 1 < words.len() && words[i + 1].starts_with('#')
+        {
             let tag = words[i + 1].trim_start_matches('#');
             if !tag.is_empty() {
                 query.tags.exclude.push(tag.to_string());
@@ -131,7 +132,7 @@ pub fn parse_query(input: &str) -> StructuredQuery {
                     if let Ok(n) = period.parse::<i64>() {
                         if i + 2 < words.len() {
                             let unit = words[i + 2].to_lowercase();
-                            let d = match unit.trim_end_matches('s').as_ref() {
+                            let d = match unit.trim_end_matches('s') {
                                 "day" => Some(Duration::days(n)),
                                 "week" => Some(Duration::weeks(n)),
                                 "month" => Some(Duration::days(n * 30)),
@@ -163,28 +164,30 @@ pub fn parse_query(input: &str) -> StructuredQuery {
         }
 
         // "older than N days/months"
-        if lower == "older" && i + 2 < words.len() && words[i + 1].to_lowercase() == "than" {
-            if let Ok(n) = words[i + 2].parse::<i64>() {
-                let unit = if i + 3 < words.len() {
-                    words[i + 3].to_lowercase()
-                } else {
-                    "days".into()
-                };
-                let dur = match unit.trim_end_matches('s') {
-                    "day" => Duration::days(n),
-                    "week" => Duration::weeks(n),
-                    "month" => Duration::days(n * 30),
-                    "year" => Duration::days(n * 365),
-                    _ => Duration::days(n),
-                };
-                query.temporal = Some(TemporalFilter {
-                    field: "edited".into(),
-                    after: None,
-                    before: Some(Utc::now() - dur),
-                });
-                i += 4;
-                continue;
-            }
+        if lower == "older"
+            && i + 2 < words.len()
+            && words[i + 1].to_lowercase() == "than"
+            && let Ok(n) = words[i + 2].parse::<i64>()
+        {
+            let unit = if i + 3 < words.len() {
+                words[i + 3].to_lowercase()
+            } else {
+                "days".into()
+            };
+            let dur = match unit.trim_end_matches('s') {
+                "day" => Duration::days(n),
+                "week" => Duration::weeks(n),
+                "month" => Duration::days(n * 30),
+                "year" => Duration::days(n * 365),
+                _ => Duration::days(n),
+            };
+            query.temporal = Some(TemporalFilter {
+                field: "edited".into(),
+                after: None,
+                before: Some(Utc::now() - dur),
+            });
+            i += 4;
+            continue;
         }
 
         // "stale" keyword
@@ -200,13 +203,12 @@ pub fn parse_query(input: &str) -> StructuredQuery {
             let mut hops = 2; // default
             if i + 4 < words.len()
                 && words[i + 3].to_lowercase() == "within"
+                && let Ok(n) = words[i + 4].parse::<usize>()
             {
-                if let Ok(n) = words[i + 4].parse::<usize>() {
-                    hops = n;
-                    i += 3; // skip "within N hops"
-                    if i + 1 < words.len() && words[i].to_lowercase() == "hops" {
-                        i += 1;
-                    }
+                hops = n;
+                i += 3; // skip "within N hops"
+                if i + 1 < words.len() && words[i].to_lowercase() == "hops" {
+                    i += 1;
                 }
             }
             query.graph = Some(GraphFilter {
@@ -218,16 +220,20 @@ pub fn parse_query(input: &str) -> StructuredQuery {
         }
 
         // "limit N"
-        if lower == "limit" && i + 1 < words.len() {
-            if let Ok(n) = words[i + 1].parse::<usize>() {
-                query.limit = Some(n);
-                i += 2;
-                continue;
-            }
+        if lower == "limit"
+            && i + 1 < words.len()
+            && let Ok(n) = words[i + 1].parse::<usize>()
+        {
+            query.limit = Some(n);
+            i += 2;
+            continue;
         }
 
         // Skip noise words
-        if matches!(lower.as_str(), "notes" | "about" | "from" | "the" | "with" | "edited" | "created" | "accessed") {
+        if matches!(
+            lower.as_str(),
+            "notes" | "about" | "from" | "the" | "with" | "edited" | "created" | "accessed"
+        ) {
             // "edited/created/accessed" are handled by temporal context
             i += 1;
             continue;
@@ -246,8 +252,8 @@ pub fn parse_query(input: &str) -> StructuredQuery {
 fn detect_temporal_field(words: &[&str], around_idx: usize) -> String {
     let start = around_idx.saturating_sub(3);
     let end = (around_idx + 3).min(words.len());
-    for i in start..end {
-        let w = words[i].to_lowercase();
+    for &word in &words[start..end] {
+        let w = word.to_lowercase();
         if w == "edited" || w == "updated" || w == "modified" {
             return "edited".into();
         }
@@ -351,5 +357,59 @@ mod tests {
     fn stale_keyword() {
         let q = parse_query("stale notes");
         assert!(q.stale_only);
+    }
+
+    #[test]
+    fn temporal_last_n_weeks() {
+        let q = parse_query("notes last 2 weeks");
+        assert!(q.temporal.is_some());
+        let t = q.temporal.unwrap();
+        assert!(t.after.is_some());
+    }
+
+    #[test]
+    fn temporal_last_n_months() {
+        let q = parse_query("notes last 3 months");
+        assert!(q.temporal.is_some());
+        let t = q.temporal.unwrap();
+        assert!(t.after.is_some());
+    }
+
+    #[test]
+    fn temporal_older_than_years() {
+        let q = parse_query("older than 1 year");
+        assert!(q.temporal.is_some());
+        let t = q.temporal.unwrap();
+        assert!(t.before.is_some());
+    }
+
+    #[test]
+    fn temporal_created_field() {
+        let q = parse_query("created last week");
+        assert!(q.temporal.is_some());
+        let t = q.temporal.unwrap();
+        assert_eq!(t.field, "created");
+    }
+
+    #[test]
+    fn temporal_accessed_field() {
+        let q = parse_query("accessed last 7 days");
+        assert!(q.temporal.is_some());
+        let t = q.temporal.unwrap();
+        assert_eq!(t.field, "accessed");
+    }
+
+    #[test]
+    fn temporal_last_number_only() {
+        // "last 5" without a unit should default to days
+        let q = parse_query("notes last 5");
+        assert!(q.temporal.is_some());
+    }
+
+    #[test]
+    fn temporal_older_than_without_unit() {
+        // "older than 30" without unit
+        let q = parse_query("older than 30");
+        assert!(q.temporal.is_some());
     }
 }

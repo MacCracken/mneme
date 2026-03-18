@@ -26,10 +26,7 @@ pub enum MnemeEvent {
         title: String,
     },
     #[serde(rename = "note.deleted")]
-    NoteDeleted {
-        vault_id: Uuid,
-        note_id: Uuid,
-    },
+    NoteDeleted { vault_id: Uuid, note_id: Uuid },
     #[serde(rename = "concept.extracted")]
     ConceptExtracted {
         vault_id: Uuid,
@@ -95,12 +92,11 @@ impl EventBusClient {
 
         let url = format!("{}/v1/events/publish", self.base_url);
         match self.client.post(&url).json(&body).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                resp.json::<PublishResponse>()
-                    .await
-                    .map(|r| r.delivered_to)
-                    .unwrap_or(0)
-            }
+            Ok(resp) if resp.status().is_success() => resp
+                .json::<PublishResponse>()
+                .await
+                .map(|r| r.delivered_to)
+                .unwrap_or(0),
             Ok(resp) => {
                 tracing::debug!("Event bus publish failed: {}", resp.status());
                 0
@@ -129,9 +125,10 @@ impl EventBusClient {
             return Err(AiError::Daimon(format!("Topics: {}", resp.status())));
         }
 
-        let body: TopicsResponse = resp.json().await.map_err(|e| {
-            AiError::Daimon(format!("Topics parse: {e}"))
-        })?;
+        let body: TopicsResponse = resp
+            .json()
+            .await
+            .map_err(|e| AiError::Daimon(format!("Topics parse: {e}")))?;
         Ok(body.topics)
     }
 
@@ -189,11 +186,31 @@ mod tests {
         let vid = Uuid::new_v4();
         let nid = Uuid::new_v4();
         let events = vec![
-            MnemeEvent::NoteCreated { vault_id: vid, note_id: nid, title: "t".into(), tags: vec![] },
-            MnemeEvent::NoteUpdated { vault_id: vid, note_id: nid, title: "t".into() },
-            MnemeEvent::NoteDeleted { vault_id: vid, note_id: nid },
-            MnemeEvent::ConceptExtracted { vault_id: vid, note_id: nid, concepts: vec![] },
-            MnemeEvent::SearchExecuted { vault_id: vid, query: "q".into(), result_count: 0 },
+            MnemeEvent::NoteCreated {
+                vault_id: vid,
+                note_id: nid,
+                title: "t".into(),
+                tags: vec![],
+            },
+            MnemeEvent::NoteUpdated {
+                vault_id: vid,
+                note_id: nid,
+                title: "t".into(),
+            },
+            MnemeEvent::NoteDeleted {
+                vault_id: vid,
+                note_id: nid,
+            },
+            MnemeEvent::ConceptExtracted {
+                vault_id: vid,
+                note_id: nid,
+                concepts: vec![],
+            },
+            MnemeEvent::SearchExecuted {
+                vault_id: vid,
+                query: "q".into(),
+                result_count: 0,
+            },
         ];
         for e in &events {
             assert!(e.topic().starts_with("mneme."));

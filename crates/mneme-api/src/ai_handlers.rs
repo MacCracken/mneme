@@ -470,15 +470,29 @@ pub async fn run_qa(
     let notes = ov.vault.vault.list_notes(1000, 0).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
         )
     })?;
 
     // Build note metadata for assertion generation
     let mut note_meta = Vec::new();
     for note in &notes {
-        let backlinks = ov.vault.vault.db().get_backlinks(note.id).await.unwrap_or_default();
-        let note_tags = ov.vault.vault.db().get_note_tags(note.id).await.unwrap_or_default();
+        let backlinks = ov
+            .vault
+            .vault
+            .db()
+            .get_backlinks(note.id)
+            .await
+            .unwrap_or_default();
+        let note_tags = ov
+            .vault
+            .vault
+            .db()
+            .get_note_tags(note.id)
+            .await
+            .unwrap_or_default();
         note_meta.push((note.id, note.title.clone(), note_tags, backlinks.len()));
     }
 
@@ -498,22 +512,24 @@ pub async fn run_qa(
     if state.qa_client.is_available().await {
         let vault_name = ov.vault.info.name.clone();
         drop(vs);
-        match state.qa_client.run_assertions(&assertions, &vault_name).await {
-            Ok(run_id) => {
-                match state.qa_client.get_run_result(&run_id).await {
-                    Ok(result) => return Ok(Json(result)),
-                    Err(_) => {
-                        return Ok(Json(mneme_ai::qa_bridge::QaRunResult {
-                            run_id,
-                            status: "running".into(),
-                            total_assertions: assertions.len(),
-                            passed: 0,
-                            failed: 0,
-                            failures: vec![],
-                        }));
-                    }
+        match state
+            .qa_client
+            .run_assertions(&assertions, &vault_name)
+            .await
+        {
+            Ok(run_id) => match state.qa_client.get_run_result(&run_id).await {
+                Ok(result) => return Ok(Json(result)),
+                Err(_) => {
+                    return Ok(Json(mneme_ai::qa_bridge::QaRunResult {
+                        run_id,
+                        status: "running".into(),
+                        total_assertions: assertions.len(),
+                        passed: 0,
+                        failed: 0,
+                        failures: vec![],
+                    }));
                 }
-            }
+            },
             Err(e) => {
                 tracing::warn!("Agnostic QA submit failed: {e}");
             }

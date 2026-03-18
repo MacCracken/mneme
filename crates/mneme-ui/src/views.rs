@@ -4,8 +4,8 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::widgets::canvas::{Canvas, Line as CanvasLine, Points};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
 use mneme_core::graph::NodeKind;
 
@@ -45,10 +45,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Span::raw(" "),
         Span::raw(&app.status_message),
         Span::raw("  "),
-        Span::styled(
-            help_text(app.panel),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(help_text(app.panel), Style::default().fg(Color::DarkGray)),
     ]));
     frame.render_widget(status, chunks[1]);
 }
@@ -202,10 +199,7 @@ fn render_search(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 Color::Red
             };
             ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!("{score:.2} "),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(format!("{score:.2} "), Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("[{trust_indicator}] "),
                     Style::default().fg(trust_color),
@@ -310,7 +304,9 @@ fn render_graph(frame: &mut Frame, app: &App, area: Rect) {
         .paint(move |ctx| {
             // Draw edges
             for edge in &layout.edges {
-                if let (Some(&si), Some(&ti)) = (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target)) {
+                if let (Some(&si), Some(&ti)) =
+                    (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target))
+                {
                     let s = &layout.nodes[si];
                     let t = &layout.nodes[ti];
                     ctx.draw(&CanvasLine {
@@ -361,7 +357,9 @@ fn render_graph(frame: &mut Frame, app: &App, area: Rect) {
                 vec![
                     Line::from(Span::styled(
                         &node.label,
-                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
                     )),
                     Line::from(""),
                     Line::from(format!("Type: {kind_str}")),
@@ -378,11 +376,8 @@ fn render_graph(frame: &mut Frame, app: &App, area: Rect) {
         vec![Line::from("No node selected")]
     };
 
-    let info = Paragraph::new(info_lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Node Info "),
-    );
+    let info = Paragraph::new(info_lines)
+        .block(Block::default().borders(Borders::ALL).title(" Node Info "));
     frame.render_widget(info, chunks[1]);
 }
 
@@ -394,7 +389,11 @@ fn render_split_view(frame: &mut Frame, app: &App, area: Rect) {
 
     for (i, pane) in app.split_panes.iter().enumerate() {
         let is_active = i == app.active_pane;
-        let border_color = if is_active { Color::Cyan } else { Color::DarkGray };
+        let border_color = if is_active {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        };
         let title = if pane.title.is_empty() {
             format!(" Pane {} (empty) ", i + 1)
         } else {
@@ -433,11 +432,7 @@ fn render_vault_picker(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 Style::default()
             };
-            ListItem::new(Line::from(format!(
-                "  {} {}{}",
-                v.name, active, default
-            )))
-            .style(style)
+            ListItem::new(Line::from(format!("  {} {}{}", v.name, active, default))).style(style)
         })
         .collect();
 
@@ -469,15 +464,11 @@ fn render_clusters(frame: &mut Frame, app: &App, area: Rect) {
             })
             .collect();
 
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(
-                    " {} ({} notes) — Esc to go back ",
-                    cluster.0,
-                    cluster.1.len()
-                )),
-        );
+        let list = List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
+            " {} ({} notes) — Esc to go back ",
+            cluster.0,
+            cluster.1.len()
+        )));
         frame.render_widget(list, area);
     } else {
         // Show cluster list
@@ -503,14 +494,10 @@ fn render_clusters(frame: &mut Frame, app: &App, area: Rect) {
             })
             .collect();
 
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(
-                    " Clusters ({}) — Enter to expand ",
-                    app.clusters.len()
-                )),
-        );
+        let list = List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
+            " Clusters ({}) — Enter to expand ",
+            app.clusters.len()
+        )));
         frame.render_widget(list, area);
     }
 }
@@ -529,10 +516,7 @@ fn render_stale(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default()
             };
             ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!("{days:>4}d  "),
-                    Style::default().fg(Color::Red),
-                ),
+                Span::styled(format!("{days:>4}d  "), Style::default().fg(Color::Red)),
                 Span::styled(
                     format!("{freshness:>5.1}  "),
                     Style::default().fg(Color::Magenta),
@@ -542,14 +526,10 @@ fn render_stale(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(
-                " Stale Notes ({}) — days | freshness | title ",
-                app.stale_notes.len()
-            )),
-    );
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
+        " Stale Notes ({}) — days | freshness | title ",
+        app.stale_notes.len()
+    )));
     frame.render_widget(list, area);
 }
 

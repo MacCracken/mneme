@@ -7,8 +7,8 @@
 pub mod context_buffer;
 pub mod embedding_backend;
 pub mod engine;
-pub mod query_dsl;
 pub mod error;
+pub mod query_dsl;
 pub mod retrieval_optimizer;
 pub mod semantic;
 pub mod semantic_engine;

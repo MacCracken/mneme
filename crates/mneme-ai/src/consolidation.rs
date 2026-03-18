@@ -11,6 +11,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// A note with its list of similar notes: (other_id, other_title, cosine_score).
+pub type SimilarityEntry = (Uuid, String, Vec<(Uuid, String, f64)>);
+
 /// A pair of notes detected as near-duplicates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DuplicatePair {
@@ -50,7 +53,7 @@ pub struct StaleNote {
     pub days_since_access: i64,
     /// Content freshness score: days_since_update / max(days_since_access, 1).
     /// >> 1.0 = accessed recently but old content (priority refresh);
-    /// ~1.0 = normal; high absolute age = archive candidate.
+    /// > > ~1.0 = normal; high absolute age = archive candidate.
     pub freshness_score: f64,
 }
 
@@ -78,10 +81,7 @@ pub struct NoteContent {
 ///
 /// Compares all pairs with O(n²) — suitable for vaults up to ~1000 notes.
 /// For larger vaults, use embedding-based similarity via the semantic engine.
-pub fn detect_duplicates(
-    notes: &[NoteContent],
-    threshold: f64,
-) -> Vec<DuplicatePair> {
+pub fn detect_duplicates(notes: &[NoteContent], threshold: f64) -> Vec<DuplicatePair> {
     let tokenized: Vec<(Uuid, &str, HashSet<String>)> = notes
         .iter()
         .map(|n| {
@@ -126,7 +126,7 @@ pub fn detect_duplicates(
 /// where each similar_note is (other_id, cosine_score).
 /// Deduplicates symmetric pairs (A,B) == (B,A).
 pub fn detect_duplicates_semantic(
-    similarity_map: &[(Uuid, String, Vec<(Uuid, String, f64)>)],
+    similarity_map: &[SimilarityEntry],
     threshold: f64,
 ) -> Vec<DuplicatePair> {
     let mut seen = HashSet::new();
@@ -279,8 +279,16 @@ mod tests {
     #[test]
     fn no_duplicates_for_different_content() {
         let notes = vec![
-            make_note("Rust Guide", "Rust is a systems programming language with ownership", 0),
-            make_note("Python Guide", "Python is a dynamic interpreted language with GC", 0),
+            make_note(
+                "Rust Guide",
+                "Rust is a systems programming language with ownership",
+                0,
+            ),
+            make_note(
+                "Python Guide",
+                "Python is a dynamic interpreted language with GC",
+                0,
+            ),
         ];
         let dups = detect_duplicates(&notes, 0.7);
         assert!(dups.is_empty());
@@ -289,8 +297,16 @@ mod tests {
     #[test]
     fn partial_overlap_detected() {
         let notes = vec![
-            make_note("Rust Basics", "Rust programming language provides memory safety through ownership and borrowing rules", 0),
-            make_note("Rust Safety", "Rust language provides memory safety via ownership rules and borrow checker", 0),
+            make_note(
+                "Rust Basics",
+                "Rust programming language provides memory safety through ownership and borrowing rules",
+                0,
+            ),
+            make_note(
+                "Rust Safety",
+                "Rust language provides memory safety via ownership rules and borrow checker",
+                0,
+            ),
         ];
         let dups = detect_duplicates(&notes, 0.5);
         assert_eq!(dups.len(), 1);
@@ -398,7 +414,7 @@ mod tests {
         let notes = vec![
             make_note("A", "alpha bravo charlie delta echo foxtrot golf", 0),
             make_note("B", "alpha bravo charlie delta echo foxtrot golf hotel", 0), // very similar
-            make_note("C", "alpha bravo charlie india juliet kilo lima", 0), // less similar
+            make_note("C", "alpha bravo charlie india juliet kilo lima", 0),        // less similar
         ];
         let dups = detect_duplicates(&notes, 0.3);
         if dups.len() >= 2 {

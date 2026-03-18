@@ -41,11 +41,7 @@ pub struct NoteEmbedding {
 /// Run K-means++ clustering on note embeddings.
 ///
 /// If `k` is None, uses the elbow heuristic to choose k (2..=max_k).
-pub fn cluster_notes(
-    notes: &[NoteEmbedding],
-    k: Option<usize>,
-    max_k: usize,
-) -> ClusteringResult {
+pub fn cluster_notes(notes: &[NoteEmbedding], k: Option<usize>, max_k: usize) -> ClusteringResult {
     if notes.len() < 2 {
         return ClusteringResult {
             k: 1,
@@ -95,10 +91,10 @@ fn kmeans_pp(notes: &[NoteEmbedding], k: usize, max_iters: usize) -> Vec<usize> 
     for _ in 1..k {
         let mut best_idx = 0;
         let mut best_dist = f64::MIN;
-        for i in 0..n {
+        for (i, note) in notes.iter().enumerate() {
             let min_dist = centroids
                 .iter()
-                .map(|c| squared_distance(&notes[i].embedding, c))
+                .map(|c| squared_distance(&note.embedding, c))
                 .fold(f64::MAX, f64::min);
             if min_dist > best_dist {
                 best_dist = min_dist;
@@ -114,11 +110,11 @@ fn kmeans_pp(notes: &[NoteEmbedding], k: usize, max_iters: usize) -> Vec<usize> 
     for _ in 0..max_iters {
         // Assign each point to nearest centroid
         let mut changed = false;
-        for i in 0..n {
+        for (i, note) in notes.iter().enumerate() {
             let nearest = (0..k)
                 .min_by(|&a, &b| {
-                    let da = squared_distance(&notes[i].embedding, &centroids[a]);
-                    let db = squared_distance(&notes[i].embedding, &centroids[b]);
+                    let da = squared_distance(&note.embedding, &centroids[a]);
+                    let db = squared_distance(&note.embedding, &centroids[b]);
                     da.partial_cmp(&db).unwrap()
                 })
                 .unwrap();
@@ -136,11 +132,11 @@ fn kmeans_pp(notes: &[NoteEmbedding], k: usize, max_iters: usize) -> Vec<usize> 
         let mut sums = vec![vec![0.0f64; dim]; k];
         let mut counts = vec![0usize; k];
 
-        for i in 0..n {
+        for (i, note) in notes.iter().enumerate() {
             let c = assignments[i];
             counts[c] += 1;
-            for d in 0..dim {
-                sums[c][d] += notes[i].embedding[d] as f64;
+            for (d, sum) in sums[c].iter_mut().enumerate() {
+                *sum += note.embedding[d] as f64;
             }
         }
 
@@ -161,7 +157,7 @@ fn kmeans_pp(notes: &[NoteEmbedding], k: usize, max_iters: usize) -> Vec<usize> 
 /// Computes inertia for k=2..=max_k, picks the k where the second derivative
 /// (rate of improvement change) is maximized.
 fn find_elbow(notes: &[NoteEmbedding], max_k: usize) -> usize {
-    let max_k = max_k.min(10).max(2); // cap search range
+    let max_k = max_k.clamp(2, 10); // cap search range
     if notes.len() <= 3 {
         return 2;
     }
@@ -200,8 +196,8 @@ fn compute_inertia(notes: &[NoteEmbedding], assignments: &[usize], k: usize) -> 
     for (i, note) in notes.iter().enumerate() {
         let c = assignments[i];
         counts[c] += 1;
-        for d in 0..dim {
-            sums[c][d] += note.embedding[d] as f64;
+        for (d, sum) in sums[c].iter_mut().enumerate() {
+            *sum += note.embedding[d] as f64;
         }
     }
     let centroids: Vec<Vec<f32>> = sums
@@ -224,11 +220,7 @@ fn compute_inertia(notes: &[NoteEmbedding], assignments: &[usize], k: usize) -> 
         .sum()
 }
 
-fn build_result(
-    notes: &[NoteEmbedding],
-    assignments: &[usize],
-    k: usize,
-) -> ClusteringResult {
+fn build_result(notes: &[NoteEmbedding], assignments: &[usize], k: usize) -> ClusteringResult {
     let dim = notes[0].embedding.len();
 
     // Compute centroids for inertia
@@ -237,8 +229,8 @@ fn build_result(
     for (i, note) in notes.iter().enumerate() {
         let c = assignments[i];
         counts[c] += 1;
-        for d in 0..dim {
-            sums[c][d] += note.embedding[d] as f64;
+        for (d, sum) in sums[c].iter_mut().enumerate() {
+            *sum += note.embedding[d] as f64;
         }
     }
     let centroids: Vec<Vec<f32>> = sums
@@ -298,8 +290,8 @@ fn compute_mean_all(notes: &[NoteEmbedding], dim: usize) -> Vec<f32> {
     let n = notes.len() as f64;
     let mut mean = vec![0.0f64; dim];
     for note in notes {
-        for d in 0..dim {
-            mean[d] += note.embedding[d] as f64;
+        for (d, m) in mean.iter_mut().enumerate() {
+            *m += note.embedding[d] as f64;
         }
     }
     mean.iter().map(|v| (*v / n) as f32).collect()
@@ -434,7 +426,11 @@ mod tests {
         for i in 0..20 {
             let x = (i as f32 * 0.5).cos();
             let y = (i as f32 * 0.5).sin();
-            notes.push(make_embedding(Uuid::new_v4(), &format!("N{i}"), vec![x, y, 0.0]));
+            notes.push(make_embedding(
+                Uuid::new_v4(),
+                &format!("N{i}"),
+                vec![x, y, 0.0],
+            ));
         }
 
         let r2 = cluster_notes(&notes, Some(2), 5);

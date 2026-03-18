@@ -210,4 +210,13 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("editor"));
     }
+
+    #[test]
+    fn get_user_by_id() {
+        let mut config = SharingConfig::new();
+        let user = config.add_user("Alice", UserRole::Editor);
+        assert!(config.get_user(user.id).is_some());
+        assert_eq!(config.get_user(user.id).unwrap().name, "Alice");
+        assert!(config.get_user(Uuid::new_v4()).is_none());
+    }
 }

@@ -7,8 +7,10 @@ use uuid::Uuid;
 /// How a note was created — determines its default trust score.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Provenance {
     /// Written by the user directly.
+    #[default]
     Manual,
     /// Imported from another system (Obsidian, Notion, etc.).
     Import,
@@ -38,19 +40,13 @@ impl Provenance {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s {
             "import" => Provenance::Import,
             "web_clip" | "webclip" => Provenance::WebClip,
             "generated" | "auto" => Provenance::Generated,
             _ => Provenance::Manual,
         }
-    }
-}
-
-impl Default for Provenance {
-    fn default() -> Self {
-        Provenance::Manual
     }
 }
 
@@ -90,7 +86,8 @@ impl Note {
 
     /// Effective trust score: user override if set, otherwise provenance default.
     pub fn trust_score(&self) -> f64 {
-        self.trust_override.unwrap_or_else(|| self.provenance.default_trust())
+        self.trust_override
+            .unwrap_or_else(|| self.provenance.default_trust())
     }
 }
 
@@ -168,10 +165,10 @@ mod tests {
 
     #[test]
     fn provenance_from_str() {
-        assert_eq!(Provenance::from_str("manual"), Provenance::Manual);
-        assert_eq!(Provenance::from_str("import"), Provenance::Import);
-        assert_eq!(Provenance::from_str("web_clip"), Provenance::WebClip);
-        assert_eq!(Provenance::from_str("generated"), Provenance::Generated);
-        assert_eq!(Provenance::from_str("unknown"), Provenance::Manual);
+        assert_eq!(Provenance::parse("manual"), Provenance::Manual);
+        assert_eq!(Provenance::parse("import"), Provenance::Import);
+        assert_eq!(Provenance::parse("web_clip"), Provenance::WebClip);
+        assert_eq!(Provenance::parse("generated"), Provenance::Generated);
+        assert_eq!(Provenance::parse("unknown"), Provenance::Manual);
     }
 }

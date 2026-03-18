@@ -85,7 +85,10 @@ pub async fn create_vault(
         })?;
     let active_id = vs.manager.active_id();
     let info = vs.manager.registry().get_by_name(&name).unwrap();
-    Ok((StatusCode::CREATED, Json(vault_to_response(info, active_id))))
+    Ok((
+        StatusCode::CREATED,
+        Json(vault_to_response(info, active_id)),
+    ))
 }
 
 /// Get a specific vault's info.

@@ -145,4 +145,68 @@ mod tests {
     fn title_to_path_collapses_hyphens() {
         assert_eq!(title_to_path("a   b"), "a-b.md");
     }
+
+    #[tokio::test]
+    async fn filestore_notes_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FileStore::new(dir.path());
+        assert_eq!(store.notes_dir(), dir.path().join("notes"));
+    }
+
+    #[tokio::test]
+    async fn filestore_write_and_read() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FileStore::new(dir.path());
+        store.init().await.unwrap();
+
+        store.write_note("test.md", "# Hello").await.unwrap();
+        let content = store.read_note("test.md").await.unwrap();
+        assert_eq!(content, "# Hello");
+    }
+
+    #[tokio::test]
+    async fn filestore_read_not_found() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FileStore::new(dir.path());
+        store.init().await.unwrap();
+
+        let result = store.read_note("nonexistent.md").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn filestore_delete() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FileStore::new(dir.path());
+        store.init().await.unwrap();
+
+        store.write_note("to-delete.md", "temp").await.unwrap();
+        assert!(store.exists("to-delete.md").await);
+        store.delete_note("to-delete.md").await.unwrap();
+        assert!(!store.exists("to-delete.md").await);
+    }
+
+    #[tokio::test]
+    async fn filestore_delete_not_found() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FileStore::new(dir.path());
+        store.init().await.unwrap();
+
+        let result = store.delete_note("nonexistent.md").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn filestore_write_subdirectory() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FileStore::new(dir.path());
+        store.init().await.unwrap();
+
+        store
+            .write_note("subdir/nested.md", "nested content")
+            .await
+            .unwrap();
+        let content = store.read_note("subdir/nested.md").await.unwrap();
+        assert_eq!(content, "nested content");
+    }
 }

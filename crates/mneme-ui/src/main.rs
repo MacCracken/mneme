@@ -97,25 +97,22 @@ async fn main() -> Result<()> {
                         app.graph_zoom = (app.graph_zoom / 1.2).max(0.1);
                     }
                     KeyCode::Tab => {
-                        if let Some(ref layout) = app.graph_layout {
-                            if !layout.nodes.is_empty() {
-                                let next = match app.graph_selected {
-                                    Some(i) => (i + 1) % layout.nodes.len(),
-                                    None => 0,
-                                };
-                                app.graph_selected = Some(next);
-                            }
+                        if let Some(ref layout) = app.graph_layout
+                            && !layout.nodes.is_empty()
+                        {
+                            let next = match app.graph_selected {
+                                Some(i) => (i + 1) % layout.nodes.len(),
+                                None => 0,
+                            };
+                            app.graph_selected = Some(next);
                         }
                     }
                     KeyCode::Enter => {
-                        if let (Some(sel), Some(layout)) =
-                            (app.graph_selected, &app.graph_layout)
+                        if let (Some(sel), Some(layout)) = (app.graph_selected, &app.graph_layout)
+                            && let Some(node) = layout.nodes.get(sel)
+                            && node.kind == mneme_core::graph::NodeKind::Note
                         {
-                            if let Some(node) = layout.nodes.get(sel) {
-                                if node.kind == mneme_core::graph::NodeKind::Note {
-                                    app.select_note(node.id).await;
-                                }
-                            }
+                            app.select_note(node.id).await;
                         }
                     }
                     _ => {}
@@ -238,14 +235,15 @@ async fn main() -> Result<()> {
                         app.load_clusters().await;
                     }
                     KeyCode::Char('s') => {
-                        if app.panel == Panel::NoteView {
-                            if let Some(id) = app.selected_note_id {
-                                app.panel = Panel::SplitView;
-                                app.active_pane = 0;
-                                app.load_pane(0, id).await;
-                                app.split_panes[1] = PaneState::default();
-                                app.status_message = "Split view — Tab to switch panes, 'o' to open note".into();
-                            }
+                        if app.panel == Panel::NoteView
+                            && let Some(id) = app.selected_note_id
+                        {
+                            app.panel = Panel::SplitView;
+                            app.active_pane = 0;
+                            app.load_pane(0, id).await;
+                            app.split_panes[1] = PaneState::default();
+                            app.status_message =
+                                "Split view — Tab to switch panes, 'o' to open note".into();
                         }
                     }
                     KeyCode::Esc => {
@@ -256,14 +254,14 @@ async fn main() -> Result<()> {
                     KeyCode::Up | KeyCode::Char('k') => app.select_prev(),
                     KeyCode::Down | KeyCode::Char('j') => app.select_next(),
                     KeyCode::Enter => {
-                        if app.panel == Panel::NoteList {
-                            if let Some(note) = app.notes.get(app.selected_index).cloned() {
-                                if let Some(pane_idx) = app.split_pick_pane.take() {
-                                    app.load_pane(pane_idx, note.id).await;
-                                    app.panel = Panel::SplitView;
-                                } else {
-                                    app.select_note(note.id).await;
-                                }
+                        if app.panel == Panel::NoteList
+                            && let Some(note) = app.notes.get(app.selected_index).cloned()
+                        {
+                            if let Some(pane_idx) = app.split_pick_pane.take() {
+                                app.load_pane(pane_idx, note.id).await;
+                                app.panel = Panel::SplitView;
+                            } else {
+                                app.select_note(note.id).await;
                             }
                         }
                     }

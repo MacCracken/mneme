@@ -48,7 +48,12 @@ pub fn hybrid_merge(
     semantic_results: Vec<SemanticResult>,
     limit: usize,
 ) -> Vec<HybridResult> {
-    weighted_hybrid_merge(fulltext_results, semantic_results, limit, &BlendWeights::default())
+    weighted_hybrid_merge(
+        fulltext_results,
+        semantic_results,
+        limit,
+        &BlendWeights::default(),
+    )
 }
 
 /// Merge with explicit blend weights from the retrieval optimizer.
@@ -277,13 +282,21 @@ mod tests {
             ft.clone(),
             vec![],
             10,
-            &BlendWeights { fulltext: 1.0, semantic: 1.0, recency: 0.0 },
+            &BlendWeights {
+                fulltext: 1.0,
+                semantic: 1.0,
+                recency: 0.0,
+            },
         );
         let with_boost = weighted_hybrid_merge(
             ft,
             vec![],
             10,
-            &BlendWeights { fulltext: 1.0, semantic: 1.0, recency: 0.01 },
+            &BlendWeights {
+                fulltext: 1.0,
+                semantic: 1.0,
+                recency: 0.01,
+            },
         );
         assert!(with_boost[0].score >= no_boost[0].score);
     }

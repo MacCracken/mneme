@@ -6,9 +6,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use mneme_core::config::VaultInfo;
-use mneme_core::graph::{
-    EdgeRelation, GraphEdge, GraphLayout, GraphNode, NodeKind, Subgraph,
-};
+use mneme_core::graph::{EdgeRelation, GraphEdge, GraphLayout, GraphNode, NodeKind, Subgraph};
 use mneme_core::note::Note;
 use mneme_search::{ContextBuffer, SearchEngine, SemanticEngine};
 use mneme_store::VaultManager;
@@ -28,6 +26,7 @@ pub enum Panel {
 }
 
 /// State for one pane in split view.
+#[derive(Default)]
 pub struct PaneState {
     pub note_id: Option<Uuid>,
     pub title: String,
@@ -35,19 +34,6 @@ pub struct PaneState {
     pub tags: Vec<String>,
     pub backlinks: Vec<(String, Uuid)>,
     pub scroll: u16,
-}
-
-impl Default for PaneState {
-    fn default() -> Self {
-        Self {
-            note_id: None,
-            title: String::new(),
-            content: String::new(),
-            tags: Vec::new(),
-            backlinks: Vec::new(),
-            scroll: 0,
-        }
-    }
 }
 
 /// Application state for the TUI.
@@ -91,8 +77,8 @@ pub struct App {
 
 fn create_engines(vault_path: &Path, models_dir: &Path) -> (SearchEngine, SemanticEngine) {
     let search_dir = vault_path.join(".mneme").join("search-index");
-    let search = SearchEngine::open(&search_dir)
-        .unwrap_or_else(|_| SearchEngine::in_memory().unwrap());
+    let search =
+        SearchEngine::open(&search_dir).unwrap_or_else(|_| SearchEngine::in_memory().unwrap());
     let vectors_dir = vault_path.join(".mneme").join("vectors");
     let semantic = SemanticEngine::open(models_dir, &vectors_dir);
     (search, semantic)
@@ -171,7 +157,9 @@ impl App {
 
     /// Load tags from the active vault.
     pub async fn load_tags(&mut self) {
-        let Some(ov) = self.manager.active() else { return };
+        let Some(ov) = self.manager.active() else {
+            return;
+        };
         match ov.vault.list_tags().await {
             Ok(tags) => self.tag_list = tags.into_iter().map(|t| t.name).collect(),
             Err(e) => self.status_message = format!("Error: {e}"),
@@ -180,7 +168,9 @@ impl App {
 
     /// Select and load a note.
     pub async fn select_note(&mut self, id: Uuid) {
-        let Some(ov) = self.manager.active() else { return };
+        let Some(ov) = self.manager.active() else {
+            return;
+        };
         match ov.vault.get_note(id).await {
             Ok(note) => {
                 self.selected_note_id = Some(id);
@@ -207,7 +197,9 @@ impl App {
             return;
         }
 
-        let Some(search) = self.active_search() else { return };
+        let Some(search) = self.active_search() else {
+            return;
+        };
 
         match search.search(&self.search_query, 20) {
             Ok(results) => {
@@ -217,35 +209,31 @@ impl App {
                     .collect();
 
                 // Attempt context-aware semantic re-ranking
-                if !self.context_buffer.is_empty() {
-                    if let Some(semantic) = self.active_semantic() {
-                        // Build context embedding from recent notes
-                        let recent_ids: Vec<Uuid> =
-                            self.context_buffer.recent_ids().iter().copied().collect();
-                        let mut embeddings = Vec::new();
-                        for note in &self.notes {
-                            if recent_ids.contains(&note.id) {
-                                if let Ok(Some(emb)) = semantic.embed(&note.title) {
-                                    embeddings.push((note.id, emb));
-                                }
-                            }
+                if !self.context_buffer.is_empty()
+                    && let Some(semantic) = self.active_semantic()
+                {
+                    // Build context embedding from recent notes
+                    let recent_ids: Vec<Uuid> =
+                        self.context_buffer.recent_ids().iter().copied().collect();
+                    let mut embeddings = Vec::new();
+                    for note in &self.notes {
+                        if recent_ids.contains(&note.id)
+                            && let Ok(Some(emb)) = semantic.embed(&note.title)
+                        {
+                            embeddings.push((note.id, emb));
                         }
-                        if let Some(ctx_emb) = self.context_buffer.context_embedding(&embeddings) {
-                            if let Ok(ctx_results) = semantic.context_search(
-                                &self.search_query,
-                                &ctx_emb,
-                                0.7,
-                                20,
-                            ) {
-                                // Merge semantic context results with fulltext
-                                for sr in ctx_results {
-                                    if let Some(id) = sr.note_id {
-                                        if !self.search_results.iter().any(|(rid, _, _)| *rid == id) {
-                                            let title = sr.title.unwrap_or_default();
-                                            self.search_results.push((id, title, sr.score as f32));
-                                        }
-                                    }
-                                }
+                    }
+                    if let Some(ctx_emb) = self.context_buffer.context_embedding(&embeddings)
+                        && let Ok(ctx_results) =
+                            semantic.context_search(&self.search_query, &ctx_emb, 0.7, 20)
+                    {
+                        // Merge semantic context results with fulltext
+                        for sr in ctx_results {
+                            if let Some(id) = sr.note_id
+                                && !self.search_results.iter().any(|(rid, _, _)| *rid == id)
+                            {
+                                let title = sr.title.unwrap_or_default();
+                                self.search_results.push((id, title, sr.score as f32));
                             }
                         }
                     }
@@ -259,7 +247,9 @@ impl App {
 
     /// Build and lay out the knowledge graph.
     pub async fn load_graph(&mut self) {
-        let Some(ov) = self.manager.active() else { return };
+        let Some(ov) = self.manager.active() else {
+            return;
+        };
 
         let notes = match ov.vault.list_notes(1000, 0).await {
             Ok(n) => n,
@@ -337,7 +327,9 @@ impl App {
 
     /// Load a note into a specific split pane.
     pub async fn load_pane(&mut self, pane_idx: usize, note_id: Uuid) {
-        let Some(ov) = self.manager.active() else { return };
+        let Some(ov) = self.manager.active() else {
+            return;
+        };
         match ov.vault.get_note(note_id).await {
             Ok(note) => {
                 let pane = &mut self.split_panes[pane_idx];
@@ -351,7 +343,11 @@ impl App {
                     .map(|bl| (bl.source_title, bl.source_id))
                     .collect();
                 pane.scroll = 0;
-                self.status_message = format!("Pane {}: {}", pane_idx + 1, self.split_panes[pane_idx].title);
+                self.status_message = format!(
+                    "Pane {}: {}",
+                    pane_idx + 1,
+                    self.split_panes[pane_idx].title
+                );
             }
             Err(e) => self.status_message = format!("Error: {e}"),
         }
@@ -480,12 +476,11 @@ impl App {
     pub fn select_prev(&mut self) {
         match self.panel {
             Panel::Graph => {
-                if self.graph_layout.is_some() {
-                    if let Some(sel) = self.graph_selected {
-                        if sel > 0 {
-                            self.graph_selected = Some(sel - 1);
-                        }
-                    }
+                if self.graph_layout.is_some()
+                    && let Some(sel) = self.graph_selected
+                    && sel > 0
+                {
+                    self.graph_selected = Some(sel - 1);
                 }
             }
             Panel::SplitView => {
@@ -504,12 +499,11 @@ impl App {
     pub fn select_next(&mut self) {
         match self.panel {
             Panel::Graph => {
-                if let Some(ref layout) = self.graph_layout {
-                    if let Some(sel) = self.graph_selected {
-                        if sel + 1 < layout.nodes.len() {
-                            self.graph_selected = Some(sel + 1);
-                        }
-                    }
+                if let Some(ref layout) = self.graph_layout
+                    && let Some(sel) = self.graph_selected
+                    && sel + 1 < layout.nodes.len()
+                {
+                    self.graph_selected = Some(sel + 1);
                 }
             }
             Panel::SplitView => {

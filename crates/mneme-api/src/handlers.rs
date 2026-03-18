@@ -117,7 +117,12 @@ pub async fn create_note(
     let vs = state.vaults.read().await;
     let vwe = vs.active().ok_or_else(no_vault)?;
 
-    let result = vwe.vault.vault.create_note(req).await.map_err(bad_request)?;
+    let result = vwe
+        .vault
+        .vault
+        .create_note(req)
+        .await
+        .map_err(bad_request)?;
 
     let _ = vwe.search().index_note(
         result.note.id,
@@ -141,7 +146,9 @@ pub async fn create_note(
     drop(vs);
     tokio::spawn({
         let bus = state.event_bus.clone();
-        async move { bus.publish(&event).await; }
+        async move {
+            bus.publish(&event).await;
+        }
     });
 
     Ok((StatusCode::CREATED, Json(result)))
@@ -174,7 +181,12 @@ pub async fn list_notes(
     let vwe = vs.resolve(params.vault.as_deref()).ok_or_else(no_vault)?;
     let limit = params.limit.unwrap_or(50);
     let offset = params.offset.unwrap_or(0);
-    let notes = vwe.vault.vault.list_notes(limit, offset).await.map_err(internal)?;
+    let notes = vwe
+        .vault
+        .vault
+        .list_notes(limit, offset)
+        .await
+        .map_err(internal)?;
     Ok(Json(notes))
 }
 
@@ -185,7 +197,12 @@ pub async fn update_note(
 ) -> Result<Json<NoteWithContent>, (StatusCode, Json<ErrorResponse>)> {
     let vs = state.vaults.read().await;
     let vwe = vs.active().ok_or_else(no_vault)?;
-    let result = vwe.vault.vault.update_note(id, req).await.map_err(not_found)?;
+    let result = vwe
+        .vault
+        .vault
+        .update_note(id, req)
+        .await
+        .map_err(not_found)?;
 
     let _ = vwe.search().index_note(
         result.note.id,
@@ -208,7 +225,9 @@ pub async fn update_note(
     drop(vs);
     tokio::spawn({
         let bus = state.event_bus.clone();
-        async move { bus.publish(&event).await; }
+        async move {
+            bus.publish(&event).await;
+        }
     });
 
     Ok(Json(result))
@@ -235,7 +254,8 @@ pub async fn delete_note(
             bus.publish(&mneme_ai::event_bus::MnemeEvent::NoteDeleted {
                 vault_id,
                 note_id: id,
-            }).await;
+            })
+            .await;
         }
     });
 
@@ -262,20 +282,32 @@ pub async fn search_notes(
     let use_context = params.context.unwrap_or(true);
     let sem_results = if use_context && !vwe.engines.context_buffer.is_empty() {
         // Build context embedding from recent notes
-        let recent_ids: Vec<uuid::Uuid> = vwe.engines.context_buffer.recent_ids().iter().copied().collect();
+        let recent_ids: Vec<uuid::Uuid> = vwe
+            .engines
+            .context_buffer
+            .recent_ids()
+            .iter()
+            .copied()
+            .collect();
         let mut embeddings = Vec::new();
         for id in &recent_ids {
             // Re-embed the note title as a lightweight context signal
-            if let Some(note) = vwe.vault.vault.list_notes(1000, 0).await.ok()
+            if let Some(note) = vwe
+                .vault
+                .vault
+                .list_notes(1000, 0)
+                .await
+                .ok()
                 .and_then(|notes| notes.into_iter().find(|n| n.id == *id))
+                && let Ok(Some(emb)) = vwe.semantic().embed(&note.title)
             {
-                if let Ok(Some(emb)) = vwe.semantic().embed(&note.title) {
-                    embeddings.push((*id, emb));
-                }
+                embeddings.push((*id, emb));
             }
         }
         if let Some(ctx_emb) = vwe.engines.context_buffer.context_embedding(&embeddings) {
-            vwe.semantic().context_search(&params.q, &ctx_emb, 0.7, limit).unwrap_or_default()
+            vwe.semantic()
+                .context_search(&params.q, &ctx_emb, 0.7, limit)
+                .unwrap_or_default()
         } else {
             vwe.semantic().search(&params.q, limit).unwrap_or_default()
         }
@@ -332,7 +364,10 @@ pub async fn search_notes(
         eng.optimizer.record_search(arm_idx);
     }
 
-    Ok(Json(SearchResponse { search_id, results: items }))
+    Ok(Json(SearchResponse {
+        search_id,
+        results: items,
+    }))
 }
 
 /// Record search feedback — the user clicked on a result.
@@ -350,10 +385,7 @@ pub async fn search_feedback(
 
     let mut vs = state.vaults.write().await;
     // Get vault path before mutable borrow of engines
-    let vault_path = vs
-        .manager
-        .active()
-        .map(|ov| ov.info.path.clone());
+    let vault_path = vs.manager.active().map(|ov| ov.info.path.clone());
 
     // Look up note title for training log (before mutable borrow)
     let note_title = if let Some(ov) = vs.manager.active() {
@@ -371,7 +403,10 @@ pub async fn search_feedback(
         .active_engines_mut()
         .map(|eng| {
             let stats = eng.optimizer.arm_stats();
-            stats.get(arm_idx).map(|a| a.name.clone()).unwrap_or_default()
+            stats
+                .get(arm_idx)
+                .map(|a| a.name.clone())
+                .unwrap_or_default()
         })
         .unwrap_or_default();
 
@@ -380,23 +415,23 @@ pub async fn search_feedback(
 
         // Log to training data
         if let Some(query) = &req.query {
-            let _ = eng.training_log.append(
-                &mneme_ai::training_export::TrainingRecord::SearchClick {
-                    timestamp: chrono::Utc::now(),
-                    query: query.clone(),
-                    clicked_note_id: req.note_id,
-                    clicked_note_title: note_title,
-                    search_arm: arm_name,
-                    position: req.position.unwrap_or(0),
-                },
-            );
+            let _ =
+                eng.training_log
+                    .append(&mneme_ai::training_export::TrainingRecord::SearchClick {
+                        timestamp: chrono::Utc::now(),
+                        query: query.clone(),
+                        clicked_note_id: req.note_id,
+                        clicked_note_title: note_title,
+                        search_arm: arm_name,
+                        position: req.position.unwrap_or(0),
+                    });
         }
 
         // Persist optimizer state periodically (every 10 feedbacks)
-        if eng.optimizer.total_successes % 10 == 0 {
-            if let Some(path) = &vault_path {
-                crate::state::save_optimizer(path, &eng.optimizer);
-            }
+        if eng.optimizer.total_successes % 10 == 0
+            && let Some(path) = &vault_path
+        {
+            crate::state::save_optimizer(path, &eng.optimizer);
         }
     }
 

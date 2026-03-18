@@ -119,7 +119,7 @@ impl RemoteHttpBackend {
 
 impl EmbeddingBackend for RemoteHttpBackend {
     fn embed(&self, text: &str) -> Result<Vec<f32>, SearchError> {
-        let result = self.rt.block_on(async {
+        self.rt.block_on(async {
             let url = format!("{}/v1/embeddings", self.base_url);
             let body = serde_json::json!({
                 "model": self.model,
@@ -143,9 +143,10 @@ impl EmbeddingBackend for RemoteHttpBackend {
                 )));
             }
 
-            let parsed: EmbeddingResponse = resp.json().await.map_err(|e| {
-                SearchError::VectorStore(format!("Remote embed parse error: {e}"))
-            })?;
+            let parsed: EmbeddingResponse = resp
+                .json()
+                .await
+                .map_err(|e| SearchError::VectorStore(format!("Remote embed parse error: {e}")))?;
 
             parsed
                 .data
@@ -153,9 +154,7 @@ impl EmbeddingBackend for RemoteHttpBackend {
                 .next()
                 .map(|d| d.embedding)
                 .ok_or_else(|| SearchError::VectorStore("Empty embedding response".into()))
-        });
-
-        result
+        })
     }
 
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, SearchError> {
@@ -171,9 +170,10 @@ impl EmbeddingBackend for RemoteHttpBackend {
                 req = req.bearer_auth(key);
             }
 
-            let resp = req.send().await.map_err(|e| {
-                SearchError::VectorStore(format!("Remote batch embed failed: {e}"))
-            })?;
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| SearchError::VectorStore(format!("Remote batch embed failed: {e}")))?;
 
             if !resp.status().is_success() {
                 let status = resp.status();
@@ -363,5 +363,63 @@ mod tests {
         // May be None (no local models) or Some (if ONNX happens to be around)
         // Either way, should not panic
         let _ = backend;
+    }
+
+    #[test]
+    fn config_deserialize_defaults() {
+        let json = r#"{"backend": "local"}"#;
+        let config: EmbeddingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.backend, "local");
+        assert!(config.remote_url.is_none());
+        assert!(config.model.is_none());
+        assert!(config.api_key.is_none());
+        assert!(config.dimensions.is_none());
+    }
+
+    #[test]
+    fn config_deserialize_empty_uses_auto() {
+        let json = r#"{}"#;
+        let config: EmbeddingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.backend, "auto");
+    }
+
+    #[test]
+    fn config_with_all_fields() {
+        let config = EmbeddingConfig {
+            backend: "remote".into(),
+            remote_url: Some("http://localhost:8420".into()),
+            model: Some("text-embedding-3-small".into()),
+            api_key: Some("sk-test".into()),
+            dimensions: Some(1536),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: EmbeddingConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.api_key.unwrap(), "sk-test");
+        assert_eq!(parsed.dimensions.unwrap(), 1536);
+    }
+
+    #[test]
+    fn build_remote_missing_url_returns_none() {
+        let config = EmbeddingConfig {
+            backend: "remote".into(),
+            remote_url: None,
+            ..Default::default()
+        };
+        assert!(build_remote(&config).is_none());
+    }
+
+    #[test]
+    fn build_local_nonexistent_path_returns_none() {
+        let config = EmbeddingConfig {
+            backend: "local".into(),
+            ..Default::default()
+        };
+        let result = build_local(&config, std::path::Path::new("/nonexistent/path"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn default_backend_fn() {
+        assert_eq!(default_backend(), "auto");
     }
 }

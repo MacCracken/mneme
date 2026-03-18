@@ -31,9 +31,7 @@ impl Embedder {
         let tokenizer_path = models_dir.join("tokenizer.json");
 
         if !model_path.exists() {
-            return Err(SearchError::ModelNotFound(
-                model_path.display().to_string(),
-            ));
+            return Err(SearchError::ModelNotFound(model_path.display().to_string()));
         }
         if !tokenizer_path.exists() {
             return Err(SearchError::ModelNotFound(
@@ -51,10 +49,7 @@ impl Embedder {
         let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| SearchError::Embedding(e.to_string()))?;
 
-        tracing::info!(
-            "Loaded embedding model from {}",
-            models_dir.display()
-        );
+        tracing::info!("Loaded embedding model from {}", models_dir.display());
 
         Ok(Self {
             session: std::sync::Mutex::new(session),
@@ -75,11 +70,7 @@ impl Embedder {
             .iter()
             .map(|&m| m as i64)
             .collect();
-        let type_ids: Vec<i64> = encoding
-            .get_type_ids()
-            .iter()
-            .map(|&t| t as i64)
-            .collect();
+        let type_ids: Vec<i64> = encoding.get_type_ids().iter().map(|&t| t as i64).collect();
 
         let len = ids.len();
 
@@ -112,8 +103,8 @@ impl Embedder {
         let mut pooled = vec![0.0f32; dim];
         let mut mask_sum = 0.0f32;
 
-        for t in 0..seq_len {
-            let mask_val = attention[t] as f32;
+        for (t, &mask_val_i64) in attention.iter().enumerate().take(seq_len) {
+            let mask_val = mask_val_i64 as f32;
             mask_sum += mask_val;
             let offset = t * dim;
             for d in 0..dim {

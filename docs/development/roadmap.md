@@ -1,6 +1,6 @@
 # Mneme Roadmap
 
-Version: 2026.3.15
+Version: 2026.3.18
 
 ---
 
@@ -137,6 +137,40 @@ Rich natural language queries for the AI shell.
 
 ---
 
+## Next Release Priorities
+
+### P0 — AGNOS/Agnostic/Synapse Integration Review
+
+Review changes and improvements across the AGNOS ecosystem (Synapse, Agnostic,
+SecureYeoman) for opportunities to benefit Mneme when available.
+
+- Audit Synapse embedding endpoint changes for compatibility
+- Track Agnostic QA platform updates for assertion capabilities
+- Monitor SecureYeoman MCP registration for tool verification
+- Identify cross-project improvements that benefit Mneme's AI pipelines
+
+### P0 — UI Integration Test Suite
+
+The TUI crate (`mneme-ui`) has 0% test coverage across `main.rs`, `views.rs`,
+and `app.rs` (770 lines). This is the primary drag on overall coverage.
+
+- Design integration test harness for ratatui/crossterm TUI
+- Test keyboard navigation, view switching, search interaction
+- Test app state transitions and panel rendering
+- Target: bring UI coverage above 30%
+
+### P1 — Code Audit & Review
+
+Full audit of the codebase for correctness, security, and maintainability.
+
+- Review all `unwrap()` calls for potential panics in production paths
+- Audit SQL query construction for injection risks
+- Review error handling completeness across API handlers
+- Check for dead code, unused dependencies, and stale abstractions
+- Validate cross-crate API boundaries and public surface area
+
+---
+
 ## Next: Knowledge Base Intelligence
 
 Improvements to how Mneme understands and manages knowledge over time.
@@ -209,5 +243,6 @@ Items that may be explored in future versions:
 
 | Version | Date | Milestone |
 |---------|------|-----------|
+| 2026.3.18 | 2026-03-18 | Build hardening — OpenSSL eliminated, clippy clean, 65% coverage |
 | 2026.3.15 | 2026-03-15 | Phases 5–12 complete — knowledge effectiveness suite |
 | 2026.3.13 | 2026-03-13 | Phases 1–4 + post-MVP — full feature set |

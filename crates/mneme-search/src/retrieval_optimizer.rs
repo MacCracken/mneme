@@ -335,7 +335,7 @@ mod tests {
         let arm = Arm::new("test".into(), BlendWeights::default());
         for seed in 0..100 {
             let s = arm.sample(seed);
-            assert!(s >= 0.0 && s <= 1.0);
+            assert!((0.0..=1.0).contains(&s));
         }
     }
 

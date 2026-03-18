@@ -62,10 +62,7 @@ impl RagEvalAggregates {
 pub fn evaluate(query: &str, answer: &str, context_chunks: &[&str]) -> RagEvalScores {
     let query_tokens = tokenize(query);
     let answer_tokens = tokenize(answer);
-    let context_tokens: HashSet<String> = context_chunks
-        .iter()
-        .flat_map(|c| tokenize(c))
-        .collect();
+    let context_tokens: HashSet<String> = context_chunks.iter().flat_map(|c| tokenize(c)).collect();
 
     let faithfulness = if answer_tokens.is_empty() {
         0.0
@@ -110,13 +107,12 @@ fn tokenize(text: &str) -> HashSet<String> {
 }
 
 const STOPWORDS: &[&str] = &[
-    "the", "and", "for", "are", "but", "not", "you", "all", "can", "has", "her",
-    "was", "one", "our", "out", "his", "had", "hot", "how", "its", "let", "may",
-    "who", "did", "get", "got", "him", "too", "own", "say", "she", "use", "way",
-    "each", "than", "them", "then", "this", "that", "with", "have", "from",
-    "been", "were", "what", "when", "will", "more", "some", "very", "just",
-    "about", "also", "into", "does", "could", "would", "should", "their",
-    "which", "there", "these", "those", "being", "other",
+    "the", "and", "for", "are", "but", "not", "you", "all", "can", "has", "her", "was", "one",
+    "our", "out", "his", "had", "hot", "how", "its", "let", "may", "who", "did", "get", "got",
+    "him", "too", "own", "say", "she", "use", "way", "each", "than", "them", "then", "this",
+    "that", "with", "have", "from", "been", "were", "what", "when", "will", "more", "some", "very",
+    "just", "about", "also", "into", "does", "could", "would", "should", "their", "which", "there",
+    "these", "those", "being", "other",
 ];
 
 #[cfg(test)]
@@ -211,8 +207,9 @@ mod tests {
     fn overall_is_weighted_average() {
         let context = ["Rust programming"];
         let scores = evaluate("Rust", "Rust programming language", &context);
-        let expected =
-            scores.faithfulness * 0.5 + scores.answer_relevance * 0.3 + scores.chunk_utilization * 0.2;
+        let expected = scores.faithfulness * 0.5
+            + scores.answer_relevance * 0.3
+            + scores.chunk_utilization * 0.2;
         assert!((scores.overall - expected).abs() < 1e-10);
     }
 

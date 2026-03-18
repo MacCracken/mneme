@@ -2,6 +2,21 @@
 
 All notable changes to Mneme will be documented in this file.
 
+## [2026.3.18] — 2026-03-18
+
+### Build & CI
+- Eliminated `openssl-sys` dependency by switching `ort` to `tls-rustls` backend
+- CI builds no longer require system OpenSSL/libssl-dev packages
+- Improved `bump-version.sh` to update all Cargo.toml files consistently (modeled on nazar patterns)
+- Release automation workflow now uses bump script for consistent version management
+
+### Quality
+- 450 tests across 8 crates (up from 382)
+- 65% test coverage (threshold maintained)
+- Zero clippy warnings across all crates
+- Fixed all clippy lints: loop variables, clamp patterns, type complexity, range checks
+- New test suites: `db.rs` (20 tests), `files.rs` (6 tests), additional MCP/search/manager tests
+
 ## [2026.3.15] — 2026-03-15
 
 ### Phase 13 — Synapse Direct Embedding Pipeline

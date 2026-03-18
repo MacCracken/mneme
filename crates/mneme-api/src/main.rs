@@ -78,11 +78,11 @@ async fn main() -> anyhow::Result<()> {
         }
 
         // Set default if specified
-        if let Some(default_name) = &config.default_vault {
-            if let Some(info) = registry.get_by_name(default_name) {
-                let id = info.id;
-                let _ = registry.set_default(id);
-            }
+        if let Some(default_name) = &config.default_vault
+            && let Some(info) = registry.get_by_name(default_name)
+        {
+            let id = info.id;
+            let _ = registry.set_default(id);
         }
 
         let mut vault_state = VaultState {
@@ -93,7 +93,11 @@ async fn main() -> anyhow::Result<()> {
 
         // Open the default vault
         if let Some(info) = vault_state.manager.registry().default_vault().cloned() {
-            tracing::info!("Opening default vault '{}' at {}", info.name, info.path.display());
+            tracing::info!(
+                "Opening default vault '{}' at {}",
+                info.name,
+                info.path.display()
+            );
             vault_state.open_vault(info.id).await?;
         }
 

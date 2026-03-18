@@ -61,17 +61,20 @@ impl VaultRegistry {
     /// Find a vault by name or ID string.
     pub fn resolve(&self, name_or_id: &str) -> Option<&VaultInfo> {
         // Try UUID first
-        if let Ok(id) = Uuid::parse_str(name_or_id) {
-            if let Some(v) = self.get_by_id(id) {
-                return Some(v);
-            }
+        if let Ok(id) = Uuid::parse_str(name_or_id)
+            && let Some(v) = self.get_by_id(id)
+        {
+            return Some(v);
         }
         self.get_by_name(name_or_id)
     }
 
     /// Get the default vault.
     pub fn default_vault(&self) -> Option<&VaultInfo> {
-        self.entries.iter().find(|v| v.is_default).or(self.entries.first())
+        self.entries
+            .iter()
+            .find(|v| v.is_default)
+            .or(self.entries.first())
     }
 
     /// Register a new vault.
@@ -140,8 +143,8 @@ impl VaultRegistry {
         let file = RegistryFile {
             vaults: self.entries.clone(),
         };
-        let data = toml::to_string_pretty(&file)
-            .map_err(|e| StoreError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        let data =
+            toml::to_string_pretty(&file).map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
         std::fs::write(&self.config_path, data)?;
         Ok(())
     }
@@ -167,9 +170,7 @@ mod tests {
     #[test]
     fn create_vault() {
         let mut reg = VaultRegistry::in_memory();
-        let info = reg
-            .create("work".into(), PathBuf::from("/work"))
-            .unwrap();
+        let info = reg.create("work".into(), PathBuf::from("/work")).unwrap();
         assert_eq!(info.name, "work");
         assert!(info.is_default); // first vault becomes default
         assert_eq!(reg.list().len(), 1);
@@ -232,7 +233,8 @@ mod tests {
 
         {
             let mut reg = VaultRegistry::open(&path).unwrap();
-            reg.create("persistent".into(), PathBuf::from("/p")).unwrap();
+            reg.create("persistent".into(), PathBuf::from("/p"))
+                .unwrap();
         }
 
         let reg = VaultRegistry::open(&path).unwrap();
@@ -243,7 +245,10 @@ mod tests {
     #[test]
     fn default_vault_falls_back_to_first() {
         let mut reg = VaultRegistry::in_memory();
-        let info_id = reg.create("only".into(), PathBuf::from("/only")).unwrap().id;
+        let info_id = reg
+            .create("only".into(), PathBuf::from("/only"))
+            .unwrap()
+            .id;
         // Even though first is_default=true, test fallback logic:
         let default = reg.default_vault().unwrap();
         assert_eq!(default.id, info_id);

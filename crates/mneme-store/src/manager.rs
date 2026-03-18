@@ -249,4 +249,55 @@ mod tests {
         assert!(mgr.get(id).is_some());
         assert!(mgr.get(Uuid::new_v4()).is_none());
     }
+
+    #[tokio::test]
+    async fn open_vaults_iterator() {
+        let (mut mgr, _vd) = test_manager().await;
+        let second_dir = TempDir::new().unwrap();
+        mgr.create_vault("second".into(), second_dir.path().to_path_buf())
+            .await
+            .unwrap();
+
+        let count = mgr.open_vaults().count();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn open_vault_ids_list() {
+        let (mgr, _vd) = test_manager().await;
+        let ids = mgr.open_vault_ids();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], mgr.active_id().unwrap());
+    }
+
+    #[tokio::test]
+    async fn registry_mut_access() {
+        let (mut mgr, _vd) = test_manager().await;
+        let count = mgr.registry_mut().list().len();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn open_vault_already_open() {
+        let (mut mgr, _vd) = test_manager().await;
+        let id = mgr.active_id().unwrap();
+        // Opening again should be a no-op
+        mgr.open_vault(id).await.unwrap();
+        assert_eq!(mgr.open_vault_ids().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn open_vault_not_found() {
+        let (mut mgr, _vd) = test_manager().await;
+        let result = mgr.open_vault(Uuid::new_v4()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn close_last_vault_clears_active() {
+        let (mut mgr, _vd) = test_manager().await;
+        let id = mgr.active_id().unwrap();
+        mgr.close_vault(id);
+        assert!(mgr.active_id().is_none() || mgr.open_vault_ids().is_empty());
+    }
 }

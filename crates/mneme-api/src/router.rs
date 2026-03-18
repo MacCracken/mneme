@@ -21,10 +21,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/vaults", post(vault_handlers::create_vault))
         .route("/v1/vaults/{id}", get(vault_handlers::get_vault))
         .route("/v1/vaults/{id}", delete(vault_handlers::delete_vault))
-        .route(
-            "/v1/vaults/{id}/switch",
-            post(vault_handlers::switch_vault),
-        )
+        .route("/v1/vaults/{id}/switch", post(vault_handlers::switch_vault))
         // Notes
         .route("/v1/notes", get(handlers::list_notes))
         .route("/v1/notes", post(handlers::create_note))

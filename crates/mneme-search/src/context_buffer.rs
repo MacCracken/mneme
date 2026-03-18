@@ -62,10 +62,7 @@ impl ContextBuffer {
     /// the map are skipped. Returns None if no embeddings are available.
     ///
     /// More recent notes get higher weight (linear decay from 1.0 to 0.5).
-    pub fn context_embedding(
-        &self,
-        embeddings: &[(Uuid, Vec<f32>)],
-    ) -> Option<Vec<f32>> {
+    pub fn context_embedding(&self, embeddings: &[(Uuid, Vec<f32>)]) -> Option<Vec<f32>> {
         if self.recent.is_empty() {
             return None;
         }
@@ -189,10 +186,7 @@ mod tests {
         buf.push(id1);
         buf.push(id2);
 
-        let embeddings = vec![
-            (id1, vec![1.0, 0.0, 0.0]),
-            (id2, vec![0.0, 1.0, 0.0]),
-        ];
+        let embeddings = vec![(id1, vec![1.0, 0.0, 0.0]), (id2, vec![0.0, 1.0, 0.0])];
 
         let ctx = buf.context_embedding(&embeddings).unwrap();
         assert_eq!(ctx.len(), 3);

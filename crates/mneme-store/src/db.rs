@@ -360,7 +360,7 @@ fn row_to_note(row: &sqlx::sqlite::SqliteRow) -> Result<Note, StoreError> {
         created_at: parse_datetime(&row.get::<String, _>("created_at")),
         updated_at: parse_datetime(&row.get::<String, _>("updated_at")),
         last_accessed: parse_datetime(&row.get::<String, _>("last_accessed")),
-        provenance: Provenance::from_str(&row.get::<String, _>("provenance")),
+        provenance: Provenance::parse(&row.get::<String, _>("provenance")),
         trust_override: row.get::<Option<f64>, _>("trust_override"),
     })
 }
@@ -394,4 +394,281 @@ fn parse_datetime(s: &str) -> DateTime<Utc> {
                 .map(|ndt| ndt.and_utc())
                 .unwrap_or_else(|_| Utc::now())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mneme_core::link::Link;
+    use mneme_core::note::{Note, Provenance};
+
+    async fn test_db() -> Database {
+        Database::open(":memory:").await.unwrap()
+    }
+
+    fn sample_note() -> Note {
+        let now = Utc::now();
+        Note {
+            id: Uuid::new_v4(),
+            title: "Test Note".into(),
+            path: "test-note.md".into(),
+            content_hash: "abc123".into(),
+            created_at: now,
+            updated_at: now,
+            last_accessed: now,
+            provenance: Provenance::Manual,
+            trust_override: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn open_and_migrate() {
+        let db = test_db().await;
+        assert_eq!(db.count_notes().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn insert_and_get_note() {
+        let db = test_db().await;
+        let note = sample_note();
+        db.insert_note(&note).await.unwrap();
+
+        let fetched = db.get_note(note.id).await.unwrap();
+        assert_eq!(fetched.id, note.id);
+        assert_eq!(fetched.title, "Test Note");
+        assert_eq!(fetched.path, "test-note.md");
+    }
+
+    #[tokio::test]
+    async fn get_note_by_path() {
+        let db = test_db().await;
+        let note = sample_note();
+        db.insert_note(&note).await.unwrap();
+
+        let fetched = db.get_note_by_path("test-note.md").await.unwrap();
+        assert_eq!(fetched.id, note.id);
+    }
+
+    #[tokio::test]
+    async fn get_note_not_found() {
+        let db = test_db().await;
+        let result = db.get_note(Uuid::new_v4()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_notes_with_pagination() {
+        let db = test_db().await;
+        for i in 0..5 {
+            let mut note = sample_note();
+            note.title = format!("Note {i}");
+            note.path = format!("note-{i}.md");
+            db.insert_note(&note).await.unwrap();
+        }
+
+        let all = db.list_notes(100, 0).await.unwrap();
+        assert_eq!(all.len(), 5);
+
+        let page = db.list_notes(2, 0).await.unwrap();
+        assert_eq!(page.len(), 2);
+
+        let offset = db.list_notes(100, 3).await.unwrap();
+        assert_eq!(offset.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn update_note() {
+        let db = test_db().await;
+        let note = sample_note();
+        db.insert_note(&note).await.unwrap();
+
+        db.update_note(note.id, "Updated Title", "newhash")
+            .await
+            .unwrap();
+        let fetched = db.get_note(note.id).await.unwrap();
+        assert_eq!(fetched.title, "Updated Title");
+        assert_eq!(fetched.content_hash, "newhash");
+    }
+
+    #[tokio::test]
+    async fn update_note_not_found() {
+        let db = test_db().await;
+        let result = db.update_note(Uuid::new_v4(), "title", "hash").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_note() {
+        let db = test_db().await;
+        let note = sample_note();
+        db.insert_note(&note).await.unwrap();
+
+        db.delete_note(note.id).await.unwrap();
+        assert_eq!(db.count_notes().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn delete_note_not_found() {
+        let db = test_db().await;
+        let result = db.delete_note(Uuid::new_v4()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn touch_note() {
+        let db = test_db().await;
+        let note = sample_note();
+        db.insert_note(&note).await.unwrap();
+
+        let before = db.get_note(note.id).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        db.touch_note(note.id).await.unwrap();
+        let after = db.get_note(note.id).await.unwrap();
+        assert!(after.last_accessed >= before.last_accessed);
+    }
+
+    #[tokio::test]
+    async fn count_notes() {
+        let db = test_db().await;
+        assert_eq!(db.count_notes().await.unwrap(), 0);
+
+        let note = sample_note();
+        db.insert_note(&note).await.unwrap();
+        assert_eq!(db.count_notes().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn tag_operations() {
+        let db = test_db().await;
+        let tag = db.get_or_create_tag("rust").await.unwrap();
+        assert_eq!(tag.name, "rust");
+
+        // Idempotent: get same tag
+        let tag2 = db.get_or_create_tag("rust").await.unwrap();
+        assert_eq!(tag.id, tag2.id);
+
+        let tags = db.list_tags().await.unwrap();
+        assert_eq!(tags.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_tag() {
+        let db = test_db().await;
+        let tag = db.get_or_create_tag("ephemeral").await.unwrap();
+        db.delete_tag(tag.id).await.unwrap();
+        let tags = db.list_tags().await.unwrap();
+        assert!(tags.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_tag_not_found() {
+        let db = test_db().await;
+        let result = db.delete_tag(Uuid::new_v4()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn note_tag_associations() {
+        let db = test_db().await;
+        let note = sample_note();
+        db.insert_note(&note).await.unwrap();
+
+        let tag1 = db.get_or_create_tag("rust").await.unwrap();
+        let tag2 = db.get_or_create_tag("programming").await.unwrap();
+        db.tag_note(note.id, tag1.id).await.unwrap();
+        db.tag_note(note.id, tag2.id).await.unwrap();
+
+        let tags = db.get_note_tags(note.id).await.unwrap();
+        assert_eq!(tags.len(), 2);
+        assert!(tags.contains(&"rust".to_string()));
+        assert!(tags.contains(&"programming".to_string()));
+
+        // Untag one
+        db.untag_note(note.id, tag1.id).await.unwrap();
+        let tags = db.get_note_tags(note.id).await.unwrap();
+        assert_eq!(tags.len(), 1);
+
+        // Clear all
+        db.clear_note_tags(note.id).await.unwrap();
+        let tags = db.get_note_tags(note.id).await.unwrap();
+        assert!(tags.is_empty());
+    }
+
+    #[tokio::test]
+    async fn link_operations() {
+        let db = test_db().await;
+        let note1 = sample_note();
+        let mut note2 = sample_note();
+        note2.path = "note2.md".into();
+        note2.title = "Note 2".into();
+        db.insert_note(&note1).await.unwrap();
+        db.insert_note(&note2).await.unwrap();
+
+        let link = Link {
+            id: Uuid::new_v4(),
+            source_id: note1.id,
+            target_id: note2.id,
+            link_text: "see also".into(),
+            context: "Related work".into(),
+            created_at: Utc::now(),
+        };
+        db.insert_link(&link).await.unwrap();
+
+        let outgoing = db.get_outgoing_links(note1.id).await.unwrap();
+        assert_eq!(outgoing.len(), 1);
+        assert_eq!(outgoing[0].target_id, note2.id);
+
+        let backlinks = db.get_backlinks(note2.id).await.unwrap();
+        assert_eq!(backlinks.len(), 1);
+        assert_eq!(backlinks[0].source_id, note1.id);
+        assert_eq!(backlinks[0].source_title, "Test Note");
+
+        let all_links = db.list_all_links().await.unwrap();
+        assert_eq!(all_links.len(), 1);
+
+        db.clear_note_links(note1.id).await.unwrap();
+        let outgoing = db.get_outgoing_links(note1.id).await.unwrap();
+        assert!(outgoing.is_empty());
+    }
+
+    #[tokio::test]
+    async fn provenance_roundtrip() {
+        let db = test_db().await;
+        let mut note = sample_note();
+        note.provenance = Provenance::Generated;
+        note.trust_override = Some(0.5);
+        db.insert_note(&note).await.unwrap();
+
+        let fetched = db.get_note(note.id).await.unwrap();
+        assert_eq!(fetched.provenance, Provenance::Generated);
+        assert_eq!(fetched.trust_override, Some(0.5));
+    }
+
+    #[test]
+    fn parse_datetime_rfc3339() {
+        let dt = parse_datetime("2026-03-18T12:00:00+00:00");
+        assert_eq!(dt.year(), 2026);
+        assert_eq!(dt.month(), 3);
+    }
+
+    #[test]
+    fn parse_datetime_sqlite_format() {
+        let dt = parse_datetime("2026-03-18 12:00:00");
+        assert_eq!(dt.year(), 2026);
+    }
+
+    #[test]
+    fn parse_datetime_invalid_returns_now() {
+        let dt = parse_datetime("not-a-date");
+        // Should not panic, returns Utc::now()
+        assert!(dt.year() >= 2026);
+    }
+
+    #[tokio::test]
+    async fn pool_accessor() {
+        let db = test_db().await;
+        let _pool = db.pool();
+    }
+
+    use chrono::Datelike;
 }

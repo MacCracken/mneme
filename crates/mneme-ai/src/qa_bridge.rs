@@ -59,7 +59,9 @@ pub fn generate_assertions(
     for (tag, count) in tag_counts {
         if *count < 2 {
             assertions.push(KnowledgeAssertion {
-                description: format!("Tag '#{tag}' has only {count} note(s) — consider merging or removing"),
+                description: format!(
+                    "Tag '#{tag}' has only {count} note(s) — consider merging or removing"
+                ),
                 assertion_type: AssertionType::TagMinCount,
                 note_id: None,
                 expected: "at least 2 notes per tag".into(),
@@ -147,9 +149,10 @@ impl AgnosticClient {
             return Err(AiError::Daimon(format!("Agnostic QA: {status}: {body}")));
         }
 
-        let result: serde_json::Value = resp.json().await.map_err(|e| {
-            AiError::Daimon(format!("Agnostic QA parse: {e}"))
-        })?;
+        let result: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| AiError::Daimon(format!("Agnostic QA parse: {e}")))?;
 
         result
             .get("run_id")
@@ -160,7 +163,10 @@ impl AgnosticClient {
 
     /// Get the status/results of a QA run.
     pub async fn get_run_result(&self, run_id: &str) -> Result<QaRunResult, AiError> {
-        let url = format!("{}/api/v1/runs/{}/report?format=json", self.base_url, run_id);
+        let url = format!(
+            "{}/api/v1/runs/{}/report?format=json",
+            self.base_url, run_id
+        );
         let resp = self
             .client
             .get(&url)
@@ -177,9 +183,9 @@ impl AgnosticClient {
             return Err(AiError::Daimon(format!("QA result: {status}: {body}")));
         }
 
-        resp.json().await.map_err(|e| {
-            AiError::Daimon(format!("QA result parse: {e}"))
-        })
+        resp.json()
+            .await
+            .map_err(|e| AiError::Daimon(format!("QA result parse: {e}")))
     }
 }
 
@@ -202,10 +208,7 @@ mod tests {
     #[test]
     fn generate_tag_health_assertions() {
         let notes: Vec<(Uuid, String, Vec<String>, usize)> = vec![];
-        let tags = vec![
-            ("rust".into(), 5),
-            ("lonely".into(), 1),
-        ];
+        let tags = vec![("rust".into(), 5), ("lonely".into(), 1)];
         let assertions = generate_assertions(&notes, &tags);
         assert_eq!(assertions.len(), 1);
         assert!(assertions[0].description.contains("lonely"));
