@@ -97,13 +97,23 @@ async fn handle_request(
                 }
             }
         }),
-        "tools/list" => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {
-                "tools": tool_definitions()
-            }
-        }),
+        "tools/list" => {
+            let tools: Vec<Value> = tool_definitions()
+                .into_iter()
+                .map(|t| json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "inputSchema": serde_json::to_value(&t.input_schema).unwrap_or_default(),
+                }))
+                .collect();
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "tools": tools
+                }
+            })
+        }
         "tools/call" => {
             let params = request.get("params").cloned().unwrap_or(json!({}));
             let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");

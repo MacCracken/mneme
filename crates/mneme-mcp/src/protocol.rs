@@ -1,5 +1,8 @@
 //! MCP JSON-RPC 2.0 protocol helpers.
 
+use std::collections::HashMap;
+
+use bote::{ToolDef, ToolSchema};
 use serde_json::{Value, json};
 
 /// Build a successful MCP tool result.
@@ -44,116 +47,106 @@ pub fn jsonrpc_error(id: &Value, code: i32, message: impl Into<String>) -> Value
 }
 
 /// Tool schema definitions for `tools/list`.
-pub fn tool_definitions() -> Value {
-    json!([
-        {
-            "name": "mneme_create_note",
-            "description": "Create a new note in the Mneme knowledge base with title, content, and optional tags",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "title": { "type": "string", "description": "Note title" },
-                    "content": { "type": "string", "description": "Markdown content" },
-                    "tags": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Tags to apply (e.g. [\"rust\", \"project/agnos\"])"
-                    },
-                    "path": { "type": "string", "description": "Optional file path relative to vault (auto-generated from title if omitted)" },
-                    "vault": { "type": "string", "description": "Optional vault name or ID (default: active vault)" }
-                },
-                "required": ["title", "content"]
-            }
-        },
-        {
-            "name": "mneme_search",
-            "description": "Search notes by keyword, full-text query, or tag filter. Uses hybrid FTS + semantic search when available.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string", "description": "Search query" },
-                    "limit": { "type": "integer", "description": "Max results (default: 10)", "default": 10 },
-                    "vault": { "type": "string", "description": "Optional vault name or ID (default: active vault)" }
-                },
-                "required": ["query"]
-            }
-        },
-        {
-            "name": "mneme_get_note",
-            "description": "Retrieve a note by ID with its full content, tags, and backlinks",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string", "description": "Note UUID" },
-                    "vault": { "type": "string", "description": "Optional vault name or ID (default: active vault)" }
-                },
-                "required": ["id"]
-            }
-        },
-        {
-            "name": "mneme_update_note",
-            "description": "Update a note's title, content, or tags",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string", "description": "Note UUID" },
-                    "title": { "type": "string", "description": "New title (optional)" },
-                    "content": { "type": "string", "description": "New markdown content (optional)" },
-                    "tags": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Replace tags (optional)"
-                    },
-                    "vault": { "type": "string", "description": "Optional vault name or ID (default: active vault)" }
-                },
-                "required": ["id"]
-            }
-        },
-        {
-            "name": "mneme_query_graph",
-            "description": "Query the knowledge graph for notes related to a given note, tag, or concept",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "note_id": { "type": "string", "description": "Center node UUID (optional)" },
-                    "tag": { "type": "string", "description": "Filter by tag name (optional)" },
-                    "depth": { "type": "integer", "description": "Traversal depth (default: 1)", "default": 1 },
-                    "vault": { "type": "string", "description": "Optional vault name or ID (default: active vault)" }
-                }
-            }
-        },
-        {
-            "name": "mneme_search_feedback",
-            "description": "Record that a search result was useful (clicked/opened). Improves future search ranking.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "search_id": { "type": "string", "description": "The search_id from a previous mneme_search result" },
-                    "note_id": { "type": "string", "description": "The note UUID that was useful" }
-                },
-                "required": ["search_id", "note_id"]
-            }
-        },
-        {
-            "name": "mneme_list_vaults",
-            "description": "List all registered vaults with their status",
-            "inputSchema": {
-                "type": "object",
-                "properties": {}
-            }
-        },
-        {
-            "name": "mneme_switch_vault",
-            "description": "Switch the active vault by name or ID",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "vault": { "type": "string", "description": "Vault name or UUID" }
-                },
-                "required": ["vault"]
-            }
-        }
-    ])
+pub fn tool_definitions() -> Vec<ToolDef> {
+    vec![
+        ToolDef::new(
+            "mneme_create_note",
+            "Create a new note in the Mneme knowledge base with title, content, and optional tags",
+            ToolSchema::new(
+                "object",
+                HashMap::from([
+                    ("title".into(), json!({ "type": "string", "description": "Note title" })),
+                    ("content".into(), json!({ "type": "string", "description": "Markdown content" })),
+                    ("tags".into(), json!({ "type": "array", "items": { "type": "string" }, "description": "Tags to apply (e.g. [\"rust\", \"project/agnos\"])" })),
+                    ("path".into(), json!({ "type": "string", "description": "Optional file path relative to vault (auto-generated from title if omitted)" })),
+                    ("vault".into(), json!({ "type": "string", "description": "Optional vault name or ID (default: active vault)" })),
+                ]),
+                vec!["title".into(), "content".into()],
+            ),
+        ),
+        ToolDef::new(
+            "mneme_search",
+            "Search notes by keyword, full-text query, or tag filter. Uses hybrid FTS + semantic search when available.",
+            ToolSchema::new(
+                "object",
+                HashMap::from([
+                    ("query".into(), json!({ "type": "string", "description": "Search query" })),
+                    ("limit".into(), json!({ "type": "integer", "description": "Max results (default: 10)", "default": 10 })),
+                    ("vault".into(), json!({ "type": "string", "description": "Optional vault name or ID (default: active vault)" })),
+                ]),
+                vec!["query".into()],
+            ),
+        ),
+        ToolDef::new(
+            "mneme_get_note",
+            "Retrieve a note by ID with its full content, tags, and backlinks",
+            ToolSchema::new(
+                "object",
+                HashMap::from([
+                    ("id".into(), json!({ "type": "string", "description": "Note UUID" })),
+                    ("vault".into(), json!({ "type": "string", "description": "Optional vault name or ID (default: active vault)" })),
+                ]),
+                vec!["id".into()],
+            ),
+        ),
+        ToolDef::new(
+            "mneme_update_note",
+            "Update a note's title, content, or tags",
+            ToolSchema::new(
+                "object",
+                HashMap::from([
+                    ("id".into(), json!({ "type": "string", "description": "Note UUID" })),
+                    ("title".into(), json!({ "type": "string", "description": "New title (optional)" })),
+                    ("content".into(), json!({ "type": "string", "description": "New markdown content (optional)" })),
+                    ("tags".into(), json!({ "type": "array", "items": { "type": "string" }, "description": "Replace tags (optional)" })),
+                    ("vault".into(), json!({ "type": "string", "description": "Optional vault name or ID (default: active vault)" })),
+                ]),
+                vec!["id".into()],
+            ),
+        ),
+        ToolDef::new(
+            "mneme_query_graph",
+            "Query the knowledge graph for notes related to a given note, tag, or concept",
+            ToolSchema::new(
+                "object",
+                HashMap::from([
+                    ("note_id".into(), json!({ "type": "string", "description": "Center node UUID (optional)" })),
+                    ("tag".into(), json!({ "type": "string", "description": "Filter by tag name (optional)" })),
+                    ("depth".into(), json!({ "type": "integer", "description": "Traversal depth (default: 1)", "default": 1 })),
+                    ("vault".into(), json!({ "type": "string", "description": "Optional vault name or ID (default: active vault)" })),
+                ]),
+                vec![],
+            ),
+        ),
+        ToolDef::new(
+            "mneme_search_feedback",
+            "Record that a search result was useful (clicked/opened). Improves future search ranking.",
+            ToolSchema::new(
+                "object",
+                HashMap::from([
+                    ("search_id".into(), json!({ "type": "string", "description": "The search_id from a previous mneme_search result" })),
+                    ("note_id".into(), json!({ "type": "string", "description": "The note UUID that was useful" })),
+                ]),
+                vec!["search_id".into(), "note_id".into()],
+            ),
+        ),
+        ToolDef::new(
+            "mneme_list_vaults",
+            "List all registered vaults with their status",
+            ToolSchema::new("object", HashMap::new(), vec![]),
+        ),
+        ToolDef::new(
+            "mneme_switch_vault",
+            "Switch the active vault by name or ID",
+            ToolSchema::new(
+                "object",
+                HashMap::from([
+                    ("vault".into(), json!({ "type": "string", "description": "Vault name or UUID" })),
+                ]),
+                vec!["vault".into()],
+            ),
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -178,7 +171,7 @@ mod tests {
     #[test]
     fn tool_definitions_count() {
         let tools = tool_definitions();
-        assert_eq!(tools.as_array().unwrap().len(), 8);
+        assert_eq!(tools.len(), 8);
     }
 
     #[test]
@@ -193,40 +186,29 @@ mod tests {
     #[test]
     fn tool_definitions_have_schemas() {
         let tools = tool_definitions();
-        for tool in tools.as_array().unwrap() {
-            assert!(tool["name"].is_string());
-            assert!(tool["description"].is_string());
-            assert!(tool["inputSchema"]["type"].as_str() == Some("object"));
+        for tool in &tools {
+            assert!(!tool.name.is_empty());
+            assert!(!tool.description.is_empty());
+            assert_eq!(tool.input_schema.schema_type, "object");
         }
     }
 
     #[test]
     fn tool_definitions_required_fields() {
         let tools = tool_definitions();
-        let arr = tools.as_array().unwrap();
         // create_note requires title and content
-        let create = arr
-            .iter()
-            .find(|t| t["name"] == "mneme_create_note")
-            .unwrap();
-        let required = create["inputSchema"]["required"].as_array().unwrap();
-        assert!(required.iter().any(|r| r == "title"));
-        assert!(required.iter().any(|r| r == "content"));
+        let create = tools.iter().find(|t| t.name == "mneme_create_note").unwrap();
+        assert!(create.input_schema.required.contains(&"title".to_string()));
+        assert!(create.input_schema.required.contains(&"content".to_string()));
         // search requires query
-        let search = arr.iter().find(|t| t["name"] == "mneme_search").unwrap();
-        let required = search["inputSchema"]["required"].as_array().unwrap();
-        assert!(required.iter().any(|r| r == "query"));
+        let search = tools.iter().find(|t| t.name == "mneme_search").unwrap();
+        assert!(search.input_schema.required.contains(&"query".to_string()));
     }
 
     #[test]
     fn tool_definitions_names() {
         let tools = tool_definitions();
-        let names: Vec<&str> = tools
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| t["name"].as_str().unwrap())
-            .collect();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"mneme_create_note"));
         assert!(names.contains(&"mneme_search"));
         assert!(names.contains(&"mneme_get_note"));
@@ -239,14 +221,9 @@ mod tests {
     #[test]
     fn vault_tools_exist() {
         let tools = tool_definitions();
-        let arr = tools.as_array().unwrap();
-        let list_vaults = arr.iter().find(|t| t["name"] == "mneme_list_vaults");
+        let list_vaults = tools.iter().find(|t| t.name == "mneme_list_vaults");
         assert!(list_vaults.is_some());
-        let switch = arr.iter().find(|t| t["name"] == "mneme_switch_vault");
-        assert!(switch.is_some());
-        let required = switch.unwrap()["inputSchema"]["required"]
-            .as_array()
-            .unwrap();
-        assert!(required.iter().any(|r| r == "vault"));
+        let switch = tools.iter().find(|t| t.name == "mneme_switch_vault").unwrap();
+        assert!(switch.input_schema.required.contains(&"vault".to_string()));
     }
 }

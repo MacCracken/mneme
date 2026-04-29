@@ -11,6 +11,7 @@ mneme-core = { workspace = true }
 mneme-store = { workspace = true }
 mneme-search = { workspace = true }
 mneme-ai = { workspace = true }
+bote = { path = "../../../bote" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

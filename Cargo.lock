@@ -308,6 +308,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bote"
+version = "0.50.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "bstr"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2089,6 +2099,7 @@ name = "mneme-mcp"
 version = "2026.3.18"
 dependencies = [
  "anyhow",
+ "bote",
  "dirs",
  "mneme-ai",
  "mneme-core",
