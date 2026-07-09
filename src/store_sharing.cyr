@@ -1,0 +1,196 @@
+# mneme-store — vault sharing (ported from rust-old/crates/mneme-store/src/sharing.rs)
+# Zero-I/O: multi-user access, permissions, conflict detection.
+# Requires core_uuid (v4) + chrono (clock_now_ns).
+
+enum UserRole {
+    ROLE_OWNER;
+    ROLE_EDITOR;
+    ROLE_VIEWER;
+}
+
+# UserRole.can_edit() — Owner | Editor
+fn mneme_store_role_can_edit(role): i64 {
+    if (role == ROLE_OWNER) { return 1; }
+    if (role == ROLE_EDITOR) { return 1; }
+    return 0;
+}
+# UserRole.can_manage() — Owner only
+fn mneme_store_role_can_manage(role): i64 {
+    if (role == ROLE_OWNER) { return 1; }
+    return 0;
+}
+# snake_case name of a role (used in serialization)
+fn mneme_store_role_name(role): i64 {
+    if (role == ROLE_OWNER) { return str_from("owner"); }
+    if (role == ROLE_EDITOR) { return str_from("editor"); }
+    return str_from("viewer");
+}
+
+# VaultUser (40 bytes): [id@0, name@8, role@16, joined_at@24, last_active@32]
+fn _vault_user(id, name: Str, role, joined_at, last_active): i64 {
+    var u = alloc(40);
+    store64(u, id);
+    store64(u + 8, name);
+    store64(u + 16, role);
+    store64(u + 24, joined_at);
+    store64(u + 32, last_active);
+    return u;
+}
+fn mneme_store_vault_user_id(u): i64 { return load64(u); }
+fn mneme_store_vault_user_name(u): i64 { return load64(u + 8); }
+fn mneme_store_vault_user_role(u): i64 { return load64(u + 16); }
+fn mneme_store_vault_user_joined_at(u): i64 { return load64(u + 24); }
+fn mneme_store_vault_user_last_active(u): i64 { return load64(u + 32); }
+
+# SharingConfig (24 bytes): [enabled@0, users@8 (vec<VaultUser>), allow_anonymous_read@16]
+fn mneme_store_sharing_config_new(): i64 {
+    var c = alloc(24);
+    store64(c, 0);
+    store64(c + 8, vec_new());
+    store64(c + 16, 0);
+    return c;
+}
+fn mneme_store_sharing_enabled(c): i64 { return load64(c); }
+fn mneme_store_sharing_users(c): i64 { return load64(c + 8); }
+fn mneme_store_sharing_allow_anonymous_read(c): i64 { return load64(c + 16); }
+
+# enable sharing
+fn mneme_store_sharing_enable(c): i64 {
+    store64(c, 1);
+    return 0;
+}
+
+# add a user, returns the VaultUser
+fn mneme_store_sharing_add_user(c, name: Str, role): i64 {
+    var now = clock_now_ns();
+    var user = _vault_user(mneme_core_uuid_v4(), name, role, now, now);
+    vec_push(load64(c + 8), user);
+    return user;
+}
+
+# remove a user by id — returns 1 if a user was removed, 0 otherwise
+fn mneme_store_sharing_remove_user(c, user_id): i64 {
+    var users = load64(c + 8);
+    var before = vec_len(users);
+    var kept = vec_new();
+    var i = 0;
+    while (i < before) {
+        var u = vec_get(users, i);
+        if (mneme_core_uuid_eq(mneme_store_vault_user_id(u), user_id) == 0) {
+            vec_push(kept, u);
+        }
+        i = i + 1;
+    }
+    store64(c + 8, kept);
+    if (vec_len(kept) < before) { return 1; }
+    return 0;
+}
+
+# get a user by id — returns VaultUser handle or 0 (None)
+fn mneme_store_sharing_get_user(c, user_id): i64 {
+    var users = load64(c + 8);
+    var i = 0;
+    while (i < vec_len(users)) {
+        var u = vec_get(users, i);
+        if (mneme_core_uuid_eq(mneme_store_vault_user_id(u), user_id) == 1) {
+            return u;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# can a user edit? — any user with matching id whose role can_edit
+fn mneme_store_sharing_can_edit(c, user_id): i64 {
+    var users = load64(c + 8);
+    var i = 0;
+    while (i < vec_len(users)) {
+        var u = vec_get(users, i);
+        if (mneme_core_uuid_eq(mneme_store_vault_user_id(u), user_id) == 1) {
+            if (mneme_store_role_can_edit(mneme_store_vault_user_role(u)) == 1) {
+                return 1;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# list all editors + owner — returns vec<VaultUser>
+fn mneme_store_sharing_editors(c): i64 {
+    var users = load64(c + 8);
+    var out = vec_new();
+    var i = 0;
+    while (i < vec_len(users)) {
+        var u = vec_get(users, i);
+        if (mneme_store_role_can_edit(mneme_store_vault_user_role(u)) == 1) {
+            vec_push(out, u);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+# hand-written JSON for SharingConfig (surface used by sharing_serialization test)
+fn mneme_store_sharing_config_to_json(c): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"enabled\":");
+    if (mneme_store_sharing_enabled(c) == 1) {
+        str_builder_add_cstr(sb, "true");
+    } else {
+        str_builder_add_cstr(sb, "false");
+    }
+    str_builder_add_cstr(sb, ",\"allow_anonymous_read\":");
+    if (mneme_store_sharing_allow_anonymous_read(c) == 1) {
+        str_builder_add_cstr(sb, "true");
+    } else {
+        str_builder_add_cstr(sb, "false");
+    }
+    str_builder_add_cstr(sb, ",\"users\":[");
+    var users = load64(c + 8);
+    var i = 0;
+    while (i < vec_len(users)) {
+        var u = vec_get(users, i);
+        if (i > 0) { str_builder_add_cstr(sb, ","); }
+        str_builder_add_cstr(sb, "{\"name\":\"");
+        str_builder_add(sb, mneme_store_vault_user_name(u));
+        str_builder_add_cstr(sb, "\",\"role\":\"");
+        str_builder_add(sb, mneme_store_role_name(mneme_store_vault_user_role(u)));
+        str_builder_add_cstr(sb, "\"}");
+        i = i + 1;
+    }
+    str_builder_add_cstr(sb, "]}");
+    return str_builder_build(sb);
+}
+
+enum ConflictStrategy {
+    CONFLICT_LAST_WRITE;
+    CONFLICT_KEEP_BOTH;
+    CONFLICT_MANUAL;
+}
+
+# EditConflict (56 bytes): [note_id@0, user_a@8, user_b@16, base_hash@24, hash_a@32, hash_b@40, detected_at@48]
+fn mneme_store_conflict_note_id(e): i64 { return load64(e); }
+fn mneme_store_conflict_user_a(e): i64 { return load64(e + 8); }
+fn mneme_store_conflict_user_b(e): i64 { return load64(e + 16); }
+fn mneme_store_conflict_base_hash(e): i64 { return load64(e + 24); }
+fn mneme_store_conflict_hash_a(e): i64 { return load64(e + 32); }
+fn mneme_store_conflict_hash_b(e): i64 { return load64(e + 40); }
+fn mneme_store_conflict_detected_at(e): i64 { return load64(e + 48); }
+
+# detect_conflict — returns EditConflict handle, or 0 (None) if hashes match.
+# edit_a / edit_b are (user_name, new_hash) pairs.
+fn mneme_store_detect_conflict(note_id, base_hash: Str, user_a: Str, hash_a: Str, user_b: Str, hash_b: Str): i64 {
+    if (str_eq(hash_a, hash_b) == 1) {
+        return 0;
+    }
+    var e = alloc(56);
+    store64(e, note_id);
+    store64(e + 8, user_a);
+    store64(e + 16, user_b);
+    store64(e + 24, base_hash);
+    store64(e + 32, hash_a);
+    store64(e + 40, hash_b);
+    store64(e + 48, clock_now_ns());
+    return e;
+}

@@ -1,0 +1,197 @@
+# mneme-store — vault registry (ported from rust-old/crates/mneme-store/src/registry.rs)
+# Tracks multiple vault locations + metadata. The Rust type persists as TOML at a
+# config path; all real fs/TOML I/O (open/save + persist_and_reload test) is async/
+# fs-backed and is SKIPPED here. Only the pure in-memory surface is ported.
+#
+# VaultInfo layout (defined in src/core_config.cyr, 56 bytes):
+#   [id@0, name@8, path@16, description@24, search_weight@32 (f64), last_opened@40, is_default@48]
+# Requires core_uuid (v4/eq) + chrono (clock_now_ns) + core_config (VaultInfo ctor/accessors).
+
+# --- VaultInfo helpers used by the registry (id / is_default / last_opened) ---
+fn mneme_store_vault_info_id(v): i64 { return load64(v); }
+fn mneme_store_vault_info_last_opened(v): i64 { return load64(v + 40); }
+fn mneme_store_vault_info_set_default(v, val): i64 { store64(v + 48, val); return 0; }
+fn mneme_store_vault_info_set_last_opened(v, ns): i64 { store64(v + 40, ns); return 0; }
+
+# --- uuid <-> canonical string (8-4-4-4-12 lowercase hex) ---
+# Rust's resolve() parses a uuid string then falls back to name lookup; we mirror
+# that by round-tripping the 16-byte handle through its canonical hex form.
+fn _reg_hex_nib(n): i64 {
+    if (n < 10) { return 48 + n; }
+    return 87 + n;   # 'a'..'f'
+}
+fn mneme_store_uuid_to_string(u): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < 16) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) { str_builder_putc(sb, 45); }  # '-'
+        var b = load8(u + i);
+        str_builder_putc(sb, _reg_hex_nib((b >> 4) & 15));
+        str_builder_putc(sb, _reg_hex_nib(b & 15));
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+# hex digit value of a byte, or -1 if not a hex char
+fn _reg_hex_val(c): i64 {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    if (c >= 65 && c <= 70) { return c - 55; }
+    return 0 - 1;
+}
+# Parse a canonical uuid string -> fresh 16-byte handle, or 0 if not a valid uuid.
+# (Rust: Uuid::parse_str; Some -> get_by_id, Err -> fall through to name lookup.)
+fn mneme_store_uuid_parse(s: Str): i64 {
+    var n = str_len(s);
+    if (n != 36) { return 0; }
+    var d = str_data(s);
+    var u = alloc(16);
+    var pos = 0;   # byte index into u
+    var i = 0;
+    var ok = 1;
+    while (i < 36 && ok == 1) {
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (load8(d + i) != 45) { ok = 0; }   # expect '-'
+            i = i + 1;
+        } else {
+            var hi = _reg_hex_val(load8(d + i));
+            var lo = _reg_hex_val(load8(d + i + 1));
+            if (hi < 0 || lo < 0) { ok = 0; }
+            else {
+                store8(u + pos, (hi << 4) | lo);
+                pos = pos + 1;
+                i = i + 2;
+            }
+        }
+    }
+    if (ok == 0) { return 0; }
+    if (pos != 16) { return 0; }
+    return u;
+}
+
+# --- VaultRegistry (16 bytes): [config_path@0 (Str), entries@8 (vec<VaultInfo>)] ---
+# in_memory() uses the sentinel path "/dev/null"; save() is a no-op in-memory and
+# fs-backed otherwise (fs path SKIPPED — no I/O in this port).
+fn mneme_store_registry_in_memory(): i64 {
+    var r = alloc(16);
+    store64(r, str_from("/dev/null"));
+    store64(r + 8, vec_new());
+    return r;
+}
+fn mneme_store_registry_config_path(r): i64 { return load64(r); }
+fn mneme_store_registry_entries(r): i64 { return load64(r + 8); }
+
+# list() — the entries vec.
+fn mneme_store_registry_list(r): i64 { return load64(r + 8); }
+fn mneme_store_registry_len(r): i64 { return vec_len(load64(r + 8)); }
+
+# get_by_name -> VaultInfo ptr or 0 (None).
+fn mneme_store_registry_get_by_name(r, name: Str): i64 {
+    var entries = load64(r + 8);
+    var i = 0;
+    while (i < vec_len(entries)) {
+        var v = vec_get(entries, i);
+        if (str_eq(mneme_core_vault_info_name(v), name) == 1) { return v; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# get_by_id -> VaultInfo ptr or 0 (None). Compares uuid by bytes (mneme_core_uuid_eq).
+fn mneme_store_registry_get_by_id(r, id): i64 {
+    var entries = load64(r + 8);
+    var i = 0;
+    while (i < vec_len(entries)) {
+        var v = vec_get(entries, i);
+        if (mneme_core_uuid_eq(mneme_store_vault_info_id(v), id) == 1) { return v; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# resolve(name_or_id): try uuid parse + get_by_id first, else get_by_name.
+fn mneme_store_registry_resolve(r, name_or_id: Str): i64 {
+    var id = mneme_store_uuid_parse(name_or_id);
+    if (id != 0) {
+        var v = mneme_store_registry_get_by_id(r, id);
+        if (v != 0) { return v; }
+    }
+    return mneme_store_registry_get_by_name(r, name_or_id);
+}
+
+# default_vault(): first is_default, else first entry, else 0 (None).
+fn mneme_store_registry_default_vault(r): i64 {
+    var entries = load64(r + 8);
+    var i = 0;
+    while (i < vec_len(entries)) {
+        var v = vec_get(entries, i);
+        if (mneme_core_vault_info_is_default(v) != 0) { return v; }
+        i = i + 1;
+    }
+    if (vec_len(entries) > 0) { return vec_get(entries, 0); }
+    return 0;
+}
+
+# create(name, path) -> VaultInfo ptr, or 0 on duplicate-name error
+# (Rust: Err(VaultAlreadyExists)). First vault becomes default. save() no-op in-memory.
+fn mneme_store_registry_create(r, name: Str, path: Str): i64 {
+    var entries = load64(r + 8);
+    # duplicate-name check
+    var i = 0;
+    while (i < vec_len(entries)) {
+        if (str_eq(mneme_core_vault_info_name(vec_get(entries, i)), name) == 1) { return 0; }
+        i = i + 1;
+    }
+    var is_default = 0;
+    if (vec_len(entries) == 0) { is_default = 1; }
+    var info = mneme_core_vault_info_new(name, path);
+    mneme_store_vault_info_set_default(info, is_default);
+    vec_push(entries, info);
+    return info;
+}
+
+# remove(id) -> 1 on success, 0 if not found (Rust: Err(VaultNotFound)).
+fn mneme_store_registry_remove(r, id): i64 {
+    var entries = load64(r + 8);
+    var pos = 0 - 1;
+    var i = 0;
+    while (i < vec_len(entries)) {
+        if (mneme_core_uuid_eq(mneme_store_vault_info_id(vec_get(entries, i)), id) == 1) { pos = i; }
+        i = i + 1;
+    }
+    if (pos < 0) { return 0; }
+    # rebuild entries without pos (no vec_remove; construct a fresh vec)
+    var out = vec_new();
+    var j = 0;
+    while (j < vec_len(entries)) {
+        if (j != pos) { vec_push(out, vec_get(entries, j)); }
+        j = j + 1;
+    }
+    store64(r + 8, out);
+    return 1;
+}
+
+# set_default(id) -> 1 on success, 0 if not found (Rust: Err(VaultNotFound)).
+fn mneme_store_registry_set_default(r, id): i64 {
+    var entries = load64(r + 8);
+    var found = 0;
+    var i = 0;
+    while (i < vec_len(entries)) {
+        var v = vec_get(entries, i);
+        if (mneme_core_uuid_eq(mneme_store_vault_info_id(v), id) == 1) {
+            mneme_store_vault_info_set_default(v, 1);
+            found = 1;
+        } else {
+            mneme_store_vault_info_set_default(v, 0);
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+# touch(id): update last_opened for the matching vault (no-op if absent).
+fn mneme_store_registry_touch(r, id): i64 {
+    var v = mneme_store_registry_get_by_id(r, id);
+    if (v != 0) { mneme_store_vault_info_set_last_opened(v, clock_now_ns()); }
+    return 0;
+}

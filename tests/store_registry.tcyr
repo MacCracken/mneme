@@ -1,0 +1,81 @@
+# mneme-store registry tests — ported 1:1 from rust-old/crates/mneme-store/src/registry.rs.
+# The 10 pure in-memory #[test] cases; persist_and_reload (tempfile fs I/O) is DEFERRED.
+# bayan is a carve required by core_config.cyr (VaultInfo lives there).
+include "lib/bayan.cyr"
+include "src/core_uuid.cyr"
+include "src/core_config.cyr"
+include "src/store_registry.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("store_registry");
+
+    # in_memory_starts_empty
+    var reg = mneme_store_registry_in_memory();
+    assert_eq(vec_len(mneme_store_registry_list(reg)), 0, "in_memory list empty");
+    assert_eq(mneme_store_registry_default_vault(reg), 0, "in_memory default_vault None");
+
+    # create_vault
+    var reg2 = mneme_store_registry_in_memory();
+    var info = mneme_store_registry_create(reg2, str_from("work"), str_from("/work"));
+    assert(str_eq(mneme_core_vault_info_name(info), str_from("work")), "created name work");
+    assert_neq(mneme_core_vault_info_is_default(info), 0, "first vault is_default");
+    assert_eq(mneme_store_registry_len(reg2), 1, "list len 1");
+
+    # create_duplicate_name_fails
+    var reg3 = mneme_store_registry_in_memory();
+    mneme_store_registry_create(reg3, str_from("work"), str_from("/work"));
+    var dup = mneme_store_registry_create(reg3, str_from("work"), str_from("/other"));
+    assert_eq(dup, 0, "duplicate name fails");
+
+    # resolve_by_name
+    var reg4 = mneme_store_registry_in_memory();
+    mneme_store_registry_create(reg4, str_from("personal"), str_from("/p"));
+    assert_neq(mneme_store_registry_resolve(reg4, str_from("personal")), 0, "resolve personal Some");
+    assert_eq(mneme_store_registry_resolve(reg4, str_from("nonexistent")), 0, "resolve nonexistent None");
+
+    # resolve_by_id
+    var reg5 = mneme_store_registry_in_memory();
+    var info5 = mneme_store_registry_create(reg5, str_from("work"), str_from("/w"));
+    var id5 = mneme_store_vault_info_id(info5);
+    var idstr5 = mneme_store_uuid_to_string(id5);
+    assert_neq(mneme_store_registry_resolve(reg5, idstr5), 0, "resolve by id string Some");
+
+    # remove_vault
+    var reg6 = mneme_store_registry_in_memory();
+    var info6 = mneme_store_registry_create(reg6, str_from("temp"), str_from("/t"));
+    var id6 = mneme_store_vault_info_id(info6);
+    assert_neq(mneme_store_registry_remove(reg6, id6), 0, "remove ok");
+    assert_eq(vec_len(mneme_store_registry_list(reg6)), 0, "list empty after remove");
+
+    # remove_nonexistent_fails
+    var reg7 = mneme_store_registry_in_memory();
+    assert_eq(mneme_store_registry_remove(reg7, mneme_core_uuid_v4()), 0, "remove nonexistent fails");
+
+    # set_default_vault
+    var reg8 = mneme_store_registry_in_memory();
+    var v1id = mneme_store_vault_info_id(mneme_store_registry_create(reg8, str_from("v1"), str_from("/v1")));
+    var v2id = mneme_store_vault_info_id(mneme_store_registry_create(reg8, str_from("v2"), str_from("/v2")));
+    assert(mneme_core_uuid_eq(mneme_store_vault_info_id(mneme_store_registry_default_vault(reg8)), v1id) == 1, "default is v1");
+    assert_neq(mneme_store_registry_set_default(reg8, v2id), 0, "set_default v2 ok");
+    assert(mneme_core_uuid_eq(mneme_store_vault_info_id(mneme_store_registry_default_vault(reg8)), v2id) == 1, "default now v2");
+
+    # default_vault_falls_back_to_first
+    var reg10 = mneme_store_registry_in_memory();
+    var info10id = mneme_store_vault_info_id(mneme_store_registry_create(reg10, str_from("only"), str_from("/only")));
+    var def10 = mneme_store_registry_default_vault(reg10);
+    assert(mneme_core_uuid_eq(mneme_store_vault_info_id(def10), info10id) == 1, "default falls back to first");
+
+    # touch_updates_last_opened
+    var reg11 = mneme_store_registry_in_memory();
+    var info11 = mneme_store_registry_create(reg11, str_from("touch"), str_from("/t"));
+    var id11 = mneme_store_vault_info_id(info11);
+    var before = mneme_store_vault_info_last_opened(info11);
+    mneme_store_registry_touch(reg11, id11);
+    var after = mneme_store_vault_info_last_opened(mneme_store_registry_get_by_id(reg11, id11));
+    assert_gte(after, before, "touch updates last_opened (after >= before)");
+
+    return assert_summary();
+}
+var e = main();
+syscall(60, e);

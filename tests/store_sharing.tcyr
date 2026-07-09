@@ -1,0 +1,71 @@
+# mneme-store sharing tests — ported 1:1 from rust-old/crates/mneme-store/src/sharing.rs.
+include "src/core_uuid.cyr"
+include "src/store_sharing.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("store_sharing");
+
+    # add_and_list_users
+    var config = mneme_store_sharing_config_new();
+    mneme_store_sharing_enable(config);
+    mneme_store_sharing_add_user(config, str_from("Alice"), ROLE_OWNER);
+    mneme_store_sharing_add_user(config, str_from("Bob"), ROLE_EDITOR);
+    mneme_store_sharing_add_user(config, str_from("Charlie"), ROLE_VIEWER);
+    assert_eq(mneme_store_sharing_enabled(config), 1, "config enabled");
+    assert_eq(vec_len(mneme_store_sharing_users(config)), 3, "users len 3");
+    assert_eq(vec_len(mneme_store_sharing_editors(config)), 2, "editors len 2");
+
+    # remove_user
+    var config2 = mneme_store_sharing_config_new();
+    var user2 = mneme_store_sharing_add_user(config2, str_from("Alice"), ROLE_EDITOR);
+    assert_eq(mneme_store_sharing_remove_user(config2, mneme_store_vault_user_id(user2)), 1, "removed existing user");
+    assert_eq(mneme_store_sharing_remove_user(config2, mneme_core_uuid_v4()), 0, "remove nonexistent is false");
+
+    # role_permissions
+    assert_eq(mneme_store_role_can_edit(ROLE_OWNER), 1, "owner can_edit");
+    assert_eq(mneme_store_role_can_manage(ROLE_OWNER), 1, "owner can_manage");
+    assert_eq(mneme_store_role_can_edit(ROLE_EDITOR), 1, "editor can_edit");
+    assert_eq(mneme_store_role_can_manage(ROLE_EDITOR), 0, "editor cannot manage");
+    assert_eq(mneme_store_role_can_edit(ROLE_VIEWER), 0, "viewer cannot edit");
+    assert_eq(mneme_store_role_can_manage(ROLE_VIEWER), 0, "viewer cannot manage");
+
+    # can_edit_check
+    var config4 = mneme_store_sharing_config_new();
+    var editor4 = mneme_store_sharing_add_user(config4, str_from("Editor"), ROLE_EDITOR);
+    var viewer4 = mneme_store_sharing_add_user(config4, str_from("Viewer"), ROLE_VIEWER);
+    assert_eq(mneme_store_sharing_can_edit(config4, mneme_store_vault_user_id(editor4)), 1, "editor can_edit");
+    assert_eq(mneme_store_sharing_can_edit(config4, mneme_store_vault_user_id(viewer4)), 0, "viewer cannot edit");
+    assert_eq(mneme_store_sharing_can_edit(config4, mneme_core_uuid_v4()), 0, "unknown cannot edit");
+
+    # detect_conflict_different_hashes
+    var note_id5 = mneme_core_uuid_v4();
+    var conflict5 = mneme_store_detect_conflict(note_id5, str_from("base"), str_from("Alice"), str_from("hash_a"), str_from("Bob"), str_from("hash_b"));
+    assert_neq(conflict5, 0, "conflict is some");
+    assert(str_eq(mneme_store_conflict_user_a(conflict5), str_from("Alice")), "conflict user_a Alice");
+    assert(str_eq(mneme_store_conflict_user_b(conflict5), str_from("Bob")), "conflict user_b Bob");
+
+    # no_conflict_same_hash
+    var note_id6 = mneme_core_uuid_v4();
+    var conflict6 = mneme_store_detect_conflict(note_id6, str_from("base"), str_from("Alice"), str_from("same"), str_from("Bob"), str_from("same"));
+    assert_eq(conflict6, 0, "no conflict is none");
+
+    # sharing_serialization
+    var config7 = mneme_store_sharing_config_new();
+    mneme_store_sharing_enable(config7);
+    mneme_store_sharing_add_user(config7, str_from("Test"), ROLE_EDITOR);
+    var json7 = mneme_store_sharing_config_to_json(config7);
+    assert(str_contains(json7, str_from("editor")), "json contains editor");
+
+    # get_user_by_id
+    var config8 = mneme_store_sharing_config_new();
+    var user8 = mneme_store_sharing_add_user(config8, str_from("Alice"), ROLE_EDITOR);
+    assert_neq(mneme_store_sharing_get_user(config8, mneme_store_vault_user_id(user8)), 0, "get_user is some");
+    assert(str_eq(mneme_store_vault_user_name(mneme_store_sharing_get_user(config8, mneme_store_vault_user_id(user8))), str_from("Alice")), "get_user name Alice");
+    assert_eq(mneme_store_sharing_get_user(config8, mneme_core_uuid_v4()), 0, "get_user unknown is none");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);
