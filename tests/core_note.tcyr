@@ -1,0 +1,43 @@
+# mneme-core note tests
+# Ported 1:1 from rust-old/crates/mneme-core/src/note.rs #[cfg(test)].
+include "src/core_note.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("core_note");
+
+    # new_note_has_matching_timestamps
+    var note = mneme_core_note_new(str_from("Test"), str_from("test.md"), str_from("abc123"));
+    assert_eq(mneme_core_note_created_at(note), mneme_core_note_updated_at(note), "created==updated");
+    assert_eq(mneme_core_note_created_at(note), mneme_core_note_last_accessed(note), "created==last_accessed");
+    assert(str_eq(mneme_core_note_title(note), str_from("Test")), "title");
+    assert_eq(mneme_core_note_provenance(note), PROV_MANUAL, "default provenance manual");
+    assert_eq(mneme_core_note_trust_score(note), f64_parse("1.0"), "trust score 1.0");
+    assert_eq(mneme_core_note_trust_override_has(note), 0, "trust_override is none");
+
+    # provenance_trust_scores
+    assert_eq(mneme_core_provenance_default_trust(PROV_MANUAL), f64_parse("1.0"), "manual trust 1.0");
+    assert_eq(mneme_core_provenance_default_trust(PROV_IMPORT), f64_parse("0.8"), "import trust 0.8");
+    assert_eq(mneme_core_provenance_default_trust(PROV_WEBCLIP), f64_parse("0.6"), "webclip trust 0.6");
+    assert_eq(mneme_core_provenance_default_trust(PROV_GENERATED), f64_parse("0.4"), "generated trust 0.4");
+
+    # trust_override
+    var note2 = mneme_core_note_new(str_from("Test"), str_from("test.md"), str_from("abc123"));
+    store64(note2 + 56, PROV_GENERATED);              # note.provenance = Generated
+    assert_eq(mneme_core_note_trust_score(note2), f64_parse("0.4"), "generated trust score");
+    store64(note2 + 64, 1);                           # trust_override = Some(0.9)
+    store64(note2 + 72, f64_parse("0.9"));
+    assert_eq(mneme_core_note_trust_score(note2), f64_parse("0.9"), "override trust score");
+
+    # provenance_from_str
+    assert_eq(mneme_core_provenance_parse(str_from("manual")), PROV_MANUAL, "parse manual");
+    assert_eq(mneme_core_provenance_parse(str_from("import")), PROV_IMPORT, "parse import");
+    assert_eq(mneme_core_provenance_parse(str_from("web_clip")), PROV_WEBCLIP, "parse web_clip");
+    assert_eq(mneme_core_provenance_parse(str_from("generated")), PROV_GENERATED, "parse generated");
+    assert_eq(mneme_core_provenance_parse(str_from("unknown")), PROV_MANUAL, "parse unknown->manual");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

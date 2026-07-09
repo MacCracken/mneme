@@ -1,0 +1,74 @@
+# mneme-core — note types (ported from rust-old/crates/mneme-core/src/note.rs)
+# Zero-I/O. Provenance + trust scoring + the Note struct.
+# f64 values are IEEE-754 bit patterns (Cyrius convention); trust literals
+# come from f64_parse so they byte-match Rust's f64 literals exactly.
+# NOTE: note.id is a stub (0) until the dedicated uuid pass; the Rust tests
+# never inspect the id, only titles/timestamps/provenance/trust.
+
+enum Provenance {
+    PROV_MANUAL;
+    PROV_IMPORT;
+    PROV_WEBCLIP;
+    PROV_GENERATED;
+}
+
+# default trust score (f64 bits) for a provenance
+fn mneme_core_provenance_default_trust(p): i64 {
+    if (p == PROV_MANUAL)    { return f64_parse("1.0"); }
+    elif (p == PROV_IMPORT)  { return f64_parse("0.8"); }
+    elif (p == PROV_WEBCLIP) { return f64_parse("0.6"); }
+    elif (p == PROV_GENERATED) { return f64_parse("0.4"); }
+    return f64_parse("1.0");
+}
+
+# canonical snake_case wire name (cstr)
+fn mneme_core_provenance_as_str(p): i64 {
+    if (p == PROV_MANUAL)    { return "manual"; }
+    elif (p == PROV_IMPORT)  { return "import"; }
+    elif (p == PROV_WEBCLIP) { return "web_clip"; }
+    elif (p == PROV_GENERATED) { return "generated"; }
+    return "manual";
+}
+
+# parse a provenance string (accepts aliases); unknown -> Manual
+fn mneme_core_provenance_parse(s: Str): i64 {
+    if (str_eq_cstr(s, "import") == 1) { return PROV_IMPORT; }
+    if (str_eq_cstr(s, "web_clip") == 1 || str_eq_cstr(s, "webclip") == 1) { return PROV_WEBCLIP; }
+    if (str_eq_cstr(s, "generated") == 1 || str_eq_cstr(s, "auto") == 1) { return PROV_GENERATED; }
+    return PROV_MANUAL;
+}
+
+# Note struct (manual alloc, 80 bytes):
+#   [id@0, title@8, path@16, content_hash@24, created_at@32, updated_at@40,
+#    last_accessed@48, provenance@56, trust_override_has@64, trust_override_val@72]
+fn mneme_core_note_new(title: Str, path: Str, content_hash: Str): i64 {
+    var n = alloc(80);
+    store64(n, 0);                 # id (uuid stub — see note above)
+    store64(n + 8, title);
+    store64(n + 16, path);
+    store64(n + 24, content_hash);
+    var now = clock_now_ns();
+    store64(n + 32, now);          # created_at
+    store64(n + 40, now);          # updated_at
+    store64(n + 48, now);          # last_accessed
+    store64(n + 56, PROV_MANUAL);
+    store64(n + 64, 0);            # trust_override: None
+    store64(n + 72, 0);
+    return n;
+}
+fn mneme_core_note_id(n): i64 { return load64(n); }
+fn mneme_core_note_title(n): i64 { return load64(n + 8); }
+fn mneme_core_note_path(n): i64 { return load64(n + 16); }
+fn mneme_core_note_content_hash(n): i64 { return load64(n + 24); }
+fn mneme_core_note_created_at(n): i64 { return load64(n + 32); }
+fn mneme_core_note_updated_at(n): i64 { return load64(n + 40); }
+fn mneme_core_note_last_accessed(n): i64 { return load64(n + 48); }
+fn mneme_core_note_provenance(n): i64 { return load64(n + 56); }
+fn mneme_core_note_trust_override_has(n): i64 { return load64(n + 64); }
+fn mneme_core_note_trust_override_val(n): i64 { return load64(n + 72); }
+
+# effective trust: override if set, else provenance default (f64 bits)
+fn mneme_core_note_trust_score(n): i64 {
+    if (load64(n + 64) == 1) { return load64(n + 72); }
+    return mneme_core_provenance_default_trust(load64(n + 56));
+}

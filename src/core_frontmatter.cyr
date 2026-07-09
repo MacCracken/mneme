@@ -1,0 +1,201 @@
+# mneme-core — frontmatter parsing (ported from rust-old/crates/mneme-core/src/frontmatter.rs)
+# Zero-I/O. Extracts YAML-ish frontmatter from Markdown notes.
+#
+# Frontmatter struct (manual alloc, 32 bytes):
+#   [title@0, tags@8, trust@16, extra@24]
+#   title/trust: Str or 0 (Rust None).  tags: vec<Str>.  extra: map<Str,Str>.
+
+fn mneme_core_frontmatter_new(): i64 {
+    var f = alloc(32);
+    store64(f, 0);                 # title = None
+    store64(f + 8, vec_new());     # tags
+    store64(f + 16, 0);            # trust = None
+    store64(f + 24, map_new_str()); # extra
+    return f;
+}
+fn mneme_core_fm_title(f): i64 { return load64(f); }
+fn mneme_core_fm_tags(f): i64  { return load64(f + 8); }
+fn mneme_core_fm_trust(f): i64 { return load64(f + 16); }
+fn mneme_core_fm_extra(f): i64 { return load64(f + 24); }
+
+# ---- helpers ----
+
+# left-trim ASCII whitespace; returns a Str view
+fn _fm_ltrim(s: Str): Str {
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n && (load8(d + i) == 32 || load8(d + i) == 10 || load8(d + i) == 9 || load8(d + i) == 13)) {
+        i = i + 1;
+    }
+    return str_substr(s, i, n);
+}
+
+# remove one layer of matching surrounding quotes ("..." or '...')
+fn _fm_unquote(s: Str): Str {
+    var t = str_trim(s);
+    var n = str_len(t);
+    if (n < 2) { return t; }
+    var d = str_data(t);
+    var q0 = load8(d);
+    var q1 = load8(d + n - 1);
+    if ((q0 == 34 && q1 == 34) || (q0 == 39 && q1 == 39)) {   # " or '
+        return str_substr(t, 1, n - 1);
+    }
+    return t;
+}
+
+# parse "[a, b, c]" or "a, b, c" -> vec<Str> (trimmed, unquoted, non-empty)
+fn _fm_parse_tag_list(value: Str): i64 {
+    var v = str_trim(value);
+    var n = str_len(v);
+    var d = str_data(v);
+    if (n >= 2 && load8(d) == 91 && load8(d + n - 1) == 93) {  # [ ]
+        v = str_substr(v, 1, n - 1);
+        n = str_len(v);
+    }
+    var out = vec_new();
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; }
+        elif (load8(str_data(v) + i) == 44) { isend = 1; }   # ','
+        if (isend == 1) {
+            var piece = _fm_unquote(str_trim(str_substr(v, start, i)));
+            if (str_len(piece) > 0) { vec_push(out, piece); }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+# apply one "key: value" line into the frontmatter accumulator
+fn _fm_parse_line(fm, line: Str): i64 {
+    var ln = str_len(line);
+    if (ln == 0) { return 0; }
+    if (load8(str_data(line)) == 35) { return 0; }   # '#' comment
+    var colon = str_index_of(line, 58);              # ':'
+    if (colon < 0) { return 0; }
+    var key = str_trim(str_substr(line, 0, colon));
+    var value = str_trim(str_substr(line, colon + 1, ln));
+    if (str_eq_cstr(key, "title") == 1) {
+        store64(fm, _fm_unquote(value));
+    } elif (str_eq_cstr(key, "tags") == 1) {
+        store64(fm + 8, _fm_parse_tag_list(value));
+    } elif (str_eq_cstr(key, "trust") == 1) {
+        store64(fm + 16, _fm_unquote(value));
+    } else {
+        map_set(load64(fm + 24), key, _fm_unquote(value));
+    }
+    return 0;
+}
+
+# ---- public API ----
+
+# split_frontmatter -> pair(alloc 16): [yaml_or_0@0, body@8]. yaml==0 means None.
+fn mneme_core_frontmatter_split(content: Str): i64 {
+    var pair = alloc(16);
+    var trimmed = _fm_ltrim(content);
+    var tn = str_len(trimmed);
+    var td = str_data(trimmed);
+    if (tn < 3 || load8(td) != 45 || load8(td + 1) != 45 || load8(td + 2) != 45) {  # ---
+        store64(pair, 0);
+        store64(pair + 8, content);
+        return pair;
+    }
+    var after = str_substr(trimmed, 3, tn);
+    var an = str_len(after);
+    if (an >= 1 && load8(str_data(after)) == 10) { after = str_substr(after, 1, an); }
+    var end = str_index_of_cstr(after, "\n---");
+    if (end < 0) {
+        store64(pair, 0);
+        store64(pair + 8, content);
+        return pair;
+    }
+    var yaml = str_substr(after, 0, end);
+    var alen = str_len(after);
+    var body = str_substr(after, end + 4, alen);
+    var bn = str_len(body);
+    if (bn >= 1 && load8(str_data(body)) == 10) { body = str_substr(body, 1, bn); }
+    store64(pair, yaml);
+    store64(pair + 8, body);
+    return pair;
+}
+fn mneme_core_fm_pair_yaml(p): i64 { return load64(p); }
+fn mneme_core_fm_pair_body(p): i64 { return load64(p + 8); }
+
+# parse frontmatter YAML text -> Frontmatter
+fn mneme_core_frontmatter_parse(yaml: Str): i64 {
+    var fm = mneme_core_frontmatter_new();
+    var n = str_len(yaml);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; }
+        elif (load8(str_data(yaml) + i) == 10) { isend = 1; }
+        if (isend == 1) {
+            _fm_parse_line(fm, str_trim(str_substr(yaml, start, i)));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return fm;
+}
+
+# render Frontmatter -> YAML text (lines joined with '\n')
+fn mneme_core_frontmatter_render(fm): i64 {
+    var sb = str_builder_new();
+    var first = 1;
+    if (mneme_core_fm_title(fm) != 0) {
+        str_builder_add_cstr(sb, "title: ");
+        str_builder_add(sb, mneme_core_fm_title(fm));
+        first = 0;
+    }
+    var tags = mneme_core_fm_tags(fm);
+    if (vec_len(tags) > 0) {
+        if (first == 0) { str_builder_putc(sb, 10); }
+        str_builder_add_cstr(sb, "tags: [");
+        var ti = 0;
+        while (ti < vec_len(tags)) {
+            if (ti > 0) { str_builder_add_cstr(sb, ", "); }
+            str_builder_add(sb, vec_get(tags, ti));
+            ti = ti + 1;
+        }
+        str_builder_putc(sb, 93);   # ']'
+        first = 0;
+    }
+    if (mneme_core_fm_trust(fm) != 0) {
+        if (first == 0) { str_builder_putc(sb, 10); }
+        str_builder_add_cstr(sb, "trust: ");
+        str_builder_add(sb, mneme_core_fm_trust(fm));
+        first = 0;
+    }
+    var extra = mneme_core_fm_extra(fm);
+    var keys = map_keys(extra);
+    var ki = 0;
+    while (ki < vec_len(keys)) {
+        if (first == 0) { str_builder_putc(sb, 10); }
+        var k = vec_get(keys, ki);
+        str_builder_add(sb, k);
+        str_builder_add_cstr(sb, ": ");
+        str_builder_add(sb, map_get(extra, k));
+        first = 0;
+        ki = ki + 1;
+    }
+    return str_builder_build(sb);
+}
+
+# compose a full document: "---\n<yaml>\n---\n<body>" (or just body if no yaml)
+fn mneme_core_frontmatter_compose(fm, body: Str): i64 {
+    var yaml = mneme_core_frontmatter_render(fm);
+    if (str_len(yaml) == 0) { return body; }
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "---\n");
+    str_builder_add(sb, yaml);
+    str_builder_add_cstr(sb, "\n---\n");
+    str_builder_add(sb, body);
+    return str_builder_build(sb);
+}

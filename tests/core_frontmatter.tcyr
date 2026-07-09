@@ -1,0 +1,68 @@
+# mneme-core frontmatter tests
+# Ported 1:1 from rust-old/crates/mneme-core/src/frontmatter.rs #[cfg(test)].
+include "src/core_frontmatter.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("core_frontmatter");
+
+    # split_with_frontmatter
+    var p1 = mneme_core_frontmatter_split(str_from("---\ntitle: Hello\ntags: [a, b]\n---\nBody here."));
+    assert(mneme_core_fm_pair_yaml(p1) != 0, "split: yaml is Some");
+    assert(str_eq(mneme_core_fm_pair_yaml(p1), str_from("title: Hello\ntags: [a, b]")), "split: yaml body");
+    assert(str_eq(mneme_core_fm_pair_body(p1), str_from("Body here.")), "split: body");
+
+    # split_without_frontmatter
+    var doc2 = str_from("Just a regular document.");
+    var p2 = mneme_core_frontmatter_split(doc2);
+    assert_eq(mneme_core_fm_pair_yaml(p2), 0, "split none: yaml is None");
+    assert(str_eq(mneme_core_fm_pair_body(p2), doc2), "split none: body is whole doc");
+
+    # split_unclosed_frontmatter
+    var doc3 = str_from("---\ntitle: Hello\nNo closing delimiter.");
+    var p3 = mneme_core_frontmatter_split(doc3);
+    assert_eq(mneme_core_fm_pair_yaml(p3), 0, "split unclosed: yaml is None");
+    assert(str_eq(mneme_core_fm_pair_body(p3), doc3), "split unclosed: body is whole doc");
+
+    # parse_basic_frontmatter
+    var fm4 = mneme_core_frontmatter_parse(str_from("title: My Note\ntags: [rust, agnos, core]\nstatus: draft"));
+    assert(str_eq(mneme_core_fm_title(fm4), str_from("My Note")), "parse: title");
+    var t4 = mneme_core_fm_tags(fm4);
+    assert_eq(vec_len(t4), 3, "parse: tag count");
+    assert(str_eq(vec_get(t4, 0), str_from("rust")), "parse: tag0");
+    assert(str_eq(vec_get(t4, 1), str_from("agnos")), "parse: tag1");
+    assert(str_eq(vec_get(t4, 2), str_from("core")), "parse: tag2");
+    assert(str_eq(map_get(mneme_core_fm_extra(fm4), str_from("status")), str_from("draft")), "parse: extra status");
+
+    # parse_quoted_values
+    var fm5 = mneme_core_frontmatter_parse(str_from("title: \"Hello World\"\ntags: ['a', \"b\"]"));
+    assert(str_eq(mneme_core_fm_title(fm5), str_from("Hello World")), "parse quoted: title");
+    var t5 = mneme_core_fm_tags(fm5);
+    assert_eq(vec_len(t5), 2, "parse quoted: tag count");
+    assert(str_eq(vec_get(t5, 0), str_from("a")), "parse quoted: tag0");
+    assert(str_eq(vec_get(t5, 1), str_from("b")), "parse quoted: tag1");
+
+    # parse_tags_without_brackets
+    var fm6 = mneme_core_frontmatter_parse(str_from("tags: rust, agnos"));
+    var t6 = mneme_core_fm_tags(fm6);
+    assert_eq(vec_len(t6), 2, "parse no-brackets: tag count");
+    assert(str_eq(vec_get(t6, 0), str_from("rust")), "parse no-brackets: tag0");
+    assert(str_eq(vec_get(t6, 1), str_from("agnos")), "parse no-brackets: tag1");
+
+    # roundtrip_compose
+    var fm7 = mneme_core_frontmatter_new();
+    store64(fm7, str_from("Test Note"));            # title
+    var tg = mneme_core_fm_tags(fm7);
+    vec_push(tg, str_from("a"));
+    vec_push(tg, str_from("b"));
+    var doc7 = mneme_core_frontmatter_compose(fm7, str_from("Hello world.\n"));
+    assert(str_starts_with(doc7, str_from("---\n")), "compose: starts with ---");
+    assert(str_contains(doc7, str_from("title: Test Note")), "compose: has title");
+    assert(str_contains(doc7, str_from("tags: [a, b]")), "compose: has tags");
+    assert(str_ends_with(doc7, str_from("Hello world.\n")), "compose: ends with body");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);
