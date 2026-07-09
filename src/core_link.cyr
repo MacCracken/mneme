@@ -1,0 +1,21 @@
+# mneme-core — link types (ported from rust-old/crates/mneme-core/src/link.rs)
+# Zero-I/O. A directed link between two notes.
+# Link struct (manual alloc, 48 bytes):
+#   [id@0, source_id@8, target_id@16, link_text@24, context@32, created_at@40]
+
+fn mneme_core_link_new(source_id, target_id, link_text: Str, context: Str): i64 {
+    var l = alloc(48);
+    store64(l, mneme_core_uuid_v4());
+    store64(l + 8, source_id);
+    store64(l + 16, target_id);
+    store64(l + 24, link_text);
+    store64(l + 32, context);
+    store64(l + 40, clock_now_ns());
+    return l;
+}
+fn mneme_core_link_id(l): i64 { return load64(l); }
+fn mneme_core_link_source_id(l): i64 { return load64(l + 8); }
+fn mneme_core_link_target_id(l): i64 { return load64(l + 16); }
+fn mneme_core_link_text(l): i64 { return load64(l + 24); }
+fn mneme_core_link_context(l): i64 { return load64(l + 32); }
+fn mneme_core_link_created_at(l): i64 { return load64(l + 40); }

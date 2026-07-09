@@ -1,0 +1,196 @@
+# mneme-core — task extraction (ported from rust-old/crates/mneme-core/src/task.rs)
+# Zero-I/O. Parses Markdown checkboxes + inline priority (!urgent/!high/!low)
+# + due dates (@YYYY-MM-DD). Self-contained date helpers (no calendar include).
+# Task id = deterministic v5 of a per-line name (ids are never inspected by tests).
+
+enum Priority {
+    PRIO_LOW;
+    PRIO_MEDIUM;
+    PRIO_HIGH;
+    PRIO_URGENT;
+}
+enum TaskStatus {
+    STATUS_TODO;
+    STATUS_IN_PROGRESS;
+    STATUS_DONE;
+    STATUS_BLOCKED;
+}
+
+fn mneme_core_priority_as_str(p): i64 {
+    if (p == PRIO_LOW)    { return "low"; }
+    elif (p == PRIO_MEDIUM) { return "medium"; }
+    elif (p == PRIO_HIGH) { return "high"; }
+    elif (p == PRIO_URGENT) { return "urgent"; }
+    return "medium";
+}
+
+fn _tk_isd(c): i64 { if (c >= 48 && c <= 57) { return 1; } return 0; }
+fn _tk_is_date10(d, i): i64 {
+    if (_tk_isd(load8(d + i)) == 0) { return 0; }
+    if (_tk_isd(load8(d + i + 1)) == 0) { return 0; }
+    if (_tk_isd(load8(d + i + 2)) == 0) { return 0; }
+    if (_tk_isd(load8(d + i + 3)) == 0) { return 0; }
+    if (load8(d + i + 4) != 45) { return 0; }
+    if (_tk_isd(load8(d + i + 5)) == 0) { return 0; }
+    if (_tk_isd(load8(d + i + 6)) == 0) { return 0; }
+    if (load8(d + i + 7) != 45) { return 0; }
+    if (_tk_isd(load8(d + i + 8)) == 0) { return 0; }
+    if (_tk_isd(load8(d + i + 9)) == 0) { return 0; }
+    return 1;
+}
+
+# remove all occurrences of a cstr needle from s
+fn _tk_remove_all(s: Str, needle_cstr): i64 {
+    var result = s;
+    var nlen = strlen(needle_cstr);
+    var idx = str_index_of_cstr(result, needle_cstr);
+    while (idx >= 0) {
+        var before = str_substr(result, 0, idx);
+        var after = str_substr(result, idx + nlen, str_len(result));
+        result = str_cat(before, after);
+        idx = str_index_of_cstr(result, needle_cstr);
+    }
+    return result;
+}
+
+# extract_priority -> pair [text@0, priority@8]
+fn mneme_core_task_extract_priority(text: Str): i64 {
+    var pair = alloc(16);
+    if (str_contains(text, str_from("!urgent")) == 1) {
+        store64(pair, str_trim(_tk_remove_all(text, "!urgent")));
+        store64(pair + 8, PRIO_URGENT);
+    } elif (str_contains(text, str_from("!high")) == 1) {
+        store64(pair, str_trim(_tk_remove_all(text, "!high")));
+        store64(pair + 8, PRIO_HIGH);
+    } elif (str_contains(text, str_from("!low")) == 1) {
+        store64(pair, str_trim(_tk_remove_all(text, "!low")));
+        store64(pair + 8, PRIO_LOW);
+    } else {
+        store64(pair, text);
+        store64(pair + 8, PRIO_MEDIUM);
+    }
+    return pair;
+}
+
+# extract_due_date -> pair [text@0, due@8]  (due = packed date or -1 None)
+fn mneme_core_task_extract_due_date(text: Str): i64 {
+    var pair = alloc(16);
+    var n = str_len(text);
+    var d = str_data(text);
+    var found = 0 - 1;
+    var i = 0;
+    while (i < n && found < 0) {
+        if (load8(d + i) == 64 && i + 11 <= n && _tk_is_date10(d, i + 1) == 1) { found = i; }
+        i = i + 1;
+    }
+    if (found < 0) {
+        store64(pair, text);
+        store64(pair + 8, 0 - 1);
+        return pair;
+    }
+    var y = (load8(d + found + 1) - 48) * 1000 + (load8(d + found + 2) - 48) * 100 + (load8(d + found + 3) - 48) * 10 + (load8(d + found + 4) - 48);
+    var mo = (load8(d + found + 6) - 48) * 10 + (load8(d + found + 7) - 48);
+    var day = (load8(d + found + 9) - 48) * 10 + (load8(d + found + 10) - 48);
+    var date = y * 10000 + mo * 100 + day;
+    var before = str_substr(text, 0, found);
+    var after = str_substr(text, found + 11, n);
+    store64(pair, str_trim(str_cat(before, after)));
+    store64(pair + 8, date);
+    return pair;
+}
+
+# Task (56 bytes): [id@0, note_id@8, text@16, completed@24, priority@32, due_date@40, line_number@48]
+fn mneme_core_task_new(id, note_id, text: Str, completed, priority, due_date, line_number): i64 {
+    var t = alloc(56);
+    store64(t, id);
+    store64(t + 8, note_id);
+    store64(t + 16, text);
+    store64(t + 24, completed);
+    store64(t + 32, priority);
+    store64(t + 40, due_date);
+    store64(t + 48, line_number);
+    return t;
+}
+fn mneme_core_task_id(t): i64 { return load64(t); }
+fn mneme_core_task_note_id(t): i64 { return load64(t + 8); }
+fn mneme_core_task_text(t): i64 { return load64(t + 16); }
+fn mneme_core_task_completed(t): i64 { return load64(t + 24); }
+fn mneme_core_task_priority(t): i64 { return load64(t + 32); }
+fn mneme_core_task_due_date(t): i64 { return load64(t + 40); }
+fn mneme_core_task_line_number(t): i64 { return load64(t + 48); }
+
+fn _tk_try_line(tasks, note_id, line: Str, line_num): i64 {
+    var completed = 0 - 1;
+    var rest = 0;
+    if (str_starts_with(line, str_from("- [x] ")) == 1 || str_starts_with(line, str_from("- [X] ")) == 1) {
+        completed = 1;
+        rest = str_substr(line, 6, str_len(line));
+    } elif (str_starts_with(line, str_from("- [ ] ")) == 1) {
+        completed = 0;
+        rest = str_substr(line, 6, str_len(line));
+    }
+    if (completed < 0) { return 0; }
+    var pp = mneme_core_task_extract_priority(rest);
+    var dp = mneme_core_task_extract_due_date(load64(pp));
+    var name = str_builder_new();
+    str_builder_add_cstr(name, "task");
+    str_builder_add_int(name, line_num);
+    var id = mneme_core_uuid_v5_str(str_builder_build(name));
+    vec_push(tasks, mneme_core_task_new(id, note_id, load64(dp), completed, load64(pp + 8), load64(dp + 8), line_num + 1));
+    return 0;
+}
+
+# extract_tasks: parse "- [ ]"/"- [x]" checkbox lines from Markdown content
+fn mneme_core_task_extract_tasks(note_id, content: Str): i64 {
+    var tasks = vec_new();
+    var n = str_len(content);
+    var start = 0;
+    var line_num = 0;
+    var i = 0;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; }
+        elif (load8(str_data(content) + i) == 10) { isend = 1; }
+        if (isend == 1) {
+            _tk_try_line(tasks, note_id, str_trim(str_substr(content, start, i)), line_num);
+            start = i + 1;
+            line_num = line_num + 1;
+        }
+        i = i + 1;
+    }
+    return tasks;
+}
+
+# TaskBoard (32 bytes): [tasks@0, total@8, completed@16, pending@24]
+fn mneme_core_task_build_board(tasks): i64 {
+    var total = vec_len(tasks);
+    var completed = 0;
+    var i = 0;
+    while (i < total) {
+        if (load64(vec_get(tasks, i) + 24) == 1) { completed = completed + 1; }
+        i = i + 1;
+    }
+    var b = alloc(32);
+    store64(b, tasks);
+    store64(b + 8, total);
+    store64(b + 16, completed);
+    store64(b + 24, total - completed);
+    return b;
+}
+fn mneme_core_board_tasks(b): i64 { return load64(b); }
+fn mneme_core_board_total(b): i64 { return load64(b + 8); }
+fn mneme_core_board_completed(b): i64 { return load64(b + 16); }
+fn mneme_core_board_pending(b): i64 { return load64(b + 24); }
+
+# serialize a task to JSON (priority as snake_case name)
+fn mneme_core_task_to_json(t): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"text\":\"");
+    str_builder_add(sb, mneme_core_task_text(t));
+    str_builder_add_cstr(sb, "\",\"priority\":\"");
+    str_builder_add_cstr(sb, mneme_core_priority_as_str(mneme_core_task_priority(t)));
+    str_builder_add_cstr(sb, "\",\"line_number\":");
+    str_builder_add_int(sb, mneme_core_task_line_number(t));
+    str_builder_add_cstr(sb, "}");
+    return str_builder_build(sb);
+}

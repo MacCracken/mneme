@@ -1,0 +1,133 @@
+# mneme-core — plugin system (ported from rust-old/crates/mneme-core/src/plugin.rs)
+# Zero-I/O. Plugin metadata + capability/hook enums + registry.
+
+enum PluginCapability {
+    CAP_NOTE_PROCESSOR;
+    CAP_IMPORTER;
+    CAP_EXPORTER;
+    CAP_SEARCH_PROVIDER;
+    CAP_AI_PIPELINE;
+}
+
+fn mneme_core_capability_as_str(c): i64 {
+    if (c == CAP_NOTE_PROCESSOR)   { return "note_processor"; }
+    elif (c == CAP_IMPORTER)       { return "importer"; }
+    elif (c == CAP_EXPORTER)       { return "exporter"; }
+    elif (c == CAP_SEARCH_PROVIDER) { return "search_provider"; }
+    elif (c == CAP_AI_PIPELINE)    { return "ai_pipeline"; }
+    return "note_processor";
+}
+
+enum HookPoint {
+    HOOK_PRE_CREATE;
+    HOOK_POST_CREATE;
+    HOOK_PRE_UPDATE;
+    HOOK_POST_UPDATE;
+    HOOK_PRE_DELETE;
+    HOOK_POST_DELETE;
+    HOOK_PRE_SEARCH;
+    HOOK_POST_INDEX;
+}
+
+# PluginInfo (40 bytes): [name@0, version@8, description@16, author@24, capabilities@32]
+fn mneme_core_plugin_info_new(name: Str, version: Str, description: Str, author: Str, capabilities): i64 {
+    var p = alloc(40);
+    store64(p, name);
+    store64(p + 8, version);
+    store64(p + 16, description);
+    store64(p + 24, author);
+    store64(p + 32, capabilities);
+    return p;
+}
+fn mneme_core_plugin_info_name(p): i64 { return load64(p); }
+fn mneme_core_plugin_info_version(p): i64 { return load64(p + 8); }
+fn mneme_core_plugin_info_description(p): i64 { return load64(p + 16); }
+fn mneme_core_plugin_info_author(p): i64 { return load64(p + 24); }
+fn mneme_core_plugin_info_capabilities(p): i64 { return load64(p + 32); }
+
+# serialize to JSON (capabilities as snake_case names)
+fn mneme_core_plugin_info_to_json(p): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"name\":\"");
+    str_builder_add(sb, mneme_core_plugin_info_name(p));
+    str_builder_add_cstr(sb, "\",\"version\":\"");
+    str_builder_add(sb, mneme_core_plugin_info_version(p));
+    str_builder_add_cstr(sb, "\",\"description\":\"");
+    str_builder_add(sb, mneme_core_plugin_info_description(p));
+    str_builder_add_cstr(sb, "\",\"author\":\"");
+    str_builder_add(sb, mneme_core_plugin_info_author(p));
+    str_builder_add_cstr(sb, "\",\"capabilities\":[");
+    var caps = mneme_core_plugin_info_capabilities(p);
+    var i = 0;
+    while (i < vec_len(caps)) {
+        if (i > 0) { str_builder_add_cstr(sb, ","); }
+        str_builder_add_cstr(sb, "\"");
+        str_builder_add_cstr(sb, mneme_core_capability_as_str(vec_get(caps, i)));
+        str_builder_add_cstr(sb, "\"");
+        i = i + 1;
+    }
+    str_builder_add_cstr(sb, "]}");
+    return str_builder_build(sb);
+}
+
+# PluginRegistry (8 bytes): [plugins@0 (vec<PluginInfo>)]
+fn mneme_core_registry_new(): i64 {
+    var r = alloc(8);
+    store64(r, vec_new());
+    return r;
+}
+fn mneme_core_registry_list(r): i64 { return load64(r); }
+
+fn mneme_core_registry_has_plugin(r, name: Str): i64 {
+    var plugins = load64(r);
+    var i = 0;
+    while (i < vec_len(plugins)) {
+        if (str_eq(mneme_core_plugin_info_name(vec_get(plugins, i)), name) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn mneme_core_registry_register(r, plugin): i64 {
+    if (mneme_core_registry_has_plugin(r, mneme_core_plugin_info_name(plugin)) == 0) {
+        vec_push(load64(r), plugin);
+    }
+    return 0;
+}
+
+fn mneme_core_registry_unregister(r, name: Str): i64 {
+    var plugins = load64(r);
+    var before = vec_len(plugins);
+    var kept = vec_new();
+    var i = 0;
+    while (i < before) {
+        var p = vec_get(plugins, i);
+        if (str_eq(mneme_core_plugin_info_name(p), name) == 0) { vec_push(kept, p); }
+        i = i + 1;
+    }
+    store64(r, kept);
+    if (vec_len(kept) < before) { return 1; }
+    return 0;
+}
+
+fn _plugin_caps_contains(p, cap): i64 {
+    var caps = mneme_core_plugin_info_capabilities(p);
+    var i = 0;
+    while (i < vec_len(caps)) {
+        if (vec_get(caps, i) == cap) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn mneme_core_registry_find_by_capability(r, cap): i64 {
+    var plugins = load64(r);
+    var out = vec_new();
+    var i = 0;
+    while (i < vec_len(plugins)) {
+        var p = vec_get(plugins, i);
+        if (_plugin_caps_contains(p, cap) == 1) { vec_push(out, p); }
+        i = i + 1;
+    }
+    return out;
+}

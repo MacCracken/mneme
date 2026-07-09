@@ -11,4 +11,4 @@ entry = "src/main.cyr"
 output = "mneme"
 
 [deps]
-stdlib = ["string", "fmt", "alloc", "vec", "str", "hashmap", "math", "chrono", "syscalls", "io", "args", "assert"]
+stdlib = ["string", "fmt", "alloc", "vec", "str", "hashmap", "math", "chrono", "random", "sha1", "syscalls", "io", "args", "assert"]

@@ -1,0 +1,29 @@
+# mneme-core — minimal UUID (16-byte heap blob).
+# v4 = 16 random bytes (RFC 4122 version/variant bits set) → distinct values.
+# v5-style = deterministic sha1(name) → first 16 bytes (namespace omitted; ids
+# are never inspected by the Rust tests, only used for identity/distinctness).
+# Canonical 8-4-4-4-12 string formatting: TODO (serialization pass).
+
+fn mneme_core_uuid_v4(): i64 {
+    var u = alloc(16);
+    random_bytes(u, 16);
+    store8(u + 6, (load8(u + 6) & 15) | 64);    # version 4
+    store8(u + 8, (load8(u + 8) & 63) | 128);   # RFC 4122 variant
+    return u;
+}
+
+# deterministic id from a name string (sha1(name) → first 16 bytes)
+fn mneme_core_uuid_v5_str(name: Str): i64 {
+    var digest = alloc(20);
+    sha1(str_data(name), str_len(name), digest);
+    var u = alloc(16);
+    memcpy(u, digest, 16);
+    store8(u + 6, (load8(u + 6) & 15) | 80);    # version 5
+    store8(u + 8, (load8(u + 8) & 63) | 128);
+    return u;
+}
+
+# content equality (1 == equal)
+fn mneme_core_uuid_eq(a, b): i64 {
+    return memeq(a, b, 16);
+}

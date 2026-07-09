@@ -1,0 +1,134 @@
+# mneme-core — calendar types (ported from rust-old/crates/mneme-core/src/calendar.rs)
+# Zero-I/O. NaiveDate is packed as i64 = year*10000 + month*100 + day
+# (so equality + y/m/d extraction are trivial). Missing date = -1 (Rust None).
+
+enum EntryType {
+    ENTRY_DAILY_NOTE;
+    ENTRY_MEETING_NOTE;
+    ENTRY_EVENT;
+    ENTRY_DEADLINE;
+}
+
+fn mneme_core_date_ymd(y, m, d): i64 { return y * 10000 + m * 100 + d; }
+fn mneme_core_date_year(dt): i64 { return dt / 10000; }
+fn mneme_core_date_month(dt): i64 { return (dt / 100) % 100; }
+fn mneme_core_date_day(dt): i64 { return dt % 100; }
+
+fn _isd(c): i64 { if (c >= 48 && c <= 57) { return 1; } return 0; }
+fn _to_lower(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c >= 65 && c <= 90) { store8(buf + i, c + 32); }
+        else { store8(buf + i, c); }
+        i = i + 1;
+    }
+    return str_new(buf, n);
+}
+fn _vec_has_int(v, x): i64 {
+    var i = 0;
+    while (i < vec_len(v)) {
+        if (vec_get(v, i) == x) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# detect entry type from a note title (case-insensitive keyword match)
+fn mneme_core_calendar_detect_entry_type(title: Str): i64 {
+    var lo = _to_lower(title);
+    if (str_contains(lo, str_from("daily")) == 1 || str_contains(lo, str_from("journal")) == 1) { return ENTRY_DAILY_NOTE; }
+    elif (str_contains(lo, str_from("meeting")) == 1 || str_contains(lo, str_from("standup")) == 1 || str_contains(lo, str_from("sync")) == 1) { return ENTRY_MEETING_NOTE; }
+    elif (str_contains(lo, str_from("deadline")) == 1 || str_contains(lo, str_from("due")) == 1) { return ENTRY_DEADLINE; }
+    return ENTRY_EVENT;
+}
+
+# is there a YYYY-MM-DD run at byte offset i?
+fn _is_date10(d, i): i64 {
+    if (_isd(load8(d + i)) == 0) { return 0; }
+    if (_isd(load8(d + i + 1)) == 0) { return 0; }
+    if (_isd(load8(d + i + 2)) == 0) { return 0; }
+    if (_isd(load8(d + i + 3)) == 0) { return 0; }
+    if (load8(d + i + 4) != 45) { return 0; }
+    if (_isd(load8(d + i + 5)) == 0) { return 0; }
+    if (_isd(load8(d + i + 6)) == 0) { return 0; }
+    if (load8(d + i + 7) != 45) { return 0; }
+    if (_isd(load8(d + i + 8)) == 0) { return 0; }
+    if (_isd(load8(d + i + 9)) == 0) { return 0; }
+    return 1;
+}
+
+# parse the first YYYY-MM-DD in a title -> packed date, or -1 (None)
+fn mneme_core_calendar_parse_date(title: Str): i64 {
+    var n = str_len(title);
+    var d = str_data(title);
+    var i = 0;
+    while (i + 10 <= n) {
+        if (_is_date10(d, i) == 1) {
+            var y = (load8(d + i) - 48) * 1000 + (load8(d + i + 1) - 48) * 100 + (load8(d + i + 2) - 48) * 10 + (load8(d + i + 3) - 48);
+            var mo = (load8(d + i + 5) - 48) * 10 + (load8(d + i + 6) - 48);
+            var day = (load8(d + i + 8) - 48) * 10 + (load8(d + i + 9) - 48);
+            return mneme_core_date_ymd(y, mo, day);
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+# CalendarEntry (32 bytes): [date@0, note_id@8, title@16, entry_type@24]
+fn mneme_core_calendar_entry_new(date, note_id, title: Str, entry_type): i64 {
+    var e = alloc(32);
+    store64(e, date);
+    store64(e + 8, note_id);
+    store64(e + 16, title);
+    store64(e + 24, entry_type);
+    return e;
+}
+fn mneme_core_calendar_entry_date(e): i64 { return load64(e); }
+fn mneme_core_calendar_entry_note_id(e): i64 { return load64(e + 8); }
+fn mneme_core_calendar_entry_title(e): i64 { return load64(e + 16); }
+fn mneme_core_calendar_entry_type(e): i64 { return load64(e + 24); }
+
+# build entries from tuples [id@0, title@8, date@16, entry_type@24]
+fn mneme_core_calendar_build_entries(tuples): i64 {
+    var out = vec_new();
+    var i = 0;
+    while (i < vec_len(tuples)) {
+        var t = vec_get(tuples, i);
+        vec_push(out, mneme_core_calendar_entry_new(load64(t + 16), load64(t), load64(t + 8), load64(t + 24)));
+        i = i + 1;
+    }
+    return out;
+}
+
+# MonthView (32 bytes): [year@0, month@8, entries@16, days_with_notes@24]
+fn mneme_core_calendar_month_view(entries, year, month): i64 {
+    var filtered = vec_new();
+    var i = 0;
+    while (i < vec_len(entries)) {
+        var e = vec_get(entries, i);
+        var dt = mneme_core_calendar_entry_date(e);
+        if ((mneme_core_date_year(dt) == year) && (mneme_core_date_month(dt) == month)) { vec_push(filtered, e); }
+        i = i + 1;
+    }
+    var seen = vec_new();
+    var j = 0;
+    while (j < vec_len(filtered)) {
+        var day = mneme_core_date_day(mneme_core_calendar_entry_date(vec_get(filtered, j)));
+        if (_vec_has_int(seen, day) == 0) { vec_push(seen, day); }
+        j = j + 1;
+    }
+    var mv = alloc(32);
+    store64(mv, year);
+    store64(mv + 8, month);
+    store64(mv + 16, filtered);
+    store64(mv + 24, vec_len(seen));
+    return mv;
+}
+fn mneme_core_month_view_year(mv): i64 { return load64(mv); }
+fn mneme_core_month_view_month(mv): i64 { return load64(mv + 8); }
+fn mneme_core_month_view_entries(mv): i64 { return load64(mv + 16); }
+fn mneme_core_month_view_days_with_notes(mv): i64 { return load64(mv + 24); }

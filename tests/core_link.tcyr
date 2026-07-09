@@ -1,0 +1,20 @@
+# mneme-core link tests — ported from rust-old/crates/mneme-core/src/link.rs.
+include "src/core_uuid.cyr"
+include "src/core_link.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("core_link");
+
+    # new_link_stores_endpoints
+    var src = mneme_core_uuid_v4();
+    var tgt = mneme_core_uuid_v4();
+    var link = mneme_core_link_new(src, tgt, str_from("related"), str_from("see related topic"));
+    assert_eq(mneme_core_uuid_eq(mneme_core_link_source_id(link), src), 1, "source_id stored");
+    assert_eq(mneme_core_uuid_eq(mneme_core_link_target_id(link), tgt), 1, "target_id stored");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

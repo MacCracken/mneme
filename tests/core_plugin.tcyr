@@ -1,0 +1,50 @@
+# mneme-core plugin tests — ported from rust-old/crates/mneme-core/src/plugin.rs.
+include "src/core_plugin.cyr"
+
+# helper: build a PluginInfo like the Rust test_plugin(name, caps)
+fn _tp(name: Str, caps): i64 {
+    return mneme_core_plugin_info_new(name, str_from("1.0.0"), str_from("Test plugin"), str_from("test"), caps);
+}
+fn _caps1(a): i64 { var v = vec_new(); vec_push(v, a); return v; }
+fn _caps2(a, b): i64 { var v = vec_new(); vec_push(v, a); vec_push(v, b); return v; }
+
+fn main() {
+    alloc_init();
+    test_group("core_plugin");
+
+    # register_and_list
+    var reg = mneme_core_registry_new();
+    mneme_core_registry_register(reg, _tp(str_from("markdown-lint"), _caps1(CAP_NOTE_PROCESSOR)));
+    mneme_core_registry_register(reg, _tp(str_from("csv-import"), _caps1(CAP_IMPORTER)));
+    assert_eq(vec_len(mneme_core_registry_list(reg)), 2, "list len 2");
+
+    # no_duplicates
+    var reg2 = mneme_core_registry_new();
+    mneme_core_registry_register(reg2, _tp(str_from("test"), vec_new()));
+    mneme_core_registry_register(reg2, _tp(str_from("test"), vec_new()));
+    assert_eq(vec_len(mneme_core_registry_list(reg2)), 1, "no duplicates");
+
+    # unregister
+    var reg3 = mneme_core_registry_new();
+    mneme_core_registry_register(reg3, _tp(str_from("removeme"), vec_new()));
+    assert_eq(mneme_core_registry_unregister(reg3, str_from("removeme")), 1, "unregister returns true");
+    assert_eq(mneme_core_registry_has_plugin(reg3, str_from("removeme")), 0, "gone after unregister");
+    assert_eq(mneme_core_registry_unregister(reg3, str_from("nonexistent")), 0, "unregister missing is false");
+
+    # find_by_capability
+    var reg4 = mneme_core_registry_new();
+    mneme_core_registry_register(reg4, _tp(str_from("proc1"), _caps1(CAP_NOTE_PROCESSOR)));
+    mneme_core_registry_register(reg4, _tp(str_from("imp1"), _caps1(CAP_IMPORTER)));
+    mneme_core_registry_register(reg4, _tp(str_from("proc2"), _caps2(CAP_NOTE_PROCESSOR, CAP_EXPORTER)));
+    assert_eq(vec_len(mneme_core_registry_find_by_capability(reg4, CAP_NOTE_PROCESSOR)), 2, "2 processors");
+    assert_eq(vec_len(mneme_core_registry_find_by_capability(reg4, CAP_IMPORTER)), 1, "1 importer");
+
+    # serialization
+    var info = _tp(str_from("test"), _caps1(CAP_NOTE_PROCESSOR));
+    assert(str_contains(mneme_core_plugin_info_to_json(info), str_from("note_processor")), "json has capability name");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

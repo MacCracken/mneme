@@ -1,0 +1,46 @@
+# mneme-core calendar tests — ported from rust-old/crates/mneme-core/src/calendar.rs.
+include "src/core_uuid.cyr"
+include "src/core_calendar.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("core_calendar");
+
+    # detect_daily_note
+    assert_eq(mneme_core_calendar_detect_entry_type(str_from("2026-03-13 — Daily Note")), ENTRY_DAILY_NOTE, "detect daily");
+    assert_eq(mneme_core_calendar_detect_entry_type(str_from("Sprint Planning Meeting")), ENTRY_MEETING_NOTE, "detect meeting");
+    assert_eq(mneme_core_calendar_detect_entry_type(str_from("Project Deadline")), ENTRY_DEADLINE, "detect deadline");
+    assert_eq(mneme_core_calendar_detect_entry_type(str_from("Random Note")), ENTRY_EVENT, "detect event");
+
+    # parse_date_from_daily
+    assert_eq(mneme_core_calendar_parse_date(str_from("2026-03-13 — Daily Note")), mneme_core_date_ymd(2026, 3, 13), "parse date");
+
+    # parse_no_date
+    assert_eq(mneme_core_calendar_parse_date(str_from("No Date Here")), 0 - 1, "parse no date is None");
+
+    # month_view_filters
+    var entries = vec_new();
+    vec_push(entries, mneme_core_calendar_entry_new(mneme_core_date_ymd(2026, 3, 1),  mneme_core_uuid_v4(), str_from("March 1"),  ENTRY_DAILY_NOTE));
+    vec_push(entries, mneme_core_calendar_entry_new(mneme_core_date_ymd(2026, 3, 15), mneme_core_uuid_v4(), str_from("March 15"), ENTRY_EVENT));
+    vec_push(entries, mneme_core_calendar_entry_new(mneme_core_date_ymd(2026, 4, 1),  mneme_core_uuid_v4(), str_from("April 1"),  ENTRY_DAILY_NOTE));
+    var view = mneme_core_calendar_month_view(entries, 2026, 3);
+    assert_eq(vec_len(mneme_core_month_view_entries(view)), 2, "month view entries");
+    assert_eq(mneme_core_month_view_days_with_notes(view), 2, "days with notes");
+
+    # build_entries_from_tuples: tuple = [id@0, title@8, date@16, entry_type@24]
+    var tup = alloc(32);
+    store64(tup, mneme_core_uuid_v4());
+    store64(tup + 8, str_from("Note 1"));
+    store64(tup + 16, mneme_core_date_ymd(2026, 3, 1));
+    store64(tup + 24, ENTRY_DAILY_NOTE);
+    var tuples = vec_new();
+    vec_push(tuples, tup);
+    var built = mneme_core_calendar_build_entries(tuples);
+    assert_eq(vec_len(built), 1, "built entries len");
+    assert(str_eq(mneme_core_calendar_entry_title(vec_get(built, 0)), str_from("Note 1")), "built entry title");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

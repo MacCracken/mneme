@@ -1,0 +1,68 @@
+# mneme-core — knowledge graph types (ported from rust-old/crates/mneme-core/src/graph.rs)
+# Zero-I/O. Ported: NodeKind/EdgeRelation enums, GraphNode/GraphEdge/Subgraph +
+# neighbors(). NOTE: GraphLayout::from_subgraph (force-directed f64 spring layout)
+# is DEFERRED — it has no Rust test; port it in the f64-math pass.
+
+enum NodeKind {
+    NODE_NOTE;
+    NODE_TAG;
+    NODE_CONCEPT;
+}
+
+enum EdgeRelation {
+    EDGE_LINKS_TO;
+    EDGE_TAGGED_WITH;
+    EDGE_MENTIONS;
+    EDGE_CUSTOM;      # Rust's Custom(String); custom label deferred (unused by tests)
+}
+
+# GraphNode (24 bytes): [id@0, label@8, kind@16]
+fn mneme_core_graph_node_new(id, label: Str, kind): i64 {
+    var n = alloc(24);
+    store64(n, id);
+    store64(n + 8, label);
+    store64(n + 16, kind);
+    return n;
+}
+fn mneme_core_graph_node_id(n): i64 { return load64(n); }
+fn mneme_core_graph_node_label(n): i64 { return load64(n + 8); }
+fn mneme_core_graph_node_kind(n): i64 { return load64(n + 16); }
+
+# GraphEdge (24 bytes): [source@0, target@8, relation@16]
+fn mneme_core_graph_edge_new(source, target, relation): i64 {
+    var e = alloc(24);
+    store64(e, source);
+    store64(e + 8, target);
+    store64(e + 16, relation);
+    return e;
+}
+fn mneme_core_graph_edge_source(e): i64 { return load64(e); }
+fn mneme_core_graph_edge_target(e): i64 { return load64(e + 8); }
+fn mneme_core_graph_edge_relation(e): i64 { return load64(e + 16); }
+
+# Subgraph (16 bytes): [nodes@0 (vec<GraphNode>), edges@8 (vec<GraphEdge>)]
+fn mneme_core_subgraph_empty(): i64 {
+    var sg = alloc(16);
+    store64(sg, vec_new());
+    store64(sg + 8, vec_new());
+    return sg;
+}
+fn mneme_core_subgraph_nodes(sg): i64 { return load64(sg); }
+fn mneme_core_subgraph_edges(sg): i64 { return load64(sg + 8); }
+
+# neighbors: all node ids directly connected to node_id (either edge direction)
+fn mneme_core_subgraph_neighbors(sg, node_id): i64 {
+    var out = vec_new();
+    var edges = load64(sg + 8);
+    var i = 0;
+    while (i < vec_len(edges)) {
+        var e = vec_get(edges, i);
+        if (mneme_core_uuid_eq(mneme_core_graph_edge_source(e), node_id) == 1) {
+            vec_push(out, mneme_core_graph_edge_target(e));
+        } elif (mneme_core_uuid_eq(mneme_core_graph_edge_target(e), node_id) == 1) {
+            vec_push(out, mneme_core_graph_edge_source(e));
+        }
+        i = i + 1;
+    }
+    return out;
+}

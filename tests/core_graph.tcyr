@@ -1,0 +1,36 @@
+# mneme-core graph tests — ported from rust-old/crates/mneme-core/src/graph.rs.
+include "src/core_uuid.cyr"
+include "src/core_graph.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("core_graph");
+
+    var a = mneme_core_uuid_v4();
+    var b = mneme_core_uuid_v4();
+    var c = mneme_core_uuid_v4();
+
+    # subgraph_neighbors: a—b (LinksTo), a—c (TaggedWith)
+    var sg = mneme_core_subgraph_empty();
+    vec_push(mneme_core_subgraph_nodes(sg), mneme_core_graph_node_new(a, str_from("A"), NODE_NOTE));
+    vec_push(mneme_core_subgraph_nodes(sg), mneme_core_graph_node_new(b, str_from("B"), NODE_NOTE));
+    vec_push(mneme_core_subgraph_nodes(sg), mneme_core_graph_node_new(c, str_from("C"), NODE_TAG));
+    vec_push(mneme_core_subgraph_edges(sg), mneme_core_graph_edge_new(a, b, EDGE_LINKS_TO));
+    vec_push(mneme_core_subgraph_edges(sg), mneme_core_graph_edge_new(a, c, EDGE_TAGGED_WITH));
+    var n1 = mneme_core_subgraph_neighbors(sg, a);
+    assert_eq(vec_len(n1), 2, "a has 2 neighbors");
+    assert_eq(mneme_core_uuid_eq(vec_get(n1, 0), b), 1, "neighbor contains b");
+    assert_eq(mneme_core_uuid_eq(vec_get(n1, 1), c), 1, "neighbor contains c");
+
+    # subgraph_neighbors_bidirectional: edge a→b, query b, expect [a]
+    var sg2 = mneme_core_subgraph_empty();
+    vec_push(mneme_core_subgraph_edges(sg2), mneme_core_graph_edge_new(a, b, EDGE_LINKS_TO));
+    var n2 = mneme_core_subgraph_neighbors(sg2, b);
+    assert_eq(vec_len(n2), 1, "b has 1 neighbor");
+    assert_eq(mneme_core_uuid_eq(vec_get(n2, 0), a), 1, "neighbor is a");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);
