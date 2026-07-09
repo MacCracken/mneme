@@ -1,0 +1,32 @@
+# mneme-core — tag path logic
+# Ported from rust-old/crates/mneme-core/src/tag.rs (zero-I/O).
+# Hierarchical tags use '/' separators, e.g. "project/agnos/core".
+# NOTE: the Tag struct (id/name/color/created_at) + serialization land in a
+# later increment once the uuid + time + serde-shim primitives exist; these
+# pure string helpers are the leaf logic and set the port+test pattern.
+
+# parent_path("project/agnos/core") -> "project/agnos"
+# top-level tag (no '/') -> "" (represents Rust's None)
+fn mneme_core_tag_parent_path(name: Str): Str {
+    var idx = str_last_index_of(name, "/");
+    if (idx < 0) {
+        return str_from("");
+    }
+    return str_substr(name, 0, idx);
+}
+
+# ancestor_paths("a/b/c") -> ["a", "a/b"]  (vec<Str>, root .. immediate parent)
+# Each '/' at byte offset k yields the prefix name[0..k].
+fn mneme_core_tag_ancestor_paths(name: Str): i64 {
+    var v = vec_new();
+    var n = str_len(name);
+    var data = str_data(name);
+    var i = 0;
+    while (i < n) {
+        if (load8(data + i) == 47) {   # '/' == ASCII 47
+            vec_push(v, str_substr(name, 0, i));
+        }
+        i = i + 1;
+    }
+    return v;
+}

@@ -1,0 +1,30 @@
+# mneme-core tag tests
+# Ported 1:1 from rust-old/crates/mneme-core/src/tag.rs #[cfg(test)] mod tests.
+# Stdlib (str/vec/alloc/assert) auto-included via cyrius.cyml [deps].stdlib.
+include "src/core_tag.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("core_tag");
+
+    # parent_path_nested: "project/agnos/core" -> Some("project/agnos")
+    # NOTE: str_substr returns a non-null-terminated view, so compare with
+    # str_eq (length-based) — assert_streq uses streq (cstr/null-terminated).
+    assert(str_eq(mneme_core_tag_parent_path(str_from("project/agnos/core")),
+                  str_from("project/agnos")), "parent_path nested");
+
+    # parent_path_top_level: "toplevel" -> None (empty)
+    assert_eq(str_len(mneme_core_tag_parent_path(str_from("toplevel"))), 0,
+              "parent_path top-level is None");
+
+    # ancestor_paths: "a/b/c" -> ["a", "a/b"]
+    var anc = mneme_core_tag_ancestor_paths(str_from("a/b/c"));
+    assert_eq(vec_len(anc), 2, "ancestor count");
+    assert(str_eq(vec_get(anc, 0), str_from("a")), "ancestor 0");
+    assert(str_eq(vec_get(anc, 1), str_from("a/b")), "ancestor 1");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

@@ -1,0 +1,14 @@
+[package]
+name = "mneme"
+version = "0.1.0"
+description = "mneme — AI-native knowledge base (Cyrius port, from 21014 lines of Rust)"
+license = "AGPL-3.0"
+language = "cyrius"
+cyrius = "6.4.32"
+
+[build]
+entry = "src/main.cyr"
+output = "mneme"
+
+[deps]
+stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args", "assert"]
