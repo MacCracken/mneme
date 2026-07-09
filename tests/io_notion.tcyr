@@ -1,0 +1,30 @@
+# mneme-io Notion cleanup tests — ported from the 4 pure #[test]s in
+# rust-old/crates/mneme-io/src/import_notion.rs (async I/O tests deferred).
+include "src/io_notion.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("io_notion");
+
+    # clean_uuid_suffix
+    var p1 = mneme_io_notion_clean_title(str_from("My Page abc123def4567890abcdef1234567890"));
+    assert(str_eq(mneme_io_notion_title_str(p1), str_from("My Page")), "uuid suffix stripped");
+    assert_eq(mneme_io_notion_title_cleaned(p1), 1, "was cleaned");
+
+    # clean_no_suffix
+    var p2 = mneme_io_notion_clean_title(str_from("Normal Title"));
+    assert(str_eq(mneme_io_notion_title_str(p2), str_from("Normal Title")), "no suffix unchanged");
+    assert_eq(mneme_io_notion_title_cleaned(p2), 0, "not cleaned");
+
+    # clean_notion_links
+    var cleaned = mneme_io_notion_clean_content(str_from("See [Other Page](Other%20Page%20abc123def4567890abcdef1234567890.md) for details."));
+    assert(str_contains(cleaned, str_from("[Other Page](other-page.md)")), "notion link converted");
+
+    # path_cleaning
+    assert(str_eq(mneme_io_notion_clean_path(str_from("Projects abc123def4567890abcdef1234567890/Sub abc123def4567890abcdef1234567890.md")), str_from("Projects/Sub.md")), "path cleaned");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

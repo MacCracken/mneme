@@ -1,0 +1,168 @@
+# mneme-io — Notion export cleanup (pure fns from rust-old/crates/mneme-io/src/import_notion.rs)
+# Zero-I/O. The async directory import (import_notion_export/collect_notion_files)
+# is DEFERRED to the fs pass; these are the string-cleaning helpers (the 4 #[test]s).
+# Hand-implements the Rust regexes for a trailing/embedded 32-hex Notion UUID.
+
+fn _ntn_is_ws(c): i64 { if (c == 32 || c == 9 || c == 10 || c == 13) { return 1; } return 0; }
+fn _ntn_is_hex(c): i64 { if ((c >= 48 && c <= 57) || (c >= 97 && c <= 102)) { return 1; } return 0; }
+fn _ntn_hex_run(d, i, len): i64 {
+    var k = 0;
+    while (k < len) {
+        if (_ntn_is_hex(load8(d + i + k)) == 0) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}
+fn _ntn_find_char(d, start, n, ch): i64 {
+    var i = start;
+    while (i < n) {
+        if (load8(d + i) == ch) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+fn _ntn_replace_all(s: Str, from_cstr, to_cstr): i64 {
+    var sb = str_builder_new();
+    var flen = strlen(from_cstr);
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        if (i + flen <= n && memeq(d + i, from_cstr, flen) == 1) {
+            str_builder_add_cstr(sb, to_cstr);
+            i = i + flen;
+        } else {
+            str_builder_putc(sb, load8(d + i));
+            i = i + 1;
+        }
+    }
+    return str_builder_build(sb);
+}
+
+# slug: alnum or '/' -> lowercase, else '-'; collapse '-' runs; trim '-'
+fn mneme_io_notion_slug_path(title: Str): i64 {
+    var n = str_len(title);
+    var d = str_data(title);
+    var tmp = str_builder_new();
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if ((c >= 48 && c <= 57) || (c >= 97 && c <= 122) || c == 47) { str_builder_putc(tmp, c); }
+        elif (c >= 65 && c <= 90) { str_builder_putc(tmp, c + 32); }
+        else { str_builder_putc(tmp, 45); }
+        i = i + 1;
+    }
+    var mapped = str_builder_build(tmp);
+    var mn = str_len(mapped);
+    var md = str_data(mapped);
+    var out = str_builder_new();
+    var start = 0;
+    var first = 1;
+    var k = 0;
+    while (k <= mn) {
+        var isend = 0;
+        if (k == mn) { isend = 1; }
+        elif (load8(md + k) == 45) { isend = 1; }
+        if (isend == 1) {
+            if (k > start) {
+                if (first == 0) { str_builder_putc(out, 45); }
+                str_builder_add(out, str_substr(mapped, start, k));
+                first = 0;
+            }
+            start = k + 1;
+        }
+        k = k + 1;
+    }
+    return str_builder_build(out);
+}
+
+# clean_notion_title -> pair [title@0, cleaned@8]. Strips trailing "\s+<32hex>".
+fn mneme_io_notion_clean_title(title: Str): i64 {
+    var pair = alloc(16);
+    var n = str_len(title);
+    var d = str_data(title);
+    if (n >= 33 && _ntn_hex_run(d, n - 32, 32) == 1 && _ntn_is_ws(load8(d + n - 33)) == 1) {
+        var ws = n - 32;
+        while (ws > 0 && _ntn_is_ws(load8(d + ws - 1)) == 1) { ws = ws - 1; }
+        store64(pair, str_substr(title, 0, ws));
+        store64(pair + 8, 1);
+    } else {
+        store64(pair, title);
+        store64(pair + 8, 0);
+    }
+    return pair;
+}
+fn mneme_io_notion_title_str(p): i64 { return load64(p); }
+fn mneme_io_notion_title_cleaned(p): i64 { return load64(p + 8); }
+
+# clean_notion_path: remove every "\s+<32hex>"
+fn mneme_io_notion_clean_path(path: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(path);
+    var d = str_data(path);
+    var i = 0;
+    while (i < n) {
+        if (_ntn_is_ws(load8(d + i)) == 1) {
+            var ws_end = i;
+            while (ws_end < n && _ntn_is_ws(load8(d + ws_end)) == 1) { ws_end = ws_end + 1; }
+            if (ws_end + 32 <= n && _ntn_hex_run(d, ws_end, 32) == 1) {
+                i = ws_end + 32;
+            } else {
+                str_builder_putc(sb, load8(d + i));
+                i = i + 1;
+            }
+        } else {
+            str_builder_putc(sb, load8(d + i));
+            i = i + 1;
+        }
+    }
+    return str_builder_build(sb);
+}
+
+# does a link's inner "(...)" end with "\s+<32hex>.md"?
+fn _ntn_is_uuid_link(inner: Str): i64 {
+    var m = str_len(inner);
+    if (m < 36) { return 0; }
+    var d = str_data(inner);
+    if (load8(d + m - 3) != 46 || load8(d + m - 2) != 109 || load8(d + m - 1) != 100) { return 0; }  # ".md"
+    if (_ntn_hex_run(d, m - 35, 32) == 0) { return 0; }
+    if (_ntn_is_ws(load8(d + m - 36)) == 0) { return 0; }
+    return 1;
+}
+
+# clean_notion_content: %20 -> space, convert "[text](path <32hex>.md)" -> "[text](slug.md)"
+# (toggle-block removal is deferred — untested.)
+fn mneme_io_notion_clean_content(content: Str): i64 {
+    var s = _ntn_replace_all(content, "%20", " ");
+    var sb = str_builder_new();
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var matched = 0;
+        if (load8(d + i) == 91) {   # '['
+            var rb = _ntn_find_char(d, i + 1, n, 93);   # ']'
+            if (rb >= 0 && rb + 1 < n && load8(d + rb + 1) == 40) {   # '(' after ']'
+                var rp = _ntn_find_char(d, rb + 2, n, 41);   # ')'
+                if (rp >= 0) {
+                    var inner = str_substr(s, rb + 2, rp);
+                    if (_ntn_is_uuid_link(inner) == 1) {
+                        var text = str_substr(s, i + 1, rb);
+                        str_builder_putc(sb, 91);
+                        str_builder_add(sb, text);
+                        str_builder_add_cstr(sb, "](");
+                        str_builder_add(sb, mneme_io_notion_slug_path(text));
+                        str_builder_add_cstr(sb, ".md)");
+                        i = rp + 1;
+                        matched = 1;
+                    }
+                }
+            }
+        }
+        if (matched == 0) {
+            str_builder_putc(sb, load8(d + i));
+            i = i + 1;
+        }
+    }
+    return str_builder_build(sb);
+}

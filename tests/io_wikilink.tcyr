@@ -1,0 +1,43 @@
+# mneme-io wikilink tests — ported 1:1 from rust-old/crates/mneme-io/src/wikilink.rs.
+include "src/io_wikilink.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("io_wikilink");
+
+    # extract_simple_wikilink
+    var l1 = mneme_io_extract_wikilinks(str_from("See [[My Note]] for details."));
+    assert_eq(vec_len(l1), 1, "simple: 1 link");
+    assert(str_eq(mneme_io_wikilink_target(vec_get(l1, 0)), str_from("My Note")), "simple: target");
+    assert_eq(mneme_io_wikilink_display(vec_get(l1, 0)), 0, "simple: display None");
+
+    # extract_aliased_wikilink
+    var l2 = mneme_io_extract_wikilinks(str_from("Check [[My Note|this page]]."));
+    assert_eq(vec_len(l2), 1, "aliased: 1 link");
+    assert(str_eq(mneme_io_wikilink_target(vec_get(l2, 0)), str_from("My Note")), "aliased: target");
+    assert(str_eq(mneme_io_wikilink_display(vec_get(l2, 0)), str_from("this page")), "aliased: display");
+
+    # extract_multiple_wikilinks
+    assert_eq(vec_len(mneme_io_extract_wikilinks(str_from("Link to [[A]] and [[B|beta]] and [[C]]."))), 3, "multiple: 3 links");
+
+    # extract_no_wikilinks
+    assert_eq(vec_len(mneme_io_extract_wikilinks(str_from("No links here."))), 0, "none: empty");
+
+    # convert_simple
+    assert(str_eq(mneme_io_wikilinks_to_markdown(str_from("See [[My Note]] for details.")), str_from("See [My Note](my-note.md) for details.")), "convert simple");
+
+    # convert_aliased
+    assert(str_eq(mneme_io_wikilinks_to_markdown(str_from("Check [[My Note|this page]].")), str_from("Check [this page](my-note.md).")), "convert aliased");
+
+    # convert_multiple
+    assert(str_eq(mneme_io_wikilinks_to_markdown(str_from("[[A]] and [[B|beta]]")), str_from("[A](a.md) and [beta](b.md)")), "convert multiple");
+
+    # slug_generation
+    assert(str_eq(mneme_io_title_to_slug(str_from("Hello World")), str_from("hello-world")), "slug hello world");
+    assert(str_eq(mneme_io_title_to_slug(str_from("What's New? (2026)")), str_from("what-s-new-2026")), "slug punctuation");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

@@ -1,0 +1,120 @@
+# mneme-io — wikilink parser (ported from rust-old/crates/mneme-io/src/wikilink.rs)
+# Zero-I/O. Parses [[Target]] / [[Target|Display]] and converts to Markdown links.
+# Hand-parsed (the Rust regex \[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]); inner has no ']'.
+
+# Wikilink (16 bytes): [target@0, display@8 (Str or 0 = None)]
+fn mneme_io_wikilink_target(w): i64 { return load64(w); }
+fn mneme_io_wikilink_display(w): i64 { return load64(w + 8); }
+
+# title -> slug: alnum -> lowercase, else '-'; collapse '-' runs; trim leading/trailing '-'
+fn mneme_io_title_to_slug(title: Str): i64 {
+    var n = str_len(title);
+    var d = str_data(title);
+    var tmp = str_builder_new();
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if ((c >= 48 && c <= 57) || (c >= 97 && c <= 122)) { str_builder_putc(tmp, c); }
+        elif (c >= 65 && c <= 90) { str_builder_putc(tmp, c + 32); }
+        else { str_builder_putc(tmp, 45); }
+        i = i + 1;
+    }
+    var mapped = str_builder_build(tmp);
+    var mn = str_len(mapped);
+    var md = str_data(mapped);
+    var out = str_builder_new();
+    var start = 0;
+    var first = 1;
+    var k = 0;
+    while (k <= mn) {
+        var isend = 0;
+        if (k == mn) { isend = 1; }
+        elif (load8(md + k) == 45) { isend = 1; }
+        if (isend == 1) {
+            if (k > start) {
+                if (first == 0) { str_builder_putc(out, 45); }
+                str_builder_add(out, str_substr(mapped, start, k));
+                first = 0;
+            }
+            start = k + 1;
+        }
+        k = k + 1;
+    }
+    return str_builder_build(out);
+}
+
+# split the inner "[[...]]" text into a Wikilink [target, display]
+fn _wl_make(inner: Str): i64 {
+    var bar = str_index_of(inner, 124);   # '|'
+    var w = alloc(16);
+    if (bar < 0) {
+        store64(w, str_trim(inner));
+        store64(w + 8, 0);
+    } else {
+        store64(w, str_trim(str_substr(inner, 0, bar)));
+        store64(w + 8, str_trim(str_substr(inner, bar + 1, str_len(inner))));
+    }
+    return w;
+}
+
+fn mneme_io_extract_wikilinks(content: Str): i64 {
+    var out = vec_new();
+    var n = str_len(content);
+    var d = str_data(content);
+    var i = 0;
+    while (i + 1 < n) {
+        if (load8(d + i) == 91 && load8(d + i + 1) == 91) {   # "[["
+            var j = i + 2;
+            var close = 0 - 1;
+            while (j + 1 < n && close < 0) {
+                if (load8(d + j) == 93 && load8(d + j + 1) == 93) { close = j; }
+                j = j + 1;
+            }
+            if (close < 0) {
+                i = i + 1;
+            } else {
+                vec_push(out, _wl_make(str_substr(content, i + 2, close)));
+                i = close + 2;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    return out;
+}
+
+fn mneme_io_wikilinks_to_markdown(content: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(content);
+    var d = str_data(content);
+    var i = 0;
+    while (i < n) {
+        if (i + 1 < n && load8(d + i) == 91 && load8(d + i + 1) == 91) {
+            var j = i + 2;
+            var close = 0 - 1;
+            while (j + 1 < n && close < 0) {
+                if (load8(d + j) == 93 && load8(d + j + 1) == 93) { close = j; }
+                j = j + 1;
+            }
+            if (close < 0) {
+                str_builder_putc(sb, load8(d + i));
+                i = i + 1;
+            } else {
+                var w = _wl_make(str_substr(content, i + 2, close));
+                var target = mneme_io_wikilink_target(w);
+                var display = mneme_io_wikilink_display(w);
+                if (display == 0) { display = target; }
+                str_builder_putc(sb, 91);   # '['
+                str_builder_add(sb, display);
+                str_builder_add_cstr(sb, "](");
+                str_builder_add(sb, mneme_io_title_to_slug(target));
+                str_builder_add_cstr(sb, ".md)");
+                i = close + 2;
+            }
+        } else {
+            str_builder_putc(sb, load8(d + i));
+            i = i + 1;
+        }
+    }
+    return str_builder_build(sb);
+}
