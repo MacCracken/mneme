@@ -1,0 +1,47 @@
+# mneme-core config tests — ported from rust-old/crates/mneme-core/src/config.rs.
+# bayan (TOML) is a carve — must be explicitly included even under `cyrius test`.
+include "lib/bayan.cyr"
+include "src/core_uuid.cyr"
+include "src/core_config.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("core_config");
+
+    # default_config_is_empty
+    var config = mneme_core_config_default();
+    assert_eq(mneme_core_config_default_vault(config), 0, "default_vault is None");
+    assert_eq(vec_len(mneme_core_config_vaults(config)), 0, "vaults empty");
+    var cr = mneme_core_config_context_retrieval(config);
+    assert_eq(mneme_core_context_enabled(cr), 1, "context enabled");
+    assert_eq(mneme_core_context_query_weight(cr), f64_parse("0.7"), "query_weight 0.7");
+    assert_eq(mneme_core_context_buffer_capacity(cr), 7, "buffer_capacity 7");
+
+    # vault_config_entry_serde_roundtrip
+    var entry = mneme_core_vault_entry_new(str_from("work"), str_from("/home/user/work-notes"), str_from("Work notes"), f64_parse("1.5"));
+    var parsed = mneme_core_vault_entry_from_toml(mneme_core_vault_entry_to_toml(entry));
+    assert(str_eq(mneme_core_vault_entry_name(parsed), str_from("work")), "roundtrip name");
+    assert_eq(mneme_core_vault_entry_search_weight(parsed), f64_parse("1.5"), "roundtrip search_weight 1.5");
+
+    # vault_info_new_defaults
+    var info = mneme_core_vault_info_new(str_from("test"), str_from("/tmp/test"));
+    assert(str_eq(mneme_core_vault_info_name(info), str_from("test")), "vault info name");
+    assert_eq(mneme_core_vault_info_search_weight(info), f64_parse("1.0"), "vault info weight 1.0");
+    assert_eq(mneme_core_vault_info_is_default(info), 0, "vault info not default");
+
+    # full_config_serde_roundtrip
+    var full = mneme_core_config_default();
+    store64(full, str_from("work"));   # default_vault = Some("work")
+    var vs = mneme_core_config_vaults(full);
+    vec_push(vs, mneme_core_vault_entry_new(str_from("work"), str_from("/work"), 0, f64_parse("1.0")));
+    vec_push(vs, mneme_core_vault_entry_new(str_from("personal"), str_from("/personal"), str_from("Personal stuff"), f64_parse("0.5")));
+    var rt = mneme_core_config_from_toml(mneme_core_config_to_toml(full));
+    assert(str_eq(mneme_core_config_default_vault(rt), str_from("work")), "full roundtrip default_vault");
+    assert_eq(vec_len(mneme_core_config_vaults(rt)), 2, "full roundtrip vaults len 2");
+    assert(str_eq(mneme_core_embedding_backend(mneme_core_config_embedding(rt)), str_from("auto")), "full roundtrip backend auto");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

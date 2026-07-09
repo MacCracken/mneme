@@ -1,0 +1,208 @@
+# mneme-core — configuration types (ported from rust-old/crates/mneme-core/src/config.rs)
+# Zero-I/O. mneme.toml config with TOML serialize/parse roundtrip (via bayan).
+# Requires (test wires them): lib/bayan.cyr (+ tagged/fnptr prereqs), core_uuid.
+# f64 fields are IEEE-754 bit patterns; _cfg_f64_str formats terminating decimals.
+
+# --- helpers ---
+
+# format a non-negative f64 as a decimal string (e.g. 1.5 -> "1.5", 1.0 -> "1.0").
+# Uses only f64_from/add/mul/le/ge (no f64_sub / f64->int builtins exist).
+fn _cfg_f64_str(x): i64 {
+    var sb = str_builder_new();
+    var neg1 = f64_from(0 - 1);
+    var ten = f64_from(10);
+    var tiny = f64_parse("0.0000001");
+    var ip = 0;
+    while (f64_le(f64_from(ip + 1), x) == 1) { ip = ip + 1; }
+    str_builder_add_int(sb, ip);
+    str_builder_putc(sb, 46);   # '.'
+    var frac = f64_add(x, f64_mul(f64_from(ip), neg1));   # x - ip
+    var count = 0;
+    while (count < 10 && f64_ge(frac, tiny) == 1) {
+        frac = f64_mul(frac, ten);
+        var dd = 0;
+        while (f64_le(f64_from(dd + 1), frac) == 1) { dd = dd + 1; }
+        str_builder_putc(sb, 48 + dd);
+        frac = f64_add(frac, f64_mul(f64_from(dd), neg1));   # frac - dd
+        count = count + 1;
+    }
+    if (count == 0) { str_builder_putc(sb, 48); }   # "1." -> "1.0"
+    return str_builder_build(sb);
+}
+
+# null-terminated cstr copy of a Str (for f64_parse, which wants a cstr)
+fn _cfg_cstr(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(s), n);
+    store8(buf + n, 0);
+    return buf;
+}
+
+# top-level pairs (section named "") from a bayan-parsed section vec
+fn _cfg_top_pairs(sections): i64 {
+    var i = 0;
+    while (i < vec_len(sections)) {
+        var s = vec_get(sections, i);
+        if (str_eq_cstr(bayan_toml_section_name(s), "") == 1) { return bayan_toml_section_pairs(s); }
+        i = i + 1;
+    }
+    return vec_new();
+}
+
+# --- VaultConfigEntry (32 bytes): [name@0, path@8, description@16, search_weight@24 (f64)] ---
+fn mneme_core_vault_entry_new(name: Str, path: Str, description, search_weight): i64 {
+    var e = alloc(32);
+    store64(e, name);
+    store64(e + 8, path);
+    store64(e + 16, description);   # Str or 0 (None)
+    store64(e + 24, search_weight);
+    return e;
+}
+fn mneme_core_vault_entry_name(e): i64 { return load64(e); }
+fn mneme_core_vault_entry_path(e): i64 { return load64(e + 8); }
+fn mneme_core_vault_entry_description(e): i64 { return load64(e + 16); }
+fn mneme_core_vault_entry_search_weight(e): i64 { return load64(e + 24); }
+
+fn mneme_core_vault_entry_to_toml(e): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "name = \"");
+    str_builder_add(sb, mneme_core_vault_entry_name(e));
+    str_builder_add_cstr(sb, "\"\npath = \"");
+    str_builder_add(sb, mneme_core_vault_entry_path(e));
+    str_builder_add_cstr(sb, "\"\n");
+    if (mneme_core_vault_entry_description(e) != 0) {
+        str_builder_add_cstr(sb, "description = \"");
+        str_builder_add(sb, mneme_core_vault_entry_description(e));
+        str_builder_add_cstr(sb, "\"\n");
+    }
+    str_builder_add_cstr(sb, "search_weight = ");
+    str_builder_add(sb, _cfg_f64_str(mneme_core_vault_entry_search_weight(e)));
+    str_builder_putc(sb, 10);
+    return str_builder_build(sb);
+}
+
+fn mneme_core_vault_entry_from_toml(toml_str: Str): i64 {
+    var pairs = _cfg_top_pairs(bayan_toml_parse(toml_str));
+    var name = bayan_toml_get(pairs, "name");
+    var path = bayan_toml_get(pairs, "path");
+    var desc = bayan_toml_get(pairs, "description");   # 0 if absent
+    var wstr = bayan_toml_get(pairs, "search_weight");
+    var w = f64_parse("1.0");
+    if (wstr != 0) { w = f64_parse(_cfg_cstr(wstr)); }
+    return mneme_core_vault_entry_new(name, path, desc, w);
+}
+
+# --- EmbeddingSection (40 bytes): [backend@0, remote_url@8, model@16, api_key@24, dimensions@32] ---
+fn mneme_core_embedding_default(): i64 {
+    var s = alloc(40);
+    store64(s, str_from("auto"));
+    store64(s + 8, 0);
+    store64(s + 16, 0);
+    store64(s + 24, 0);
+    store64(s + 32, 0 - 1);   # dimensions None
+    return s;
+}
+fn mneme_core_embedding_backend(s): i64 { return load64(s); }
+
+# --- ContextRetrievalConfig (24 bytes): [enabled@0, query_weight@8 (f64), buffer_capacity@16] ---
+fn mneme_core_context_retrieval_default(): i64 {
+    var c = alloc(24);
+    store64(c, 1);                    # enabled = true
+    store64(c + 8, f64_parse("0.7")); # query_weight
+    store64(c + 16, 7);               # buffer_capacity
+    return c;
+}
+fn mneme_core_context_enabled(c): i64 { return load64(c); }
+fn mneme_core_context_query_weight(c): i64 { return load64(c + 8); }
+fn mneme_core_context_buffer_capacity(c): i64 { return load64(c + 16); }
+
+# --- VaultInfo (56 bytes): [id@0, name@8, path@16, description@24, search_weight@32 (f64), last_opened@40, is_default@48] ---
+fn mneme_core_vault_info_new(name: Str, path: Str): i64 {
+    var v = alloc(56);
+    store64(v, mneme_core_uuid_v4());
+    store64(v + 8, name);
+    store64(v + 16, path);
+    store64(v + 24, str_from(""));
+    store64(v + 32, f64_parse("1.0"));
+    store64(v + 40, clock_now_ns());
+    store64(v + 48, 0);               # is_default = false
+    return v;
+}
+fn mneme_core_vault_info_name(v): i64 { return load64(v + 8); }
+fn mneme_core_vault_info_search_weight(v): i64 { return load64(v + 32); }
+fn mneme_core_vault_info_is_default(v): i64 { return load64(v + 48); }
+
+# --- MnemeConfig (40 bytes): [default_vault@0, registry_path@8, vaults@16 (vec), context_retrieval@24, embedding@32] ---
+fn mneme_core_config_default(): i64 {
+    var c = alloc(40);
+    store64(c, 0);                    # default_vault None
+    store64(c + 8, 0);                # registry_path None
+    store64(c + 16, vec_new());       # vaults empty
+    store64(c + 24, mneme_core_context_retrieval_default());
+    store64(c + 32, mneme_core_embedding_default());
+    return c;
+}
+fn mneme_core_config_default_vault(c): i64 { return load64(c); }
+fn mneme_core_config_vaults(c): i64 { return load64(c + 16); }
+fn mneme_core_config_context_retrieval(c): i64 { return load64(c + 24); }
+fn mneme_core_config_embedding(c): i64 { return load64(c + 32); }
+
+fn mneme_core_config_to_toml(c): i64 {
+    var sb = str_builder_new();
+    if (mneme_core_config_default_vault(c) != 0) {
+        str_builder_add_cstr(sb, "default_vault = \"");
+        str_builder_add(sb, mneme_core_config_default_vault(c));
+        str_builder_add_cstr(sb, "\"\n");
+    }
+    var vaults = mneme_core_config_vaults(c);
+    var i = 0;
+    while (i < vec_len(vaults)) {
+        str_builder_add_cstr(sb, "\n[[vaults]]\n");
+        str_builder_add(sb, mneme_core_vault_entry_to_toml(vec_get(vaults, i)));
+        i = i + 1;
+    }
+    var cr = mneme_core_config_context_retrieval(c);
+    str_builder_add_cstr(sb, "\n[context_retrieval]\nenabled = ");
+    if (mneme_core_context_enabled(cr) == 1) { str_builder_add_cstr(sb, "true"); }
+    else { str_builder_add_cstr(sb, "false"); }
+    str_builder_add_cstr(sb, "\nquery_weight = ");
+    str_builder_add(sb, _cfg_f64_str(mneme_core_context_query_weight(cr)));
+    str_builder_add_cstr(sb, "\nbuffer_capacity = ");
+    str_builder_add_int(sb, mneme_core_context_buffer_capacity(cr));
+    str_builder_add_cstr(sb, "\n\n[embedding]\nbackend = \"");
+    str_builder_add(sb, mneme_core_embedding_backend(mneme_core_config_embedding(c)));
+    str_builder_add_cstr(sb, "\"\n");
+    return str_builder_build(sb);
+}
+
+fn mneme_core_config_from_toml(toml_str: Str): i64 {
+    var sections = bayan_toml_parse(toml_str);
+    var c = alloc(40);
+    var top = _cfg_top_pairs(sections);
+    store64(c, bayan_toml_get(top, "default_vault"));   # Str or 0
+    store64(c + 8, 0);
+    # vaults = each [[vaults]] section
+    var vaults = vec_new();
+    var vsecs = bayan_toml_get_sections(sections, "vaults");
+    var i = 0;
+    while (i < vec_len(vsecs)) {
+        var pairs = bayan_toml_section_pairs(vec_get(vsecs, i));
+        var wstr = bayan_toml_get(pairs, "search_weight");
+        var w = f64_parse("1.0");
+        if (wstr != 0) { w = f64_parse(_cfg_cstr(wstr)); }
+        vec_push(vaults, mneme_core_vault_entry_new(bayan_toml_get(pairs, "name"), bayan_toml_get(pairs, "path"), bayan_toml_get(pairs, "description"), w));
+        i = i + 1;
+    }
+    store64(c + 16, vaults);
+    store64(c + 24, mneme_core_context_retrieval_default());
+    # embedding backend
+    var emb = mneme_core_embedding_default();
+    var esecs = bayan_toml_get_sections(sections, "embedding");
+    if (vec_len(esecs) > 0) {
+        var bk = bayan_toml_get(bayan_toml_section_pairs(vec_get(esecs, 0)), "backend");
+        if (bk != 0) { store64(emb, bk); }
+    }
+    store64(c + 32, emb);
+    return c;
+}
