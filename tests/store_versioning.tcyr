@@ -1,0 +1,62 @@
+# mneme-store versioning tests — ported 1:1 from rust-old/crates/mneme-store/src/versioning.rs.
+include "src/core_uuid.cyr"
+include "src/store_versioning.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("store_versioning");
+
+    # record_and_retrieve
+    var store = mneme_store_version_store_new();
+    var note_id = mneme_core_uuid_v4();
+    var v1 = mneme_store_record_version(store, note_id, str_from("Title"), str_from("Content v1"), str_from("hash1"), 0);
+    assert_eq(mneme_store_note_version_number(v1), 1, "v1 number");
+    var v2 = mneme_store_record_version(store, note_id, str_from("Title"), str_from("Content v2"), str_from("hash2"), str_from("Updated"));
+    assert_eq(mneme_store_note_version_number(v2), 2, "v2 number");
+    var hist = mneme_store_get_history(store, note_id);
+    assert_eq(vec_len(mneme_store_history_versions(hist)), 2, "history len 2");
+    assert_eq(mneme_store_history_current_version(hist), 2, "current version 2");
+
+    # get_specific_version
+    var store2 = mneme_store_version_store_new();
+    var nid2 = mneme_core_uuid_v4();
+    mneme_store_record_version(store2, nid2, str_from("T"), str_from("First"), str_from("h1"), 0);
+    mneme_store_record_version(store2, nid2, str_from("T"), str_from("Second"), str_from("h2"), 0);
+    assert(str_eq(mneme_store_note_version_content(mneme_store_get_version(store2, nid2, 1)), str_from("First")), "get v1 content");
+    assert(str_eq(mneme_store_note_version_content(mneme_store_get_version(store2, nid2, 2)), str_from("Second")), "get v2 content");
+    assert_eq(mneme_store_get_version(store2, nid2, 3), 0, "get v3 is None");
+
+    # diff_between_versions
+    var store3 = mneme_store_version_store_new();
+    var nid3 = mneme_core_uuid_v4();
+    mneme_store_record_version(store3, nid3, str_from("T"), str_from("Line 1\nLine 2\nLine 3"), str_from("h1"), 0);
+    mneme_store_record_version(store3, nid3, str_from("T"), str_from("Line 1\nModified\nLine 3\nLine 4"), str_from("h2"), 0);
+    var diff = mneme_store_version_diff(store3, nid3, 1, 2);
+    assert_gt(mneme_store_diff_lines_added(diff) + mneme_store_diff_lines_removed(diff), 0, "diff has changes");
+    assert_eq(mneme_store_diff_from(diff), 1, "diff from 1");
+    assert_eq(mneme_store_diff_to(diff), 2, "diff to 2");
+
+    # compute_diff_added_lines
+    var d4 = mneme_store_compute_diff(str_from("A\nB"), str_from("A\nB\nC\nD"), 1, 2);
+    assert_eq(mneme_store_diff_lines_added(d4), 2, "added 2");
+    assert_eq(mneme_store_diff_lines_removed(d4), 0, "removed 0");
+
+    # compute_diff_removed_lines
+    var d5 = mneme_store_compute_diff(str_from("A\nB\nC"), str_from("A"), 1, 2);
+    assert_gte(mneme_store_diff_lines_removed(d5), 2, "removed >= 2");
+
+    # empty_history
+    var store6 = mneme_store_version_store_new();
+    var hist6 = mneme_store_get_history(store6, mneme_core_uuid_v4());
+    assert_eq(vec_len(mneme_store_history_versions(hist6)), 0, "empty history");
+    assert_eq(mneme_store_history_current_version(hist6), 0, "current 0");
+
+    # version_serialization
+    var vs = mneme_store_record_version(mneme_store_version_store_new(), mneme_core_uuid_v4(), str_from("Test"), str_from("Content"), str_from("abc"), str_from("Initial"));
+    assert(str_contains(mneme_store_note_version_to_json(vs), str_from("version_number")), "json has version_number");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

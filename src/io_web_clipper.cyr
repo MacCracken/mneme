@@ -1,0 +1,416 @@
+# mneme-io — web clipper (ported from rust-old/crates/mneme-io/src/web_clipper.rs)
+# Zero-I/O. HTML -> Markdown + metadata extraction. Hand-ports the Rust regex
+# chain (case-insensitive tag matching). Timestamp formatting is a placeholder
+# (real date formatting needs the deferred chrono civil-calendar).
+
+fn _wc_lower(c): i64 { if (c >= 65 && c <= 90) { return c + 32; } return c; }
+fn _wc_find_char(d, start, n, ch): i64 {
+    var i = start;
+    while (i < n) { if (load8(d + i) == ch) { return i; } i = i + 1; }
+    return 0 - 1;
+}
+# chars [i, i+tlen) case-insensitively equal cstr `tag`
+fn _wc_ci_match(d, i, n, tag, tlen): i64 {
+    if (i + tlen > n) { return 0; }
+    var k = 0;
+    while (k < tlen) {
+        if (_wc_lower(load8(d + i + k)) != _wc_lower(load8(tag + k))) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}
+# is there an opening tag `tag` at byte i (followed by a tag-boundary char)?
+fn _wc_tag_open(d, i, n, tag, tlen): i64 {
+    if (_wc_ci_match(d, i, n, tag, tlen) == 0) { return 0; }
+    if (i + tlen >= n) { return 0; }
+    var b = load8(d + i + tlen);
+    if (b == 32 || b == 9 || b == 10 || b == 13 || b == 62 || b == 47) { return 1; }
+    return 0;
+}
+# index of the '<' of a matching "</tag>" at/after start, or -1
+fn _wc_find_close(d, start, n, tag, tlen): i64 {
+    var i = start;
+    while (i + tlen + 3 <= n) {
+        if (load8(d + i) == 60 && load8(d + i + 1) == 47 && _wc_ci_match(d, i + 2, n, tag, tlen) == 1 && load8(d + i + 2 + tlen) == 62) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+fn _wc_replace_all(s: Str, from_cstr, to_cstr): i64 {
+    var sb = str_builder_new();
+    var flen = strlen(from_cstr);
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        if (i + flen <= n && memeq(d + i, from_cstr, flen) == 1) {
+            str_builder_add_cstr(sb, to_cstr);
+            i = i + flen;
+        } else {
+            str_builder_putc(sb, load8(d + i));
+            i = i + 1;
+        }
+    }
+    return str_builder_build(sb);
+}
+fn _wc_vec_has_str(v, cstr): i64 {
+    var i = 0;
+    while (i < vec_len(v)) { if (str_eq_cstr(vec_get(v, i), cstr) == 1) { return 1; } i = i + 1; }
+    return 0;
+}
+# TODO: real timestamp needs chrono civil-calendar (deferred); untested placeholder.
+fn _wc_now_str(): i64 { return str_from("1970-01-01 00:00"); }
+
+# wrap <tag ...>content</tag> -> pre + content + post
+fn _wc_wrap(text: Str, tag, pre, post): i64 {
+    var sb = str_builder_new();
+    var n = str_len(text);
+    var d = str_data(text);
+    var tlen = strlen(tag);
+    var i = 0;
+    while (i < n) {
+        if (load8(d + i) == 60 && _wc_tag_open(d, i + 1, n, tag, tlen) == 1) {
+            var gt = _wc_find_char(d, i + 1 + tlen, n, 62);
+            if (gt >= 0) {
+                var ce = _wc_find_close(d, gt + 1, n, tag, tlen);
+                if (ce >= 0) {
+                    str_builder_add_cstr(sb, pre);
+                    str_builder_add(sb, str_substr(text, gt + 1, ce));
+                    str_builder_add_cstr(sb, post);
+                    i = ce + tlen + 3;
+                } else { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+            } else { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+        } else { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+    }
+    return str_builder_build(sb);
+}
+# remove <tag ...>...</tag> entirely (script/style)
+fn _wc_remove_block(text: Str, tag): i64 {
+    var sb = str_builder_new();
+    var n = str_len(text);
+    var d = str_data(text);
+    var tlen = strlen(tag);
+    var i = 0;
+    while (i < n) {
+        if (load8(d + i) == 60 && _wc_tag_open(d, i + 1, n, tag, tlen) == 1) {
+            var gt = _wc_find_char(d, i + 1 + tlen, n, 62);
+            if (gt >= 0) {
+                var ce = _wc_find_close(d, gt + 1, n, tag, tlen);
+                if (ce >= 0) { i = ce + tlen + 3; }
+                else { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+            } else { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+        } else { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+    }
+    return str_builder_build(sb);
+}
+# find `href="` (ci) in [start,endp); returns index just after the opening quote, or -1
+fn _wc_find_href(d, start, endp): i64 {
+    var i = start;
+    while (i + 6 <= endp) {
+        if (_wc_lower(load8(d + i)) == 104 && _wc_lower(load8(d + i + 1)) == 114 && _wc_lower(load8(d + i + 2)) == 101 && _wc_lower(load8(d + i + 3)) == 102 && load8(d + i + 4) == 61 && load8(d + i + 5) == 34) {
+            return i + 6;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+fn _wc_convert_links(text: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(text);
+    var d = str_data(text);
+    var i = 0;
+    while (i < n) {
+        var handled = 0;
+        if (load8(d + i) == 60 && _wc_tag_open(d, i + 1, n, "a", 1) == 1) {
+            var gt = _wc_find_char(d, i + 2, n, 62);
+            if (gt >= 0) {
+                var hi = _wc_find_href(d, i, gt);
+                if (hi >= 0) {
+                    var hq = _wc_find_char(d, hi, n, 34);
+                    if (hq >= 0 && hq <= gt) {
+                        var ce = _wc_find_close(d, gt + 1, n, "a", 1);
+                        if (ce >= 0) {
+                            str_builder_putc(sb, 91);
+                            str_builder_add(sb, str_substr(text, gt + 1, ce));
+                            str_builder_add_cstr(sb, "](");
+                            str_builder_add(sb, str_substr(text, hi, hq));
+                            str_builder_putc(sb, 41);
+                            i = ce + 4;
+                            handled = 1;
+                        }
+                    }
+                }
+            }
+        }
+        if (handled == 0) { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+    }
+    return str_builder_build(sb);
+}
+fn _wc_replace_br(text: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(text);
+    var d = str_data(text);
+    var i = 0;
+    while (i < n) {
+        if (load8(d + i) == 60 && _wc_tag_open(d, i + 1, n, "br", 2) == 1) {
+            var gt = _wc_find_char(d, i + 3, n, 62);
+            if (gt >= 0) { str_builder_putc(sb, 10); i = gt + 1; }
+            else { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+        } else { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+    }
+    return str_builder_build(sb);
+}
+fn _wc_strip_tags(text: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(text);
+    var d = str_data(text);
+    var i = 0;
+    while (i < n) {
+        if (load8(d + i) == 60) {
+            var gt = _wc_find_char(d, i + 1, n, 62);
+            if (gt >= 0) { i = gt + 1; }
+            else { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+        } else { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+    }
+    return str_builder_build(sb);
+}
+fn _wc_collapse_newlines(text: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(text);
+    var d = str_data(text);
+    var i = 0;
+    while (i < n) {
+        if (load8(d + i) == 10) {
+            var j = i;
+            while (j < n && load8(d + j) == 10) { j = j + 1; }
+            var run = j - i;
+            if (run >= 3) { str_builder_putc(sb, 10); str_builder_putc(sb, 10); }
+            else {
+                var k = 0;
+                while (k < run) { str_builder_putc(sb, 10); k = k + 1; }
+            }
+            i = j;
+        } else { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+    }
+    return str_builder_build(sb);
+}
+
+fn mneme_io_wc_html_decode(s: Str): i64 {
+    var t = s;
+    t = _wc_replace_all(t, "&amp;", "&");
+    t = _wc_replace_all(t, "&lt;", "<");
+    t = _wc_replace_all(t, "&gt;", ">");
+    t = _wc_replace_all(t, "&quot;", "\"");
+    t = _wc_replace_all(t, "&#39;", "'");
+    t = _wc_replace_all(t, "&nbsp;", " ");
+    t = _wc_replace_all(t, "&#x27;", "'");
+    t = _wc_replace_all(t, "&mdash;", "—");
+    t = _wc_replace_all(t, "&ndash;", "–");
+    t = _wc_replace_all(t, "&hellip;", "...");
+    return t;
+}
+
+fn mneme_io_wc_html_to_markdown(html: Str): i64 {
+    var t = html;
+    t = _wc_remove_block(t, "script");
+    t = _wc_remove_block(t, "style");
+    t = _wc_wrap(t, "h6", "\n###### ", "\n");
+    t = _wc_wrap(t, "h5", "\n##### ", "\n");
+    t = _wc_wrap(t, "h4", "\n#### ", "\n");
+    t = _wc_wrap(t, "h3", "\n### ", "\n");
+    t = _wc_wrap(t, "h2", "\n## ", "\n");
+    t = _wc_wrap(t, "h1", "\n# ", "\n");
+    t = _wc_wrap(t, "p", "\n", "\n");
+    t = _wc_convert_links(t);
+    t = _wc_wrap(t, "strong", "**", "**");
+    t = _wc_wrap(t, "b", "**", "**");
+    t = _wc_wrap(t, "em", "*", "*");
+    t = _wc_wrap(t, "i", "*", "*");
+    t = _wc_wrap(t, "code", "`", "`");
+    t = _wc_replace_br(t);
+    t = _wc_wrap(t, "li", "- ", "");
+    t = _wc_strip_tags(t);
+    t = mneme_io_wc_html_decode(t);
+    t = _wc_collapse_newlines(t);
+    return str_trim(t);
+}
+
+# extract <title>...</title> (ci) -> decoded+trimmed Str, or 0 (None)
+fn mneme_io_wc_extract_title(html: Str): i64 {
+    var n = str_len(html);
+    var d = str_data(html);
+    var i = 0;
+    while (i + 6 <= n) {
+        if (load8(d + i) == 60 && _wc_tag_open(d, i + 1, n, "title", 5) == 1) {
+            var gt = _wc_find_char(d, i + 6, n, 62);
+            if (gt >= 0) {
+                var lt = _wc_find_char(d, gt + 1, n, 60);
+                if (lt >= 0) {
+                    var raw = str_trim(mneme_io_wc_html_decode(str_substr(html, gt + 1, lt)));
+                    if (str_len(raw) > 0) { return raw; }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn mneme_io_wc_title_from_url(url: Str): i64 {
+    var without = url;
+    if (str_starts_with(url, str_from("https://")) == 1) { without = str_substr(url, 8, str_len(url)); }
+    elif (str_starts_with(url, str_from("http://")) == 1) { without = str_substr(url, 7, str_len(url)); }
+    var segs = vec_new();
+    var n = str_len(without);
+    var d = str_data(without);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; }
+        elif (load8(d + i) == 47) { isend = 1; }
+        if (isend == 1) { vec_push(segs, str_substr(without, start, i)); start = i + 1; }
+        i = i + 1;
+    }
+    var path = without;
+    var found = 0;
+    var k = vec_len(segs) - 1;
+    while (k >= 0 && found == 0) {
+        var seg = vec_get(segs, k);
+        if (str_len(seg) > 0 && (str_index_of(seg, 46) < 0 || str_len(seg) > 10)) {
+            path = seg;
+            found = 1;
+        }
+        k = k - 1;
+    }
+    var repl = _wc_replace_all(_wc_replace_all(path, "-", " "), "_", " ");
+    var dot = str_index_of(repl, 46);
+    if (dot >= 0) { return str_substr(repl, 0, dot); }
+    return repl;
+}
+
+fn mneme_io_wc_extract_excerpt(content: Str, max): i64 {
+    var parts = vec_new();
+    var n = str_len(content);
+    var d = str_data(content);
+    var start = 0;
+    var i = 0;
+    while (i <= n && vec_len(parts) < 3) {
+        var isend = 0;
+        if (i == n) { isend = 1; }
+        elif (load8(d + i) == 10) { isend = 1; }
+        if (isend == 1) {
+            var line = str_substr(content, start, i);
+            if (str_len(str_trim(line)) > 0) {
+                var f = load8(str_data(line));
+                if (f != 35 && f != 62) { vec_push(parts, line); }
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    var sb = str_builder_new();
+    var j = 0;
+    while (j < vec_len(parts)) {
+        if (j > 0) { str_builder_putc(sb, 32); }
+        str_builder_add(sb, vec_get(parts, j));
+        j = j + 1;
+    }
+    var plain = str_builder_build(sb);
+    if (str_len(plain) <= max) { return plain; }
+    var sb2 = str_builder_new();
+    str_builder_add(sb2, str_substr(plain, 0, max));
+    str_builder_add_cstr(sb2, "...");
+    return str_builder_build(sb2);
+}
+
+# ClipOptions (32 bytes): [include_source_link@0, include_clip_date@8, auto_tag@16, max_length@24 (-1=None)]
+fn mneme_io_wc_clip_options_default(): i64 {
+    var o = alloc(32);
+    store64(o, 1);
+    store64(o + 8, 1);
+    store64(o + 16, 1);
+    store64(o + 24, 0 - 1);
+    return o;
+}
+
+# ClippedPage (48 bytes): [title@0, url@8, content_md@16, excerpt@24, tags@32, clipped_at@40]
+fn mneme_io_wc_page_title(p): i64 { return load64(p); }
+fn mneme_io_wc_page_url(p): i64 { return load64(p + 8); }
+fn mneme_io_wc_page_content_md(p): i64 { return load64(p + 16); }
+fn mneme_io_wc_page_excerpt(p): i64 { return load64(p + 24); }
+fn mneme_io_wc_page_tags(p): i64 { return load64(p + 32); }
+fn mneme_io_wc_page_clipped_at(p): i64 { return load64(p + 40); }
+
+# clip HTML -> ClippedPage, or 0 on error (empty html)
+fn mneme_io_wc_clip_html(html: Str, url: Str, options): i64 {
+    if (str_len(str_trim(html)) == 0) { return 0; }
+    var title = mneme_io_wc_extract_title(html);
+    if (title == 0) { title = mneme_io_wc_title_from_url(url); }
+    var content = mneme_io_wc_html_to_markdown(html);
+    var excerpt = mneme_io_wc_extract_excerpt(content, 200);
+    var sb = str_builder_new();
+    if (load64(options) == 1) {
+        str_builder_add_cstr(sb, "> Source: <");
+        str_builder_add(sb, url);
+        str_builder_add_cstr(sb, ">\n\n");
+    }
+    if (load64(options + 8) == 1) {
+        str_builder_add_cstr(sb, "> Clipped: ");
+        str_builder_add(sb, _wc_now_str());
+        str_builder_add_cstr(sb, "\n\n");
+    }
+    str_builder_add_cstr(sb, "---\n\n");
+    str_builder_add(sb, content);
+    var md = str_builder_build(sb);
+    var maxlen = load64(options + 24);
+    if (maxlen >= 0 && str_len(md) > maxlen) {
+        var sb2 = str_builder_new();
+        str_builder_add(sb2, str_substr(md, 0, maxlen));
+        str_builder_add_cstr(sb2, "\n\n[...truncated]");
+        md = str_builder_build(sb2);
+    }
+    var tags = vec_new();
+    if (load64(options + 16) == 1) { vec_push(tags, str_from("clipped")); }
+    var p = alloc(48);
+    store64(p, title);
+    store64(p + 8, url);
+    store64(p + 16, md);
+    store64(p + 24, excerpt);
+    store64(p + 32, tags);
+    store64(p + 40, _wc_now_str());
+    return p;
+}
+
+# clip a bookmark (title/desc are Str or 0 = None)
+fn mneme_io_wc_clip_bookmark(url: Str, title, desc): i64 {
+    var t = url;
+    if (title != 0) { t = title; }
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "# ");
+    str_builder_add(sb, t);
+    str_builder_add_cstr(sb, "\n\nURL: <");
+    str_builder_add(sb, url);
+    str_builder_add_cstr(sb, ">\n\n");
+    if (desc != 0) {
+        str_builder_add(sb, desc);
+        str_builder_add_cstr(sb, "\n\n");
+    }
+    str_builder_add_cstr(sb, "Saved: ");
+    str_builder_add(sb, _wc_now_str());
+    str_builder_putc(sb, 10);
+    var tags = vec_new();
+    vec_push(tags, str_from("bookmark"));
+    var ex = str_from("");
+    if (desc != 0) { ex = desc; }
+    var p = alloc(48);
+    store64(p, t);
+    store64(p + 8, url);
+    store64(p + 16, str_builder_build(sb));
+    store64(p + 24, ex);
+    store64(p + 32, tags);
+    store64(p + 40, _wc_now_str());
+    return p;
+}

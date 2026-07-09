@@ -1,0 +1,65 @@
+# mneme-io web clipper tests — ported 1:1 from rust-old/crates/mneme-io/src/web_clipper.rs.
+include "src/io_web_clipper.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("io_web_clipper");
+
+    # clip_basic_html
+    var r1 = mneme_io_wc_clip_html(str_from("<html><head><title>Test Page</title></head><body><h1>Hello</h1><p>World</p></body></html>"), str_from("https://example.com/test"), mneme_io_wc_clip_options_default());
+    assert(str_eq(mneme_io_wc_page_title(r1), str_from("Test Page")), "basic: title");
+    assert(str_contains(mneme_io_wc_page_content_md(r1), str_from("Hello")), "basic: has Hello");
+    assert(str_contains(mneme_io_wc_page_content_md(r1), str_from("World")), "basic: has World");
+    assert_eq(_wc_vec_has_str(mneme_io_wc_page_tags(r1), "clipped"), 1, "basic: clipped tag");
+
+    # clip_extracts_links
+    var r2 = mneme_io_wc_clip_html(str_from("<p>Visit <a href=\"https://rust-lang.org\">Rust</a> for more.</p>"), str_from("https://example.com"), mneme_io_wc_clip_options_default());
+    assert(str_contains(mneme_io_wc_page_content_md(r2), str_from("[Rust](https://rust-lang.org)")), "links converted");
+
+    # clip_converts_formatting
+    var r3 = mneme_io_wc_clip_html(str_from("<p><strong>bold</strong> and <em>italic</em> and <code>code</code></p>"), str_from("https://example.com"), mneme_io_wc_clip_options_default());
+    assert(str_contains(mneme_io_wc_page_content_md(r3), str_from("**bold**")), "bold");
+    assert(str_contains(mneme_io_wc_page_content_md(r3), str_from("*italic*")), "italic");
+    assert(str_contains(mneme_io_wc_page_content_md(r3), str_from("`code`")), "code");
+
+    # clip_removes_scripts
+    var r4 = mneme_io_wc_clip_html(str_from("<p>Content</p><script>alert('xss')</script><p>More</p>"), str_from("https://example.com"), mneme_io_wc_clip_options_default());
+    assert_eq(str_contains(mneme_io_wc_page_content_md(r4), str_from("alert")), 0, "script removed");
+    assert(str_contains(mneme_io_wc_page_content_md(r4), str_from("Content")), "content kept");
+
+    # clip_empty_html_error
+    assert_eq(mneme_io_wc_clip_html(str_from(""), str_from("https://example.com"), mneme_io_wc_clip_options_default()), 0, "empty html is error");
+
+    # bookmark_basic
+    var bm = mneme_io_wc_clip_bookmark(str_from("https://example.com"), str_from("Example"), str_from("A test site"));
+    assert(str_eq(mneme_io_wc_page_title(bm), str_from("Example")), "bookmark title");
+    assert(str_contains(mneme_io_wc_page_content_md(bm), str_from("example.com")), "bookmark has url");
+    assert_eq(_wc_vec_has_str(mneme_io_wc_page_tags(bm), "bookmark"), 1, "bookmark tag");
+
+    # title_from_url_extraction
+    assert(str_eq(mneme_io_wc_title_from_url(str_from("https://example.com/my-article")), str_from("my article")), "url title 1");
+    assert(str_eq(mneme_io_wc_title_from_url(str_from("https://example.com/blog/rust_tips")), str_from("rust tips")), "url title 2");
+
+    # html_entity_decoding
+    assert(str_eq(mneme_io_wc_html_decode(str_from("&amp; &lt; &gt;")), str_from("& < >")), "decode basic");
+    assert(str_eq(mneme_io_wc_html_decode(str_from("&mdash; &hellip;")), str_from("— ...")), "decode mdash hellip");
+
+    # excerpt_truncation
+    var ex = mneme_io_wc_extract_excerpt(str_from("This is a very long piece of content that should be truncated after a certain number of characters to create a short excerpt."), 30);
+    assert_lte(str_len(ex), 35, "excerpt len bounded");
+    assert(str_ends_with(ex, str_from("...")), "excerpt ellipsis");
+
+    # max_length_truncation
+    var big = str_builder_new();
+    var m = 0;
+    while (m < 100) { str_builder_add_cstr(big, "<p>A</p>"); m = m + 1; }
+    var opt = mneme_io_wc_clip_options_default();
+    store64(opt + 24, 100);
+    var r10 = mneme_io_wc_clip_html(str_builder_build(big), str_from("https://example.com"), opt);
+    assert(str_contains(mneme_io_wc_page_content_md(r10), str_from("[...truncated]")), "truncated marker");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

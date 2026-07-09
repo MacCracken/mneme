@@ -1,0 +1,173 @@
+# mneme-store — note versioning (ported from rust-old/crates/mneme-store/src/versioning.rs)
+# Zero-I/O in-memory version store + line-level diff. Uses map_u64 keyed by the
+# uuid handle (tests reuse the same note_id handle, so pointer-keying is correct).
+# Requires core_uuid (v4) + chrono (clock_now_ns).
+
+enum ChangeKind {
+    CHANGE_ADDED;
+    CHANGE_REMOVED;
+    CHANGE_CONTEXT;
+}
+
+# DiffChange (24 bytes): [kind@0, line_number@8, content@16]
+fn _diff_change(kind, line_number, content): i64 {
+    var c = alloc(24);
+    store64(c, kind);
+    store64(c + 8, line_number);
+    store64(c + 16, content);
+    return c;
+}
+fn mneme_store_diff_change_kind(c): i64 { return load64(c); }
+fn mneme_store_diff_change_line(c): i64 { return load64(c + 8); }
+fn mneme_store_diff_change_content(c): i64 { return load64(c + 16); }
+
+# str::lines() — split on '\n', drop the trailing empty from a final newline
+fn _ver_lines(s: Str): i64 {
+    var out = vec_new();
+    var n = str_len(s);
+    if (n == 0) { return out; }
+    var d = str_data(s);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; }
+        elif (load8(d + i) == 10) { isend = 1; }
+        if (isend == 1) {
+            if (start == n && i == n) {
+                # trailing empty after final '\n' — skip
+            } else {
+                vec_push(out, str_substr(s, start, i));
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+# VersionDiff (40 bytes): [from@0, to@8, changes@16, lines_added@24, lines_removed@32]
+fn mneme_store_compute_diff(old: Str, new: Str, from_ver, to_ver): i64 {
+    var ol = _ver_lines(old);
+    var nl = _ver_lines(new);
+    var changes = vec_new();
+    var added = 0;
+    var removed = 0;
+    var oi = 0;
+    var ni = 0;
+    while (oi < vec_len(ol) || ni < vec_len(nl)) {
+        if (oi < vec_len(ol) && ni < vec_len(nl)) {
+            if (str_eq(vec_get(ol, oi), vec_get(nl, ni)) == 1) {
+                vec_push(changes, _diff_change(CHANGE_CONTEXT, ni + 1, vec_get(nl, ni)));
+                oi = oi + 1;
+                ni = ni + 1;
+            } else {
+                vec_push(changes, _diff_change(CHANGE_REMOVED, oi + 1, vec_get(ol, oi)));
+                removed = removed + 1;
+                oi = oi + 1;
+                if (ni < vec_len(nl)) {
+                    vec_push(changes, _diff_change(CHANGE_ADDED, ni + 1, vec_get(nl, ni)));
+                    added = added + 1;
+                    ni = ni + 1;
+                }
+            }
+        } elif (oi < vec_len(ol)) {
+            vec_push(changes, _diff_change(CHANGE_REMOVED, oi + 1, vec_get(ol, oi)));
+            removed = removed + 1;
+            oi = oi + 1;
+        } else {
+            vec_push(changes, _diff_change(CHANGE_ADDED, ni + 1, vec_get(nl, ni)));
+            added = added + 1;
+            ni = ni + 1;
+        }
+    }
+    var vd = alloc(40);
+    store64(vd, from_ver);
+    store64(vd + 8, to_ver);
+    store64(vd + 16, changes);
+    store64(vd + 24, added);
+    store64(vd + 32, removed);
+    return vd;
+}
+fn mneme_store_diff_from(vd): i64 { return load64(vd); }
+fn mneme_store_diff_to(vd): i64 { return load64(vd + 8); }
+fn mneme_store_diff_changes(vd): i64 { return load64(vd + 16); }
+fn mneme_store_diff_lines_added(vd): i64 { return load64(vd + 24); }
+fn mneme_store_diff_lines_removed(vd): i64 { return load64(vd + 32); }
+
+# NoteVersion (64 bytes): [id@0, note_id@8, version_number@16, title@24, content@32, content_hash@40, created_at@48, message@56]
+fn mneme_store_note_version_id(v): i64 { return load64(v); }
+fn mneme_store_note_version_note_id(v): i64 { return load64(v + 8); }
+fn mneme_store_note_version_number(v): i64 { return load64(v + 16); }
+fn mneme_store_note_version_title(v): i64 { return load64(v + 24); }
+fn mneme_store_note_version_content(v): i64 { return load64(v + 32); }
+fn mneme_store_note_version_content_hash(v): i64 { return load64(v + 40); }
+fn mneme_store_note_version_message(v): i64 { return load64(v + 56); }
+
+fn mneme_store_note_version_to_json(v): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"version_number\":");
+    str_builder_add_int(sb, mneme_store_note_version_number(v));
+    str_builder_add_cstr(sb, ",\"title\":\"");
+    str_builder_add(sb, mneme_store_note_version_title(v));
+    str_builder_add_cstr(sb, "\",\"content\":\"");
+    str_builder_add(sb, mneme_store_note_version_content(v));
+    str_builder_add_cstr(sb, "\",\"content_hash\":\"");
+    str_builder_add(sb, mneme_store_note_version_content_hash(v));
+    str_builder_add_cstr(sb, "\"}");
+    return str_builder_build(sb);
+}
+
+# VersionStore (8 bytes): [map@0 (u64 uuid-handle -> vec<NoteVersion>)]
+fn mneme_store_version_store_new(): i64 {
+    var s = alloc(8);
+    store64(s, map_u64_new());
+    return s;
+}
+fn mneme_store_record_version(store, note_id, title: Str, content: Str, content_hash: Str, message): i64 {
+    var map = load64(store);
+    var versions = map_u64_get_or(map, note_id, 0);
+    if (versions == 0) { versions = vec_new(); }
+    var v = alloc(64);
+    store64(v, mneme_core_uuid_v4());
+    store64(v + 8, note_id);
+    store64(v + 16, vec_len(versions) + 1);
+    store64(v + 24, title);
+    store64(v + 32, content);
+    store64(v + 40, content_hash);
+    store64(v + 48, clock_now_ns());
+    store64(v + 56, message);
+    vec_push(versions, v);
+    map_u64_set(map, note_id, versions);
+    return v;
+}
+# VersionHistory (24 bytes): [note_id@0, versions@8, current_version@16]
+fn mneme_store_get_history(store, note_id): i64 {
+    var versions = map_u64_get_or(load64(store), note_id, 0);
+    if (versions == 0) { versions = vec_new(); }
+    var h = alloc(24);
+    store64(h, note_id);
+    store64(h + 8, versions);
+    store64(h + 16, vec_len(versions));
+    return h;
+}
+fn mneme_store_history_note_id(h): i64 { return load64(h); }
+fn mneme_store_history_versions(h): i64 { return load64(h + 8); }
+fn mneme_store_history_current_version(h): i64 { return load64(h + 16); }
+
+fn mneme_store_get_version(store, note_id, version): i64 {
+    var versions = map_u64_get_or(load64(store), note_id, 0);
+    if (versions == 0) { return 0; }
+    var i = 0;
+    while (i < vec_len(versions)) {
+        if (load64(vec_get(versions, i) + 16) == version) { return vec_get(versions, i); }
+        i = i + 1;
+    }
+    return 0;
+}
+fn mneme_store_version_diff(store, note_id, from, to): i64 {
+    var fv = mneme_store_get_version(store, note_id, from);
+    var tv = mneme_store_get_version(store, note_id, to);
+    if (fv == 0 || tv == 0) { return 0; }
+    return mneme_store_compute_diff(load64(fv + 32), load64(tv + 32), from, to);
+}
