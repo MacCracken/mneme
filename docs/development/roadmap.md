@@ -43,10 +43,11 @@ real on-disk vault composing store + search + optimizer).
 `ui_app` = the tested state layer (vault/engine wiring, load_notes, navigation,
 search guard). `views`/`main` = ratatui/crossterm rendering (0 tests) — remaining.
 
-### M5 — `mneme-api` (sandhi HTTP server) — ⏸ deferred (external-bridge tier)
-Handlers have no unit tests; `tests/api_integration.rs` (30 tests) drives the axum
-router via `tower::oneshot`. Needs a sandhi HTTP router/server bridge (same class as
-the deferred daimon client / event bus / remote embeddings).
+### M5 — `mneme-api` — ✅ done
+Full HTTP surface as an in-process router (`handle_request(method, path, body) →
+(status, content_type, body)`). `tower::oneshot` drives axum without a socket, so
+no live server is needed — all 30 `tests/api_integration.rs` cases pass. daimon
+client / event bus stay deferred (reported unavailable → local-fallback paths).
 
 ## Post-v1 / P2 backlog (deferred, non-blocking)
 

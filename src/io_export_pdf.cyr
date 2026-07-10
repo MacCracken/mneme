@@ -1,0 +1,37 @@
+# mneme-io — minimal PDF export (partial port of rust-old/crates/mneme-io/src/export_pdf.rs).
+# The full faithful PDF layout (export_pdf.rs's 8 tests: fonts, wrapping, pages)
+# is P2 backlog; this emits a valid minimal single-page document — enough for the
+# API's `application/pdf` + `%PDF` contract. Text is the note title.
+
+fn _pdf_escape(sb, s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c == 40 || c == 41 || c == 92) { str_builder_putc(sb, 92); }   # ( ) \
+        if (c != 10 && c != 13) { str_builder_putc(sb, c); }
+        i = i + 1;
+    }
+    return 0;
+}
+fn mneme_io_export_pdf(title: Str, content: Str): i64 {
+    var cs = str_builder_new();
+    str_builder_add_cstr(cs, "BT /F1 14 Tf 72 720 Td (");
+    _pdf_escape(cs, title);
+    str_builder_add_cstr(cs, ") Tj ET");
+    var stream = str_builder_build(cs);
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "%PDF-1.4\n");
+    str_builder_add_cstr(sb, "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n");
+    str_builder_add_cstr(sb, "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n");
+    str_builder_add_cstr(sb, "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n");
+    str_builder_add_cstr(sb, "4 0 obj<</Length ");
+    str_builder_add_int(sb, str_len(stream));
+    str_builder_add_cstr(sb, ">>stream\n");
+    str_builder_add(sb, stream);
+    str_builder_add_cstr(sb, "\nendstream endobj\n");
+    str_builder_add_cstr(sb, "5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n");
+    str_builder_add_cstr(sb, "trailer<</Root 1 0 R/Size 6>>\nstartxref\n0\n%%EOF\n");
+    return str_builder_build(sb);
+}

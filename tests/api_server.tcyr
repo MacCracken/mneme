@@ -1,0 +1,307 @@
+# mneme-api integration tests — ported 1:1 from
+# rust-old/crates/mneme-api/tests/api_integration.rs (30 tests). tower::oneshot
+# drives the router in-process, so each test calls mneme_api_handle_request
+# directly with (method, path, body) and checks status + response JSON.
+include "lib/patra.cyr"
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/sigil.cyr"
+include "lib/bayan.cyr"
+include "src/core_uuid.cyr"
+include "src/core_note.cyr"
+include "src/core_link.cyr"
+include "src/core_config.cyr"
+include "src/core_frontmatter.cyr"
+include "src/core_task.cyr"
+include "src/core_calendar.cyr"
+include "src/store_db.cyr"
+include "src/store_files.cyr"
+include "src/store_registry.cyr"
+include "src/store_vault.cyr"
+include "src/store_manager.cyr"
+include "src/search_retrieval_optimizer.cyr"
+include "src/search_vector_store.cyr"
+include "src/search_embedding_backend.cyr"
+include "src/search_semantic_engine.cyr"
+include "src/search_engine.cyr"
+include "src/ai_concepts.cyr"
+include "src/ai_tagger.cyr"
+include "src/ai_templates.cyr"
+include "src/ai_summarizer.cyr"
+include "src/ai_writer.cyr"
+include "src/ai_translator.cyr"
+include "src/ai_temporal.cyr"
+include "src/ai_flashcards.cyr"
+include "src/io_web_clipper.cyr"
+include "src/io_export_pdf.cyr"
+include "src/api_server.cyr"
+
+var _apin = 0;
+fn _app(): i64 {
+    _apin = _apin + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_api");
+    str_builder_add_int(pb, _apin);
+    return mneme_api_vault_state_single(str_builder_build(pb), str_from("/nonexistent"));
+}
+fn _req(app, method, path, body): i64 { return mneme_api_handle_request(app, str_from(method), path, str_from(body)); }
+fn _reqc(app, method, path, body): i64 { return mneme_api_handle_request(app, str_from(method), str_from(path), str_from(body)); }
+fn _st(r): i64 { return mneme_api_response_status(r); }
+fn _bd(r): i64 { return mneme_api_response_body(r); }
+fn _has(s: Str, w): i64 { if (str_index_of_cstr(s, w) >= 0) { return 1; } return 0; }
+fn _notepath(prefix, id: Str): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, prefix);
+    str_builder_add(sb, id);
+    return str_builder_build(sb);
+}
+# find the "id" of the object whose "name" equals target (id precedes name)
+fn _tag_id_for(json: Str, target): i64 {
+    var nn = str_builder_new();
+    str_builder_add_cstr(nn, "\"name\":\"");
+    str_builder_add_cstr(nn, target);
+    str_builder_putc(nn, 34);
+    var np = str_index_of_cstr(json, _cstr_of(str_builder_build(nn)));
+    if (np < 0) { return 0; }
+    var d = str_data(json);
+    var last = 0 - 1;
+    var i = 0;
+    while (i + 6 <= np) {
+        if (memeq(d + i, "\"id\":\"", 6) == 1) { last = i + 6; }
+        i = i + 1;
+    }
+    if (last < 0) { return 0; }
+    var end = last;
+    var n = str_len(json);
+    while (end < n && load8(d + end) != 34) { end = end + 1; }
+    return str_substr(json, last, end);
+}
+fn _cstr_of(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(s), n);
+    store8(buf + n, 0);
+    return buf;
+}
+# create a note via POST, return its id string
+fn _mk(app, body): i64 {
+    var r = _req(app, "POST", str_from("/v1/notes"), body);
+    return _api_json_str(_bd(r), "\"id\"");
+}
+
+fn main() {
+    alloc_init();
+    test_group("api_server");
+
+    # health_check
+    var h = _reqc(_app(), "GET", "/health", "");
+    assert_eq(_st(h), 200, "health 200");
+    assert_eq(_has(_bd(h), "\"status\":\"ok\""), 1, "health status ok");
+    assert_eq(_has(_bd(h), "\"notes_count\":0"), 1, "health notes 0");
+
+    # create_and_get_note
+    var app2 = _app();
+    var cr = _req(app2, "POST", str_from("/v1/notes"), "{\"title\":\"Test Note\",\"content\":\"Hello world\",\"tags\":[\"test\"]}");
+    assert_eq(_st(cr), 201, "create 201");
+    var nid = _api_json_str(_bd(cr), "\"id\"");
+    var gr = _req(app2, "GET", _notepath("/v1/notes/", nid), "");
+    assert_eq(_st(gr), 200, "get 200");
+    assert_eq(_has(_bd(gr), "\"title\":\"Test Note\""), 1, "get title");
+    assert_eq(_has(_bd(gr), "\"content\":\"Hello world\""), 1, "get content");
+
+    # list_notes
+    var app3 = _app();
+    _mk(app3, "{\"title\":\"Note 0\",\"content\":\"Content 0\",\"tags\":[]}");
+    _mk(app3, "{\"title\":\"Note 1\",\"content\":\"Content 1\",\"tags\":[]}");
+    _mk(app3, "{\"title\":\"Note 2\",\"content\":\"Content 2\",\"tags\":[]}");
+    var lr = _reqc(app3, "GET", "/v1/notes?limit=10", "");
+    assert_eq(_st(lr), 200, "list 200");
+    assert_eq(_has(_bd(lr), "Note 0"), 1, "list has note");
+
+    # update_note
+    var app4 = _app();
+    var uid = _mk(app4, "{\"title\":\"Original\",\"content\":\"Old content\",\"tags\":[]}");
+    var ur = _req(app4, "PUT", _notepath("/v1/notes/", uid), "{\"title\":\"Updated\",\"content\":\"New content\",\"tags\":[\"updated\"]}");
+    assert_eq(_st(ur), 200, "update 200");
+    assert_eq(_has(_bd(ur), "\"title\":\"Updated\""), 1, "update title");
+
+    # delete_note
+    var app5 = _app();
+    var did = _mk(app5, "{\"title\":\"To Delete\",\"content\":\"Bye\",\"tags\":[]}");
+    var dr = _req(app5, "DELETE", _notepath("/v1/notes/", did), "");
+    assert_eq(_st(dr), 204, "delete 204");
+    assert_eq(_st(_req(app5, "GET", _notepath("/v1/notes/", did), "")), 404, "deleted gone 404");
+
+    # get_nonexistent_note
+    var ne = _req(_app(), "GET", _notepath("/v1/notes/", mneme_store_uuid_to_string(mneme_core_uuid_v4())), "");
+    assert_eq(_st(ne), 404, "nonexistent 404");
+
+    # search_notes
+    var app6 = _app();
+    _mk(app6, "{\"title\":\"Rust Programming\",\"content\":\"Rust is a systems programming language\",\"tags\":[\"rust\"]}");
+    var srr = _reqc(app6, "GET", "/v1/search?q=rust", "");
+    assert_eq(_st(srr), 200, "search 200");
+    assert_eq(_has(_bd(srr), "\"search_id\""), 1, "search has id");
+    assert_eq(_has(_bd(srr), "\"note_id\""), 1, "search results non-empty");
+
+    # list_tags
+    var app7 = _app();
+    _mk(app7, "{\"title\":\"Tagged\",\"content\":\"Content\",\"tags\":[\"alpha\",\"beta\"]}");
+    var tr = _reqc(app7, "GET", "/v1/tags", "");
+    assert_eq(_st(tr), 200, "tags 200");
+    assert_eq(_has(_bd(tr), "alpha"), 1, "tags alpha");
+    assert_eq(_has(_bd(tr), "beta"), 1, "tags beta");
+
+    # delete_tag
+    var app8 = _app();
+    _mk(app8, "{\"title\":\"Tagged Note\",\"content\":\"Some content\",\"tags\":[\"keep-me\",\"delete-me\"]}");
+    var t8 = _reqc(app8, "GET", "/v1/tags", "");
+    var delid = _tag_id_for(_bd(t8), "delete-me");
+    assert_eq(_st(_req(app8, "DELETE", _notepath("/v1/tags/", delid), "")), 204, "delete tag 204");
+    var t8b = _reqc(app8, "GET", "/v1/tags", "");
+    assert_eq(_has(_bd(t8b), "keep-me"), 1, "keep-me remains");
+    assert_eq(_has(_bd(t8b), "delete-me"), 0, "delete-me gone");
+
+    # rag_stats_without_daimon
+    var rs = _reqc(_app(), "GET", "/v1/ai/rag/stats", "");
+    assert_eq(_st(rs), 200, "rag stats 200");
+    assert_eq(_has(_bd(rs), "\"daimon_available\":false"), 1, "daimon unavailable");
+
+    # concept_extraction_endpoint
+    var app9 = _app();
+    var c9 = _mk(app9, "{\"title\":\"Rust Systems\",\"content\":\"Rust is a systems programming language. Rust has a borrow checker. Rust ensures memory safety. The Rust compiler catches bugs at compile time.\",\"tags\":[\"rust\"]}");
+    var cor = _req(app9, "GET", _notepath("/v1/ai/concepts/", c9), "");
+    assert_eq(_st(cor), 200, "concepts 200");
+    assert_eq(_has(_bd(cor), "\"term\""), 1, "concepts non-empty");
+
+    # suggest_tags_for_note
+    var app10 = _app();
+    var s10 = _mk(app10, "{\"title\":\"Rust Programming Guide\",\"content\":\"Machine learning algorithms require training data for models. Neural networks are a subset of machine learning. Deep learning extends machine learning with multiple layers. Training models with machine learning produces intelligent systems. The machine learning pipeline includes feature engineering.\",\"tags\":[\"algorithms\"]}");
+    var sgr = _req(app10, "GET", _notepath("/v1/ai/suggest-tags/", s10), "");
+    assert_eq(_st(sgr), 200, "suggest-tags 200");
+    assert_eq(_has(_bd(sgr), "\"tag\""), 1, "suggest-tags non-empty");
+
+    # list_templates
+    var lt = _reqc(_app(), "GET", "/v1/templates", "");
+    assert_eq(_st(lt), 200, "templates 200");
+    assert_eq(_has(_bd(lt), "daily"), 1, "has daily");
+    assert_eq(_has(_bd(lt), "meeting"), 1, "has meeting");
+    assert_eq(_has(_bd(lt), "project"), 1, "has project");
+
+    # render_template_without_create
+    var rt = _reqc(_app(), "POST", "/v1/templates/render", "{\"template_name\":\"daily\",\"variables\":{}}");
+    assert_eq(_st(rt), 200, "render 200");
+    assert_eq(_has(_bd(rt), "\"created\":false"), 1, "render not created");
+
+    # render_template_and_create_note
+    var app11 = _app();
+    var rtc = _req(app11, "POST", str_from("/v1/templates/render"), "{\"template_name\":\"daily\",\"variables\":{},\"create\":true}");
+    assert_eq(_has(_bd(rtc), "\"created\":true"), 1, "render created true");
+    assert_eq(_has(_bd(_reqc(app11, "GET", "/v1/notes?limit=10", "")), "Daily Note"), 1, "note created via template");
+
+    # summarize_note_extractive
+    var app12 = _app();
+    var m12 = _mk(app12, "{\"title\":\"Detailed Topic\",\"content\":\"Rust is a modern systems programming language focused on safety and performance. The borrow checker enforces strict ownership rules at compile time. This eliminates entire classes of memory bugs without a garbage collector. Concurrency in Rust is fearless because data races are caught by the compiler.\",\"tags\":[\"rust\"]}");
+    var sur = _req(app12, "GET", _notepath("/v1/ai/summarize/", m12), "");
+    assert_eq(_st(sur), 200, "summarize 200");
+    assert_eq(_has(_bd(sur), "\"summary\""), 1, "summary present");
+
+    # write_assist_complete
+    var wc = _reqc(_app(), "POST", "/v1/ai/write", "{\"action\":\"complete\",\"text\":\"Rust is a systems programming language.\"}");
+    assert_eq(_st(wc), 200, "write 200");
+    assert_eq(_has(_bd(wc), "\"action\":\"complete\""), 1, "write action complete");
+
+    # write_assist_reword
+    var wr = _reqc(_app(), "POST", "/v1/ai/write", "{\"action\":\"reword\",\"text\":\"This is also important because it helps show the big picture.\"}");
+    assert_eq(_has(_bd(wr), "\"source\":\"local\""), 1, "write source local");
+
+    # list_languages
+    var ll = _reqc(_app(), "GET", "/v1/ai/languages", "");
+    assert_eq(_st(ll), 200, "languages 200");
+    assert_eq(_has(_bd(ll), "English"), 1, "languages has English");
+
+    # translate_note_placeholder
+    var app13 = _app();
+    var t13 = _mk(app13, "{\"title\":\"English Note\",\"content\":\"Hello world. This is a test.\",\"tags\":[]}");
+    var trn = _req(app13, "GET", _notepath("/v1/ai/translate/", _notepath("", t13)), "");
+    # append ?lang=es
+    var tp = str_builder_new();
+    str_builder_add_cstr(tp, "/v1/ai/translate/");
+    str_builder_add(tp, t13);
+    str_builder_add_cstr(tp, "?lang=es");
+    var trn2 = _req(app13, "GET", str_builder_build(tp), "");
+    assert_eq(_st(trn2), 200, "translate 200");
+    assert_eq(_has(_bd(trn2), "\"target_language\":\"es\""), 1, "translate target es");
+    assert_eq(_has(_bd(trn2), "\"source\":\"placeholder\""), 1, "translate placeholder");
+
+    # temporal_analysis_empty
+    var te = _reqc(_app(), "GET", "/v1/ai/temporal", "");
+    assert_eq(_has(_bd(te), "\"total_notes\":0"), 1, "temporal empty 0");
+
+    # temporal_analysis_with_notes
+    var app14 = _app();
+    _mk(app14, "{\"title\":\"Analysis Note 0\",\"content\":\"Content about Rust.\",\"tags\":[\"test\"]}");
+    _mk(app14, "{\"title\":\"Analysis Note 1\",\"content\":\"More Rust content.\",\"tags\":[\"test\"]}");
+    _mk(app14, "{\"title\":\"Analysis Note 2\",\"content\":\"Even more Rust.\",\"tags\":[\"test\"]}");
+    assert_eq(_has(_bd(_reqc(app14, "GET", "/v1/ai/temporal", "")), "\"total_notes\":3"), 1, "temporal 3 notes");
+
+    # export_note_as_pdf
+    var app15 = _app();
+    var p15 = _mk(app15, "{\"title\":\"PDF Test\",\"content\":\"# Hello\\n\\nThis note will be exported.\",\"tags\":[\"pdf\"]}");
+    var pdf = _req(app15, "GET", _notepath("/v1/export/pdf/", p15), "");
+    assert_eq(_st(pdf), 200, "pdf 200");
+    assert_eq(str_eq_cstr(mneme_api_response_content_type(pdf), "application/pdf"), 1, "pdf content-type");
+    assert_eq(str_index_of_cstr(_bd(pdf), "%PDF") == 0, 1, "pdf starts with %PDF");
+
+    # get_note_tasks
+    var app16 = _app();
+    var tk16 = _mk(app16, "{\"title\":\"Task Note\",\"content\":\"# Tasks\\n- [ ] Do something\\n- [x] Done thing\\n- [ ] Another task !high\",\"tags\":[]}");
+    var tkr = _req(app16, "GET", _notepath("/v1/tasks/", tk16), "");
+    assert_eq(_st(tkr), 200, "tasks 200");
+    assert_eq(_has(_bd(tkr), "\"total\":3"), 1, "tasks total 3");
+    assert_eq(_has(_bd(tkr), "\"completed\":1"), 1, "tasks completed 1");
+    assert_eq(_has(_bd(tkr), "\"pending\":2"), 1, "tasks pending 2");
+
+    # get_all_tasks
+    var app17 = _app();
+    _mk(app17, "{\"title\":\"Tasks 1\",\"content\":\"- [ ] Task A\\n- [x] Task B\",\"tags\":[]}");
+    assert_eq(_has(_bd(_reqc(app17, "GET", "/v1/tasks", "")), "\"total\":2"), 1, "all tasks total 2");
+
+    # calendar_month_view
+    var app18 = _app();
+    _mk(app18, "{\"title\":\"2026-03-13 — Daily Note\",\"content\":\"Today's note.\",\"tags\":[\"daily\"]}");
+    var cal = _reqc(app18, "GET", "/v1/calendar?year=2026&month=3", "");
+    assert_eq(_st(cal), 200, "calendar 200");
+    assert_eq(_has(_bd(cal), "\"year\":2026"), 1, "calendar year");
+    assert_eq(_has(_bd(cal), "\"days_with_notes\":1"), 1, "calendar 1 day");
+
+    # get_flashcards
+    var app19 = _app();
+    var f19 = _mk(app19, "{\"title\":\"Study Note\",\"content\":\"**Rust**: A systems programming language.\\n\\n## Ownership\\n\\nEach value has exactly one owner.\",\"tags\":[]}");
+    var fcr = _req(app19, "GET", _notepath("/v1/flashcards/", f19), "");
+    assert_eq(_st(fcr), 200, "flashcards 200");
+    assert_eq(_has(_bd(fcr), "\"front\""), 1, "flashcards non-empty");
+
+    # clip_bookmark_and_create
+    var app20 = _app();
+    var cb = _req(app20, "POST", str_from("/v1/clip/bookmark"), "{\"url\":\"https://rust-lang.org\",\"title\":\"Rust Programming Language\",\"description\":\"Official Rust website\",\"create\":true}");
+    assert_eq(_st(cb), 200, "clip bookmark 200");
+    assert_eq(_has(_bd(cb), "\"title\":\"Rust Programming Language\""), 1, "clip title");
+    assert_eq(_has(_bd(cb), "bookmark"), 1, "clip bookmark tag");
+    assert_eq(_has(_bd(_reqc(app20, "GET", "/v1/notes?limit=10", "")), "Rust Programming Language"), 1, "clip note created");
+
+    # clip_html_content
+    var ch = _reqc(_app(), "POST", "/v1/clip/html", "{\"html\":\"<html><head><title>Article</title></head><body><h1>Test</h1><p>Content here.</p></body></html>\",\"url\":\"https://example.com/article\"}");
+    assert_eq(_st(ch), 200, "clip html 200");
+    assert_eq(_has(_bd(ch), "\"title\":\"Article\""), 1, "clip html title");
+
+    # list_plugins_empty
+    var pl = _reqc(_app(), "GET", "/v1/plugins", "");
+    assert_eq(_st(pl), 200, "plugins 200");
+    assert_eq(str_eq_cstr(_bd(pl), "[]"), 1, "plugins empty");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

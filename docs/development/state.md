@@ -44,14 +44,21 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
   - **M7 `mneme-ui` (TUI) — app COMPLETE.** `ui_app` ports the tested state
     layer (vault/engine wiring, note-list load, panel navigation, empty-query
     search guard). `views`/`main` are ratatui/crossterm rendering with 0 tests.
-  - **M5 `mneme-api` — DEFERRED (HTTP bridge).** The handlers have no unit tests;
-    `tests/api_integration.rs` (30 tests) drives the axum router via
-    `tower::oneshot`. Ports with the sandhi HTTP router/server bridge, alongside
-    the deferred daimon client / event bus / embeddings.
-  - **Deferred remainder (bridge tier):** `mneme-api` (30 HTTP tests),
-    `mneme-io/export_pdf` (8 tests — needs a PDF lib; P2 backlog), and the live
-    daimon/ONNX/sandhi calls stubbed throughout M3/M4. All are the same
-    "external bridge" class; the local/pure logic is fully ported.
+  - **M5 `mneme-api` — COMPLETE.** `api_server` ports the full HTTP surface as an
+    in-process router: `handle_request(state, method, path, body) → (status,
+    content_type, body)`. Since `tower::oneshot` drives the axum router without a
+    socket, no live HTTP server is needed — all 30 `tests/api_integration.rs`
+    cases pass. Covers notes CRUD, search, tags, AI endpoints (concepts,
+    suggest-tags, summarize, write, languages, translate, temporal, rag-stats),
+    templates, tasks, calendar, flashcards, clip (html/bookmark), plugins, and
+    PDF export. serde_json request bodies are hand-parsed (string/bool/array,
+    with `\n`/`\t` unescaping); the daimon client / event bus stay deferred
+    (daimon always reported unavailable → local-fallback paths).
+  - **Deferred remainder:** `mneme-io/export_pdf` — the API's `/export/pdf`
+    emits a valid minimal `%PDF`, but export_pdf.rs's 8 tests exercise the full
+    PDF layout (fonts/wrapping/pages) → P2 backlog. `mneme-ui` `views`/`main`
+    are ratatui/crossterm rendering (0 tests). Live daimon/ONNX/sandhi calls
+    remain stubbed throughout M3–M5.
 
 Note: `search_semantic_engine`'s functions were renamed to the
 `mneme_search_semantic_engine_*` namespace (they previously shared
@@ -59,13 +66,12 @@ Note: `search_semantic_engine`'s functions were renamed to the
 
 ## Tests
 
-**55 `.tcyr` files — all green.** Every test-bearing Rust module across
-mneme-core, mneme-io (minus PDF), mneme-store, mneme-search, mneme-ai, mneme-mcp,
-and the mneme-ui app is mirrored 1:1 against `rust-old/`. Deferred
-live-embedding/LLM/HTTP calls are stubbed to their degraded-mode return
-(None/empty/Ok) — exactly what the Rust tests for those modules exercise.
-The remaining unported test files are all the external-bridge tier (mneme-api
-HTTP, export_pdf).
+**56 `.tcyr` files — all green.** Every test-bearing Rust module across
+mneme-core, mneme-io (minus full PDF), mneme-store, mneme-search, mneme-ai,
+mneme-mcp, the mneme-ui app, and **the entire mneme-api HTTP surface** is mirrored
+1:1 against `rust-old/`. Deferred live-embedding/LLM/HTTP calls are stubbed to
+their degraded-mode return (None/empty/Ok) — exactly what the Rust tests exercise.
+The only unported test file is `mneme-io/export_pdf` (8 tests, full PDF layout — P2).
 
 ## Dependencies
 

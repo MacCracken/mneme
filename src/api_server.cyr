@@ -1,0 +1,791 @@
+# mneme-api — HTTP API server (ported from rust-old/crates/mneme-api/*).
+# axum + tower::oneshot drive the router IN-PROCESS (no socket), so the router is
+# a pure function: handle_request(state, method, path, body) → Response. The
+# daimon client / event bus / qa client are DEFERRED (daimon always unavailable),
+# so the RAG/LLM endpoints take their local-fallback path. serde_json request
+# bodies are hand-parsed (flat string/bool/string-array getters).
+
+# Response (24): [status@0, content_type@8(Str), body@16(Str)]
+fn mneme_api_response_new(status, content_type, body): i64 {
+    var r = alloc(24);
+    store64(r, status);
+    store64(r + 8, content_type);
+    store64(r + 16, body);
+    return r;
+}
+fn mneme_api_response_status(r): i64 { return load64(r); }
+fn mneme_api_response_content_type(r): i64 { return load64(r + 8); }
+fn mneme_api_response_body(r): i64 { return load64(r + 16); }
+fn _api_json(status, body): i64 { return mneme_api_response_new(status, str_from("application/json"), body); }
+fn _api_err(status, msg): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"error\":\"");
+    str_builder_add_cstr(sb, msg);
+    str_builder_add_cstr(sb, "\"}");
+    return _api_json(status, str_builder_build(sb));
+}
+
+fn _api_esc(sb, s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c == 34 || c == 92) { str_builder_putc(sb, 92); str_builder_putc(sb, c); }
+        elif (c == 10) { str_builder_add_cstr(sb, "\\n"); }
+        elif (c == 13) { str_builder_add_cstr(sb, "\\r"); }
+        elif (c == 9) { str_builder_add_cstr(sb, "\\t"); }
+        else { str_builder_putc(sb, c); }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _api_kv_str(sb, key, val: Str): i64 {
+    str_builder_putc(sb, 34);
+    str_builder_add_cstr(sb, key);
+    str_builder_add_cstr(sb, "\":\"");
+    _api_esc(sb, val);
+    str_builder_putc(sb, 34);
+    return 0;
+}
+# compact f64 → decimal (3 places)
+fn _api_f64_str(x): i64 {
+    var sb = str_builder_new();
+    if (f64_le(x, f64_from(0)) == 1 && x != f64_from(0)) { str_builder_putc(sb, 45); x = f64_neg(x); }
+    var ip = f64_to(f64_trunc(x));
+    var scaled = f64_to(f64_round(f64_mul(f64_sub(x, f64_from(ip)), f64_from(1000))));
+    if (scaled >= 1000) { ip = ip + 1; scaled = scaled - 1000; }
+    str_builder_add_int(sb, ip);
+    str_builder_putc(sb, 46);
+    str_builder_add_int(sb, scaled / 100);
+    str_builder_add_int(sb, (scaled / 10) % 10);
+    str_builder_add_int(sb, scaled % 10);
+    return str_builder_build(sb);
+}
+
+# --- request-body JSON getters (flat) ---
+# reads a JSON string value, unescaping \n \t \r \" \\ \/ (serde-compatible)
+fn _api_json_str(body: Str, quoted_key): i64 {
+    var pos = str_index_of_cstr(body, quoted_key);
+    if (pos < 0) { return 0; }
+    var n = str_len(body);
+    var d = str_data(body);
+    var i = pos + strlen(quoted_key);
+    while (i < n && (load8(d + i) == 32 || load8(d + i) == 58)) { i = i + 1; }
+    if (i < n && load8(d + i) == 34) {
+        i = i + 1;
+        var sb = str_builder_new();
+        while (i < n && load8(d + i) != 34) {
+            var c = load8(d + i);
+            if (c == 92 && i + 1 < n) {
+                var e = load8(d + i + 1);
+                if (e == 110) { str_builder_putc(sb, 10); }
+                elif (e == 116) { str_builder_putc(sb, 9); }
+                elif (e == 114) { str_builder_putc(sb, 13); }
+                else { str_builder_putc(sb, e); }
+                i = i + 2;
+            } else {
+                str_builder_putc(sb, c);
+                i = i + 1;
+            }
+        }
+        return str_builder_build(sb);
+    }
+    return 0;
+}
+fn _api_json_bool(body: Str, quoted_key): i64 {
+    var pos = str_index_of_cstr(body, quoted_key);
+    if (pos < 0) { return 0; }
+    var n = str_len(body);
+    var d = str_data(body);
+    var i = pos + strlen(quoted_key);
+    while (i < n && (load8(d + i) == 32 || load8(d + i) == 58)) { i = i + 1; }
+    if (i < n && load8(d + i) == 116) { return 1; }   # 't' of true
+    return 0;
+}
+fn _api_json_str_array(body: Str, quoted_key): i64 {
+    var out = vec_new();
+    var pos = str_index_of_cstr(body, quoted_key);
+    if (pos < 0) { return out; }
+    var n = str_len(body);
+    var d = str_data(body);
+    var i = pos + strlen(quoted_key);
+    while (i < n && load8(d + i) != 91 && load8(d + i) != 44 && load8(d + i) != 125) { i = i + 1; }
+    if (i >= n || load8(d + i) != 91) { return out; }
+    i = i + 1;
+    while (i < n && load8(d + i) != 93) {
+        if (load8(d + i) == 34) {
+            i = i + 1;
+            var start = i;
+            while (i < n && load8(d + i) != 34) { i = i + 1; }
+            vec_push(out, str_substr(body, start, i));
+            i = i + 1;
+        } else { i = i + 1; }
+    }
+    return out;
+}
+
+# --- path + query parsing ---
+fn _api_path_only(path: Str): i64 {
+    var q = str_index_of(path, 63);   # '?'
+    if (q < 0) { return path; }
+    return str_substr(path, 0, q);
+}
+fn _api_segments(path: Str): i64 {
+    var p = _api_path_only(path);
+    var out = vec_new();
+    var n = str_len(p);
+    var d = str_data(p);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; } elif (load8(d + i) == 47) { isend = 1; }
+        if (isend == 1) {
+            if (i > start) { vec_push(out, str_substr(p, start, i)); }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+fn _seg(segs, i): i64 { if (i < vec_len(segs)) { return vec_get(segs, i); } return 0; }
+fn _seg_eq(segs, i, cstr): i64 {
+    var s = _seg(segs, i);
+    if (s == 0) { return 0; }
+    return str_eq_cstr(s, cstr);
+}
+fn _api_query_str(path: Str, key_cstr): i64 {
+    var q = str_index_of(path, 63);
+    if (q < 0) { return 0; }
+    var needle = str_builder_new();
+    str_builder_add_cstr(needle, key_cstr);
+    str_builder_putc(needle, 61);   # '='
+    var query = str_substr(path, q + 1, str_len(path));
+    # scan &-separated pairs
+    var n = str_len(query);
+    var d = str_data(query);
+    var start = 0;
+    var i = 0;
+    var nc = str_len(str_builder_build(needle));   # key= length
+    var needle_s = str_builder_build(needle);
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; } elif (load8(d + i) == 38) { isend = 1; }   # '&'
+        if (isend == 1) {
+            var pair = str_substr(query, start, i);
+            if (str_len(pair) >= nc && memeq(str_data(pair), str_data(needle_s), nc) == 1) {
+                return str_substr(pair, nc, str_len(pair));
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _api_query_int(path: Str, key_cstr, dflt): i64 {
+    var s = _api_query_str(path, key_cstr);
+    if (s == 0) { return dflt; }
+    var n = str_len(s);
+    var d = str_data(s);
+    var v = 0;
+    var i = 0;
+    var got = 0;
+    while (i < n && load8(d + i) >= 48 && load8(d + i) <= 57) { v = v * 10 + (load8(d + i) - 48); i = i + 1; got = 1; }
+    if (got == 0) { return dflt; }
+    return v;
+}
+
+# --- state ---
+fn _api_eng_get(engines, vault_id): i64 {
+    var i = 0;
+    while (i < vec_len(engines)) {
+        if (mneme_core_uuid_eq(load64(vec_get(engines, i)), vault_id) == 1) { return vec_get(engines, i); }
+        i = i + 1;
+    }
+    return 0;
+}
+# VaultState (16): [manager@0, engines@8 (vec of [vid, search, semantic, optimizer])]
+fn mneme_api_vault_state_single(vault_dir: Str, models_dir: Str): i64 {
+    var manager = mneme_store_manager_single(vault_dir);
+    var engines = vec_new();
+    var ov = mneme_store_manager_active(manager);
+    if (ov != 0) {
+        var e = alloc(32);
+        store64(e, load64(mneme_store_openvault_info(ov)));
+        store64(e + 8, mneme_search_engine_in_memory());
+        store64(e + 16, mneme_search_semantic_engine_disabled());
+        store64(e + 24, mneme_search_retrieval_optimizer_new());
+        vec_push(engines, e);
+    }
+    var vs = alloc(16);
+    store64(vs, manager);
+    store64(vs + 8, engines);
+    return vs;
+}
+# resolved active: [ov@0, search@8, semantic@16, optimizer@24] or 0
+fn _api_active(state): i64 {
+    var ov = mneme_store_manager_active(load64(state));
+    if (ov == 0) { return 0; }
+    var eng = _api_eng_get(load64(state + 8), load64(mneme_store_openvault_info(ov)));
+    if (eng == 0) { return 0; }
+    var rv = alloc(32);
+    store64(rv, ov);
+    store64(rv + 8, load64(eng + 8));
+    store64(rv + 16, load64(eng + 16));
+    store64(rv + 24, load64(eng + 24));
+    return rv;
+}
+fn _api_vault(rv): i64 { return mneme_store_openvault_vault(load64(rv)); }
+
+# --- response builders ---
+fn _api_note_json(nwc): i64 {
+    var note = mneme_store_nwc_note(nwc);
+    var sb = str_builder_new();
+    str_builder_putc(sb, 123);
+    _api_kv_str(sb, "id", mneme_store_uuid_to_string(mneme_core_note_id(note)));
+    str_builder_add_cstr(sb, ",");
+    _api_kv_str(sb, "title", mneme_core_note_title(note));
+    str_builder_add_cstr(sb, ",");
+    _api_kv_str(sb, "content", mneme_store_nwc_content(nwc));
+    str_builder_add_cstr(sb, ",");
+    _api_kv_str(sb, "path", mneme_core_note_path(note));
+    str_builder_add_cstr(sb, ",\"tags\":[");
+    var tags = mneme_store_nwc_tags(nwc);
+    var i = 0;
+    while (i < vec_len(tags)) {
+        if (i > 0) { str_builder_putc(sb, 44); }
+        str_builder_putc(sb, 34);
+        _api_esc(sb, vec_get(tags, i));
+        str_builder_putc(sb, 34);
+        i = i + 1;
+    }
+    str_builder_add_cstr(sb, "]}");
+    return str_builder_build(sb);
+}
+fn _api_str_array_json(items): i64 {
+    var sb = str_builder_new();
+    str_builder_putc(sb, 91);
+    var i = 0;
+    while (i < vec_len(items)) {
+        if (i > 0) { str_builder_putc(sb, 44); }
+        str_builder_putc(sb, 34);
+        _api_esc(sb, vec_get(items, i));
+        str_builder_putc(sb, 34);
+        i = i + 1;
+    }
+    str_builder_putc(sb, 93);
+    return str_builder_build(sb);
+}
+
+# ================= handlers =================
+fn _h_health(state): i64 {
+    var count = 0;
+    var name = str_from("none");
+    var rv = _api_active(state);
+    if (rv != 0) {
+        count = mneme_store_vault_count_notes(_api_vault(rv));
+        name = mneme_core_vault_info_name(mneme_store_openvault_info(load64(rv)));
+    }
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"status\":\"ok\",\"version\":\"0.1.0\",\"notes_count\":");
+    str_builder_add_int(sb, count);
+    str_builder_add_cstr(sb, ",\"active_vault\":\"");
+    _api_esc(sb, name);
+    str_builder_add_cstr(sb, "\",\"semantic_available\":false,\"vector_count\":0,\"embedding_backend\":\"none\",\"embedding_dimension\":0}");
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_create_note(state, body): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var title = _api_json_str(body, "\"title\"");
+    if (title == 0) { return _api_err(400, "Missing title"); }
+    var content = _api_json_str(body, "\"content\"");
+    if (content == 0) { content = str_from(""); }
+    var tags = _api_json_str_array(body, "\"tags\"");
+    var nwc = mneme_store_vault_create_note(_api_vault(rv), mneme_store_create_note_new(title, 0, content, tags, 0 - 1));
+    if (nwc == 0) { return _api_err(400, "Failed to create note"); }
+    var note = mneme_store_nwc_note(nwc);
+    mneme_search_engine_index_note(load64(rv + 8), mneme_core_note_id(note), mneme_core_note_title(note), content, tags, mneme_core_note_path(note));
+    mneme_search_semantic_engine_index_note(load64(rv + 16), mneme_core_note_id(note), mneme_core_note_title(note), content);
+    return _api_json(201, _api_note_json(nwc));
+}
+fn _h_get_note(state, id_seg): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    if (nwc == 0) { return _api_err(404, "Note not found"); }
+    return _api_json(200, _api_note_json(nwc));
+}
+fn _h_list_notes(state, path): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var notes = mneme_store_vault_list_notes(_api_vault(rv), _api_query_int(path, "limit", 50), 0);
+    var sb = str_builder_new();
+    str_builder_putc(sb, 91);
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var note = vec_get(notes, i);
+        if (i > 0) { str_builder_putc(sb, 44); }
+        str_builder_putc(sb, 123);
+        _api_kv_str(sb, "id", mneme_store_uuid_to_string(mneme_core_note_id(note)));
+        str_builder_add_cstr(sb, ",");
+        _api_kv_str(sb, "title", mneme_core_note_title(note));
+        str_builder_add_cstr(sb, ",");
+        _api_kv_str(sb, "path", mneme_core_note_path(note));
+        str_builder_putc(sb, 125);
+        i = i + 1;
+    }
+    str_builder_putc(sb, 93);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_update_note(state, id_seg, body): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var tags = _api_json_str_array(body, "\"tags\"");
+    if (vec_len(tags) == 0) { tags = 0; }
+    var nwc = mneme_store_vault_update_note(_api_vault(rv), mneme_store_uuid_parse(id_seg), mneme_store_update_note_new(_api_json_str(body, "\"title\""), _api_json_str(body, "\"content\""), tags));
+    if (nwc == 0) { return _api_err(404, "Note not found"); }
+    var note = mneme_store_nwc_note(nwc);
+    mneme_search_engine_index_note(load64(rv + 8), mneme_core_note_id(note), mneme_core_note_title(note), mneme_store_nwc_content(nwc), mneme_store_nwc_tags(nwc), mneme_core_note_path(note));
+    return _api_json(200, _api_note_json(nwc));
+}
+fn _h_delete_note(state, id_seg): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var id = mneme_store_uuid_parse(id_seg);
+    if (mneme_store_vault_get_note(_api_vault(rv), id) == 0) { return _api_err(404, "Note not found"); }
+    mneme_search_engine_remove_note(load64(rv + 8), id);
+    mneme_search_semantic_engine_remove_note(load64(rv + 16), id);
+    mneme_store_vault_delete_note(_api_vault(rv), id);
+    return mneme_api_response_new(204, str_from("application/json"), str_from(""));
+}
+fn _h_search(state, path): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var q = _api_query_str(path, "q");
+    if (q == 0) { q = str_from(""); }
+    var opt = load64(rv + 24);
+    var arm = mneme_search_retrieval_optimizer_select_arm(opt);
+    var arm_idx = load64(arm);
+    var ft = mneme_search_engine_search(load64(rv + 8), q, 20);
+    mneme_search_retrieval_optimizer_record_search(opt, arm_idx);
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"search_id\":\"s:");
+    str_builder_add_int(sb, arm_idx);
+    str_builder_putc(sb, 58);
+    str_builder_add_int(sb, mneme_search_retrieval_optimizer_total_searches(opt));
+    str_builder_add_cstr(sb, "\",\"results\":[");
+    var i = 0;
+    while (i < vec_len(ft)) {
+        var r = vec_get(ft, i);
+        if (i > 0) { str_builder_putc(sb, 44); }
+        str_builder_putc(sb, 123);
+        _api_kv_str(sb, "note_id", mneme_store_uuid_to_string(mneme_search_result_note_id(r)));
+        str_builder_add_cstr(sb, ",");
+        _api_kv_str(sb, "title", mneme_search_result_title(r));
+        str_builder_add_cstr(sb, ",");
+        _api_kv_str(sb, "path", mneme_search_result_path(r));
+        str_builder_add_cstr(sb, ",");
+        _api_kv_str(sb, "snippet", mneme_search_result_snippet(r));
+        str_builder_add_cstr(sb, ",\"score\":");
+        str_builder_add(sb, _api_f64_str(mneme_search_result_score(r)));
+        str_builder_add_cstr(sb, ",\"source\":\"fulltext\",\"trust\":1.0}");
+        i = i + 1;
+    }
+    str_builder_add_cstr(sb, "]}");
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_list_tags(state): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var tags = mneme_store_vault_list_tags(_api_vault(rv));
+    var sb = str_builder_new();
+    str_builder_putc(sb, 91);
+    var i = 0;
+    while (i < vec_len(tags)) {
+        var t = vec_get(tags, i);
+        if (i > 0) { str_builder_putc(sb, 44); }
+        str_builder_putc(sb, 123);
+        _api_kv_str(sb, "id", mneme_store_uuid_to_string(mneme_store_tag_id(t)));
+        str_builder_add_cstr(sb, ",");
+        _api_kv_str(sb, "name", mneme_store_tag_name(t));
+        str_builder_putc(sb, 125);
+        i = i + 1;
+    }
+    str_builder_putc(sb, 93);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_delete_tag(state, id_seg): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    mneme_store_vault_delete_tag(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    return mneme_api_response_new(204, str_from("application/json"), str_from(""));
+}
+fn _h_rag_stats(state): i64 {
+    return _api_json(200, str_from("{\"daimon_available\":false,\"index_size\":0}"));
+}
+fn _h_concepts(state, id_seg): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    if (nwc == 0) { return _api_err(404, "Note not found"); }
+    var concepts = mneme_ai_extract_concepts(mneme_store_nwc_content(nwc));
+    if (concepts == 0) { concepts = vec_new(); }
+    var sb = str_builder_new();
+    str_builder_putc(sb, 91);
+    var i = 0;
+    while (i < vec_len(concepts)) {
+        var c = vec_get(concepts, i);
+        if (i > 0) { str_builder_putc(sb, 44); }
+        str_builder_putc(sb, 123);
+        _api_kv_str(sb, "term", mneme_ai_concept_term(c));
+        str_builder_add_cstr(sb, ",");
+        _api_kv_str(sb, "kind", mneme_ai_concept_kind_str(mneme_ai_concept_kind(c)));
+        str_builder_add_cstr(sb, ",\"occurrences\":");
+        str_builder_add_int(sb, mneme_ai_concept_occurrences(c));
+        str_builder_putc(sb, 125);
+        i = i + 1;
+    }
+    str_builder_putc(sb, 93);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_suggest_tags(state, id_seg): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    if (nwc == 0) { return _api_err(404, "Note not found"); }
+    var suggestions = mneme_ai_suggest_tags(mneme_store_nwc_content(nwc), mneme_store_nwc_tags(nwc), 5);
+    if (suggestions == 0) { suggestions = vec_new(); }
+    var sb = str_builder_new();
+    str_builder_putc(sb, 91);
+    var i = 0;
+    while (i < vec_len(suggestions)) {
+        var s = vec_get(suggestions, i);
+        if (i > 0) { str_builder_putc(sb, 44); }
+        str_builder_putc(sb, 123);
+        _api_kv_str(sb, "tag", mneme_ai_tag_suggestion_tag(s));
+        str_builder_add_cstr(sb, ",\"confidence\":");
+        str_builder_add(sb, _api_f64_str(mneme_ai_tag_suggestion_confidence(s)));
+        str_builder_putc(sb, 125);
+        i = i + 1;
+    }
+    str_builder_putc(sb, 93);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_list_templates(state): i64 {
+    var templates = mneme_ai_builtin_templates();
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"templates\":[");
+    var i = 0;
+    while (i < vec_len(templates)) {
+        if (i > 0) { str_builder_putc(sb, 44); }
+        str_builder_putc(sb, 123);
+        _api_kv_str(sb, "name", mneme_ai_template_name(vec_get(templates, i)));
+        str_builder_putc(sb, 125);
+        i = i + 1;
+    }
+    str_builder_add_cstr(sb, "]}");
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_render_template(state, body): i64 {
+    var name = _api_json_str(body, "\"template_name\"");
+    if (name == 0) { return _api_err(400, "Missing template_name"); }
+    var templates = mneme_ai_builtin_templates();
+    var tmpl = 0;
+    var i = 0;
+    while (i < vec_len(templates)) {
+        if (str_eq(mneme_ai_template_name(vec_get(templates, i)), name) == 1) { tmpl = vec_get(templates, i); }
+        i = i + 1;
+    }
+    if (tmpl == 0) { return _api_err(404, "Template not found"); }
+    var rendered = mneme_ai_render_template(tmpl, vec_new());
+    var created = _api_json_bool(body, "\"create\"");
+    if (created == 1) {
+        var rv = _api_active(state);
+        if (rv != 0) {
+            mneme_store_vault_create_note(_api_vault(rv), mneme_store_create_note_new(mneme_ai_rendered_title(rendered), 0, mneme_ai_rendered_content(rendered), mneme_ai_rendered_tags(rendered), 0 - 1));
+        }
+    }
+    var sb = str_builder_new();
+    str_builder_putc(sb, 123);
+    _api_kv_str(sb, "title", mneme_ai_rendered_title(rendered));
+    str_builder_add_cstr(sb, ",");
+    _api_kv_str(sb, "content", mneme_ai_rendered_content(rendered));
+    str_builder_add_cstr(sb, ",\"created\":");
+    if (created == 1) { str_builder_add_cstr(sb, "true"); } else { str_builder_add_cstr(sb, "false"); }
+    str_builder_putc(sb, 125);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_summarize(state, id_seg): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    if (nwc == 0) { return _api_err(404, "Note not found"); }
+    var summary = mneme_ai_extractive_summary(mneme_store_nwc_content(nwc));
+    var sb = str_builder_new();
+    str_builder_putc(sb, 123);
+    _api_kv_str(sb, "summary", mneme_ai_note_summary_summary(summary));
+    str_builder_add_cstr(sb, ",\"word_count\":");
+    str_builder_add_int(sb, mneme_ai_note_summary_word_count(summary));
+    str_builder_putc(sb, 125);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_write(state, body): i64 {
+    var action_str = _api_json_str(body, "\"action\"");
+    if (action_str == 0) { return _api_err(400, "Missing action"); }
+    var text = _api_json_str(body, "\"text\"");
+    if (text == 0) { text = str_from(""); }
+    var action = WRITE_COMPLETE;
+    if (str_eq_cstr(action_str, "reword") == 1) { action = WRITE_REWORD; }
+    elif (str_eq_cstr(action_str, "expand") == 1) { action = WRITE_EXPAND; }
+    var result = mneme_ai_writer_local_assist(mneme_ai_write_request_new(action, text, 0));
+    var sb = str_builder_new();
+    str_builder_putc(sb, 123);
+    _api_kv_str(sb, "result", result);
+    str_builder_add_cstr(sb, ",");
+    _api_kv_str(sb, "action", action_str);
+    str_builder_add_cstr(sb, ",\"source\":\"local\"}");
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_languages(state): i64 {
+    var langs = mneme_ai_supported_languages();
+    var sb = str_builder_new();
+    str_builder_putc(sb, 91);
+    var i = 0;
+    while (i < vec_len(langs)) {
+        var l = vec_get(langs, i);
+        if (i > 0) { str_builder_putc(sb, 44); }
+        str_builder_putc(sb, 123);
+        _api_kv_str(sb, "code", mneme_ai_language_code(l));
+        str_builder_add_cstr(sb, ",");
+        _api_kv_str(sb, "name", mneme_ai_language_name(l));
+        str_builder_putc(sb, 125);
+        i = i + 1;
+    }
+    str_builder_putc(sb, 93);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_translate(state, id_seg, path): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    if (nwc == 0) { return _api_err(404, "Note not found"); }
+    var lang = _api_query_str(path, "lang");
+    if (lang == 0) { lang = str_from("en"); }
+    var translated = mneme_ai_preserve_markdown_structure(mneme_store_nwc_content(nwc), lang);
+    var sb = str_builder_new();
+    str_builder_putc(sb, 123);
+    _api_kv_str(sb, "target_language", lang);
+    str_builder_add_cstr(sb, ",");
+    _api_kv_str(sb, "translated", translated);
+    str_builder_add_cstr(sb, ",\"source\":\"placeholder\"}");
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_temporal(state): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var notes = mneme_store_vault_list_notes(_api_vault(rv), 1000, 0);
+    var snaps = vec_new();
+    var ymd = mneme_ai_ymd(2026, 1, 1);
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var note = vec_get(notes, i);
+        vec_push(snaps, mneme_ai_note_snapshot_new(mneme_core_note_title(note), str_from(""), vec_new(), ymd, ymd));
+        i = i + 1;
+    }
+    var report = mneme_ai_analyze_temporal(snaps);
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"total_notes\":");
+    str_builder_add_int(sb, mneme_ai_temporal_report_total_notes(report));
+    str_builder_putc(sb, 125);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_export_pdf(state, id_seg): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    if (nwc == 0) { return _api_err(404, "Note not found"); }
+    var pdf = mneme_io_export_pdf(mneme_core_note_title(mneme_store_nwc_note(nwc)), mneme_store_nwc_content(nwc));
+    return mneme_api_response_new(200, str_from("application/pdf"), pdf);
+}
+fn _h_tasks_id(state, id_seg): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var id = mneme_store_uuid_parse(id_seg);
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), id);
+    if (nwc == 0) { return _api_err(404, "Note not found"); }
+    var board = mneme_core_task_build_board(mneme_core_task_extract_tasks(id, mneme_store_nwc_content(nwc)));
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"total\":");
+    str_builder_add_int(sb, load64(board + 8));
+    str_builder_add_cstr(sb, ",\"completed\":");
+    str_builder_add_int(sb, load64(board + 16));
+    str_builder_add_cstr(sb, ",\"pending\":");
+    str_builder_add_int(sb, load64(board + 24));
+    str_builder_putc(sb, 125);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_tasks_all(state): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var vault = _api_vault(rv);
+    var notes = mneme_store_vault_list_notes(vault, 1000, 0);
+    var all = vec_new();
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var note = vec_get(notes, i);
+        var nwc = mneme_store_vault_get_note(vault, mneme_core_note_id(note));
+        if (nwc != 0) {
+            var tasks = mneme_core_task_extract_tasks(mneme_core_note_id(note), mneme_store_nwc_content(nwc));
+            var j = 0;
+            while (j < vec_len(tasks)) { vec_push(all, vec_get(tasks, j)); j = j + 1; }
+        }
+        i = i + 1;
+    }
+    var board = mneme_core_task_build_board(all);
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"total\":");
+    str_builder_add_int(sb, load64(board + 8));
+    str_builder_add_cstr(sb, ",\"completed\":");
+    str_builder_add_int(sb, load64(board + 16));
+    str_builder_add_cstr(sb, ",\"pending\":");
+    str_builder_add_int(sb, load64(board + 24));
+    str_builder_putc(sb, 125);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_calendar(state, path): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var year = _api_query_int(path, "year", 0);
+    var month = _api_query_int(path, "month", 0);
+    var notes = mneme_store_vault_list_notes(_api_vault(rv), 1000, 0);
+    var entries = vec_new();
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var note = vec_get(notes, i);
+        var date = mneme_core_calendar_parse_date(mneme_core_note_title(note));
+        if (date != (0 - 1)) {
+            vec_push(entries, mneme_core_calendar_entry_new(date, mneme_core_note_id(note), mneme_core_note_title(note), mneme_core_calendar_detect_entry_type(mneme_core_note_title(note))));
+        }
+        i = i + 1;
+    }
+    var mv = mneme_core_calendar_month_view(entries, year, month);
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"year\":");
+    str_builder_add_int(sb, year);
+    str_builder_add_cstr(sb, ",\"month\":");
+    str_builder_add_int(sb, month);
+    str_builder_add_cstr(sb, ",\"days_with_notes\":");
+    str_builder_add_int(sb, load64(mv + 24));
+    str_builder_putc(sb, 125);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_flashcards(state, id_seg): i64 {
+    var rv = _api_active(state);
+    if (rv == 0) { return _api_err(503, "No active vault"); }
+    var id = mneme_store_uuid_parse(id_seg);
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), id);
+    if (nwc == 0) { return _api_err(404, "Note not found"); }
+    var cards = mneme_ai_extract_flashcards(id, mneme_store_nwc_content(nwc));
+    var sb = str_builder_new();
+    str_builder_putc(sb, 91);
+    var i = 0;
+    while (i < vec_len(cards)) {
+        var c = vec_get(cards, i);
+        if (i > 0) { str_builder_putc(sb, 44); }
+        str_builder_putc(sb, 123);
+        _api_kv_str(sb, "front", mneme_ai_flashcard_front(c));
+        str_builder_add_cstr(sb, ",");
+        _api_kv_str(sb, "back", mneme_ai_flashcard_back(c));
+        str_builder_putc(sb, 125);
+        i = i + 1;
+    }
+    str_builder_putc(sb, 93);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_clip_bookmark(state, body): i64 {
+    var url = _api_json_str(body, "\"url\"");
+    if (url == 0) { url = str_from(""); }
+    var page = mneme_io_wc_clip_bookmark(url, _api_json_str(body, "\"title\""), _api_json_str(body, "\"description\""));
+    if (_api_json_bool(body, "\"create\"") == 1) {
+        var rv = _api_active(state);
+        if (rv != 0) {
+            mneme_store_vault_create_note(_api_vault(rv), mneme_store_create_note_new(mneme_io_wc_page_title(page), 0, mneme_io_wc_page_content_md(page), mneme_io_wc_page_tags(page), 0 - 1));
+        }
+    }
+    var sb = str_builder_new();
+    str_builder_putc(sb, 123);
+    _api_kv_str(sb, "title", mneme_io_wc_page_title(page));
+    str_builder_add_cstr(sb, ",\"tags\":");
+    str_builder_add(sb, _api_str_array_json(mneme_io_wc_page_tags(page)));
+    str_builder_putc(sb, 125);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_clip_html(state, body): i64 {
+    var html = _api_json_str(body, "\"html\"");
+    if (html == 0) { html = str_from(""); }
+    var url = _api_json_str(body, "\"url\"");
+    if (url == 0) { url = str_from(""); }
+    var page = mneme_io_wc_clip_html(html, url, mneme_io_wc_clip_options_default());
+    var sb = str_builder_new();
+    str_builder_putc(sb, 123);
+    _api_kv_str(sb, "title", mneme_io_wc_page_title(page));
+    str_builder_putc(sb, 125);
+    return _api_json(200, str_builder_build(sb));
+}
+fn _h_plugins(state): i64 { return _api_json(200, str_from("[]")); }
+
+# ================= router =================
+fn mneme_api_handle_request(state, method, path: Str, body: Str): i64 {
+    var segs = _api_segments(path);
+    var n = vec_len(segs);
+    var is_get = str_eq_cstr(method, "GET");
+    var is_post = str_eq_cstr(method, "POST");
+    var is_put = str_eq_cstr(method, "PUT");
+    var is_delete = str_eq_cstr(method, "DELETE");
+
+    if (is_get == 1 && n == 1 && _seg_eq(segs, 0, "health") == 1) { return _h_health(state); }
+    if (n >= 2 && _seg_eq(segs, 0, "v1") == 1) {
+        # /v1/notes ...
+        if (_seg_eq(segs, 1, "notes") == 1) {
+            if (n == 2 && is_post == 1) { return _h_create_note(state, body); }
+            if (n == 2 && is_get == 1) { return _h_list_notes(state, path); }
+            if (n == 3 && is_get == 1) { return _h_get_note(state, _seg(segs, 2)); }
+            if (n == 3 && is_put == 1) { return _h_update_note(state, _seg(segs, 2), body); }
+            if (n == 3 && is_delete == 1) { return _h_delete_note(state, _seg(segs, 2)); }
+        }
+        if (_seg_eq(segs, 1, "search") == 1 && n == 2 && is_get == 1) { return _h_search(state, path); }
+        if (_seg_eq(segs, 1, "tags") == 1) {
+            if (n == 2 && is_get == 1) { return _h_list_tags(state); }
+            if (n == 3 && is_delete == 1) { return _h_delete_tag(state, _seg(segs, 2)); }
+        }
+        if (_seg_eq(segs, 1, "templates") == 1) {
+            if (n == 2 && is_get == 1) { return _h_list_templates(state); }
+            if (n == 3 && is_post == 1 && _seg_eq(segs, 2, "render") == 1) { return _h_render_template(state, body); }
+        }
+        if (_seg_eq(segs, 1, "tasks") == 1) {
+            if (n == 2 && is_get == 1) { return _h_tasks_all(state); }
+            if (n == 3 && is_get == 1) { return _h_tasks_id(state, _seg(segs, 2)); }
+        }
+        if (_seg_eq(segs, 1, "calendar") == 1 && n == 2 && is_get == 1) { return _h_calendar(state, path); }
+        if (_seg_eq(segs, 1, "flashcards") == 1 && n == 3 && is_get == 1) { return _h_flashcards(state, _seg(segs, 2)); }
+        if (_seg_eq(segs, 1, "plugins") == 1 && n == 2 && is_get == 1) { return _h_plugins(state); }
+        if (_seg_eq(segs, 1, "export") == 1 && n == 4 && is_get == 1 && _seg_eq(segs, 2, "pdf") == 1) { return _h_export_pdf(state, _seg(segs, 3)); }
+        if (_seg_eq(segs, 1, "clip") == 1 && n == 3 && is_post == 1) {
+            if (_seg_eq(segs, 2, "bookmark") == 1) { return _h_clip_bookmark(state, body); }
+            if (_seg_eq(segs, 2, "html") == 1) { return _h_clip_html(state, body); }
+        }
+        if (_seg_eq(segs, 1, "ai") == 1 && n >= 3) {
+            if (_seg_eq(segs, 2, "rag") == 1 && n == 4 && is_get == 1 && _seg_eq(segs, 3, "stats") == 1) { return _h_rag_stats(state); }
+            if (_seg_eq(segs, 2, "concepts") == 1 && n == 4 && is_get == 1) { return _h_concepts(state, _seg(segs, 3)); }
+            if (_seg_eq(segs, 2, "suggest-tags") == 1 && n == 4 && is_get == 1) { return _h_suggest_tags(state, _seg(segs, 3)); }
+            if (_seg_eq(segs, 2, "summarize") == 1 && n == 4 && is_get == 1) { return _h_summarize(state, _seg(segs, 3)); }
+            if (_seg_eq(segs, 2, "write") == 1 && n == 3 && is_post == 1) { return _h_write(state, body); }
+            if (_seg_eq(segs, 2, "languages") == 1 && n == 3 && is_get == 1) { return _h_languages(state); }
+            if (_seg_eq(segs, 2, "translate") == 1 && n == 4 && is_get == 1) { return _h_translate(state, _seg(segs, 3), path); }
+            if (_seg_eq(segs, 2, "temporal") == 1 && n == 3 && is_get == 1) { return _h_temporal(state); }
+        }
+    }
+    return _api_err(404, "Not found");
+}
