@@ -1,0 +1,55 @@
+# mneme-io — plain Markdown directory importer (ported from
+# rust-old/crates/mneme-io/src/import_markdown.rs). Simpler than Obsidian: no
+# wikilink conversion / inline tags. Reuses ImportedNote + _imp helpers from io_obsidian.
+# MarkdownImportStats (32): [files_found@0, files_imported@8, skipped@16, errors@24]
+
+fn mneme_io_md_stats_files_found(s): i64 { return load64(s); }
+fn mneme_io_md_stats_files_imported(s): i64 { return load64(s + 8); }
+
+fn _md_single(root: Str, path: Str): i64 {
+    var buf = alloc(262144);
+    var n = file_read_all(_imp_cstr(path), buf, 262144);
+    if (n < 0) { n = 0; }
+    var raw = str_new(buf, n);
+    var pair = mneme_core_frontmatter_split(raw);
+    var yaml = mneme_core_fm_pair_yaml(pair);
+    var body = mneme_core_fm_pair_body(pair);
+    var title = 0;
+    var tags = vec_new();
+    if (yaml != 0) {
+        var fm = mneme_core_frontmatter_parse(yaml);
+        title = mneme_core_fm_title(fm);
+        var ft = mneme_core_fm_tags(fm);
+        var i = 0;
+        while (i < vec_len(ft)) { vec_push(tags, vec_get(ft, i)); i = i + 1; }
+    }
+    if (title == 0) { title = _imp_file_stem(path); }
+    var note = alloc(56);
+    store64(note, title);
+    store64(note + 8, body);
+    store64(note + 16, tags);
+    store64(note + 24, path);
+    store64(note + 32, _imp_relative(root, path));
+    store64(note + 40, vec_new());
+    store64(note + 48, 0);
+    return note;
+}
+
+# import all .md files from a directory tree; 0 = SourceNotFound
+fn mneme_io_import_markdown_dir(source_dir: Str): i64 {
+    if (is_dir(source_dir) == 0) { return 0; }
+    var files = find_files(source_dir, str_from(".md"));
+    _imp_sort(files);
+    var notes = vec_new();
+    var i = 0;
+    while (i < vec_len(files)) { vec_push(notes, _md_single(source_dir, vec_get(files, i))); i = i + 1; }
+    var stats = alloc(32);
+    store64(stats, vec_len(files));
+    store64(stats + 8, vec_len(notes));
+    store64(stats + 16, 0);
+    store64(stats + 24, vec_new());
+    var result = alloc(16);
+    store64(result, notes);
+    store64(result + 8, stats);
+    return result;
+}

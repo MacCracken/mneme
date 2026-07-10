@@ -1,0 +1,72 @@
+# mneme-io plain-markdown import tests — ported 1:1 from the 2 #[tokio::test]s in
+# rust-old/crates/mneme-io/src/import_markdown.rs.
+include "src/core_frontmatter.cyr"
+include "src/io_wikilink.cyr"
+include "src/io_obsidian.cyr"
+include "src/io_markdown.cyr"
+
+var _mdn = 0;
+fn _fresh_dir(): i64 {
+    _mdn = _mdn + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_md");
+    str_builder_add_int(pb, _mdn);
+    return str_builder_build(pb);
+}
+fn _mkfile(path: Str, content: Str): i64 {
+    var parent = path_dirname(path);
+    var n = str_len(parent);
+    var d = str_data(parent);
+    var i = 1;
+    while (i <= n) {
+        if (i == n || load8(d + i) == 47) { sys_mkdir(_imp_cstr(str_substr(parent, 0, i)), 493); }
+        i = i + 1;
+    }
+    file_write_all(_imp_cstr(path), str_data(content), str_len(content));
+    return 0;
+}
+fn _any_title(notes, cstr): i64 {
+    var i = 0;
+    while (i < vec_len(notes)) {
+        if (str_eq_cstr(mneme_io_imported_note_title(vec_get(notes, i)), cstr) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _any_rel(notes, cstr): i64 {
+    var i = 0;
+    while (i < vec_len(notes)) {
+        if (str_contains(mneme_io_imported_note_relative_path(vec_get(notes, i)), str_from(cstr)) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("io_markdown");
+
+    # import_flat_dir
+    var d1 = _fresh_dir();
+    _mkfile(path_join(d1, str_from("a.md")), str_from("Note A content."));
+    _mkfile(path_join(d1, str_from("b.md")), str_from("---\ntitle: Note B\n---\nContent B."));
+    var r1 = mneme_io_import_markdown_dir(d1);
+    assert_eq(mneme_io_md_stats_files_found(mneme_io_import_result_stats(r1)), 2, "found 2");
+    assert_eq(mneme_io_md_stats_files_imported(mneme_io_import_result_stats(r1)), 2, "imported 2");
+    assert_eq(_any_title(mneme_io_import_result_notes(r1), "Note B"), 1, "has Note B (fm)");
+    assert_eq(_any_title(mneme_io_import_result_notes(r1), "a"), 1, "has a (filename)");
+
+    # import_preserves_structure
+    var d2 = _fresh_dir();
+    _mkfile(path_join(d2, str_from("root.md")), str_from("Root."));
+    _mkfile(path_join(d2, str_from("project/plan.md")), str_from("Plan."));
+    _mkfile(path_join(d2, str_from("project/sub/detail.md")), str_from("Detail."));
+    var r2 = mneme_io_import_markdown_dir(d2);
+    assert_eq(mneme_io_md_stats_files_found(mneme_io_import_result_stats(r2)), 3, "found 3");
+    assert_eq(_any_rel(mneme_io_import_result_notes(r2), "project/sub/"), 1, "preserves structure");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

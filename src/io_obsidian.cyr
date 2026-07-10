@@ -1,0 +1,178 @@
+# mneme-io — Obsidian vault importer (ported from rust-old/crates/mneme-io/src/import_obsidian.rs)
+# Walks .md files, parses frontmatter, converts [[wikilinks]], pulls inline #tags.
+# Async #[tokio::test]s → sync. Requires core_frontmatter + io_wikilink + fs/io/syscalls.
+
+# ImportedNote (56): [title@0, content@8, tags@16, source_path@24, relative_path@32, wikilinks@40, modified_at@48]
+fn mneme_io_imported_note_title(x): i64 { return load64(x); }
+fn mneme_io_imported_note_content(x): i64 { return load64(x + 8); }
+fn mneme_io_imported_note_tags(x): i64 { return load64(x + 16); }
+fn mneme_io_imported_note_source_path(x): i64 { return load64(x + 24); }
+fn mneme_io_imported_note_relative_path(x): i64 { return load64(x + 32); }
+fn mneme_io_imported_note_wikilinks(x): i64 { return load64(x + 40); }
+
+# ImportStats (32): [notes_found@0, notes_imported@8, wikilinks_converted@16, errors@24]
+fn mneme_io_import_stats_notes_found(s): i64 { return load64(s); }
+fn mneme_io_import_stats_notes_imported(s): i64 { return load64(s + 8); }
+fn mneme_io_import_stats_wikilinks_converted(s): i64 { return load64(s + 16); }
+# import result (16): [notes@0 (vec<ImportedNote>), stats@8]
+fn mneme_io_import_result_notes(r): i64 { return load64(r); }
+fn mneme_io_import_result_stats(r): i64 { return load64(r + 8); }
+
+fn _imp_cstr(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(s), n);
+    store8(buf + n, 0);
+    return buf;
+}
+fn _imp_is_ws(c): i64 { if (c == 32 || c == 9 || c == 10 || c == 13) { return 1; } return 0; }
+fn _imp_is_tagchar(c): i64 {
+    if ((c >= 48 && c <= 57) || (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 47 || c == 45) { return 1; }
+    return 0;
+}
+fn _imp_str_lt(a: Str, b: Str): i64 {
+    var la = str_len(a);
+    var lb = str_len(b);
+    var da = str_data(a);
+    var db = str_data(b);
+    var n = la;
+    if (lb < la) { n = lb; }
+    var i = 0;
+    while (i < n) {
+        if (load8(da + i) < load8(db + i)) { return 1; }
+        if (load8(da + i) > load8(db + i)) { return 0; }
+        i = i + 1;
+    }
+    if (la < lb) { return 1; }
+    return 0;
+}
+fn _imp_sort(v): i64 {
+    var n = vec_len(v);
+    var i = 0;
+    while (i < n) {
+        var j = 0;
+        while (j + 1 + i < n) {
+            if (_imp_str_lt(vec_get(v, j + 1), vec_get(v, j)) == 1) {
+                var tmp = vec_get(v, j);
+                vec_set(v, j, vec_get(v, j + 1));
+                vec_set(v, j + 1, tmp);
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _imp_file_stem(path: Str): i64 {
+    var base = path_basename(path);
+    var bl = str_len(base);
+    var bd = str_data(base);
+    var dot = 0 - 1;
+    var i = 0;
+    while (i < bl) { if (load8(bd + i) == 46) { dot = i; } i = i + 1; }
+    if (dot < 0) { return base; }
+    return str_substr(base, 0, dot);
+}
+fn _imp_relative(vault_root: Str, full: Str): i64 {
+    var vl = str_len(vault_root);
+    if (str_len(full) > vl && str_starts_with(full, vault_root) == 1) {
+        var rel = str_substr(full, vl, str_len(full));
+        if (str_len(rel) > 0 && load8(str_data(rel)) == 47) { rel = str_substr(rel, 1, str_len(rel)); }
+        return rel;
+    }
+    return full;
+}
+fn _imp_trim_tag(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var start = 0;
+    while (start < n && _imp_is_tagchar(load8(d + start)) == 0) { start = start + 1; }
+    var end = n;
+    while (end > start && _imp_is_tagchar(load8(d + end - 1)) == 0) { end = end - 1; }
+    return str_substr(s, start, end);
+}
+fn _imp_tags_has(tags, s: Str): i64 {
+    var i = 0;
+    while (i < vec_len(tags)) { if (str_eq(vec_get(tags, i), s) == 1) { return 1; } i = i + 1; }
+    return 0;
+}
+# extract Obsidian inline #tags from body, appending new ones to `tags`
+fn _imp_inline_tags(body: Str, tags): i64 {
+    var n = str_len(body);
+    var d = str_data(body);
+    var i = 0;
+    while (i < n) {
+        while (i < n && _imp_is_ws(load8(d + i)) == 1) { i = i + 1; }
+        var start = i;
+        while (i < n && _imp_is_ws(load8(d + i)) == 0) { i = i + 1; }
+        if (i > start) {
+            var word = str_substr(body, start, i);
+            if (str_len(word) > 0 && load8(str_data(word)) == 35) {   # '#'
+                var tag = _imp_trim_tag(str_substr(word, 1, str_len(word)));
+                if (str_len(tag) > 0 && _imp_tags_has(tags, tag) == 0) { vec_push(tags, tag); }
+            }
+        }
+    }
+    return 0;
+}
+
+fn _imp_single(vault_root: Str, file_path: Str, convert): i64 {
+    var buf = alloc(262144);
+    var n = file_read_all(_imp_cstr(file_path), buf, 262144);
+    if (n < 0) { n = 0; }
+    var raw = str_new(buf, n);
+    var pair = mneme_core_frontmatter_split(raw);
+    var yaml = mneme_core_fm_pair_yaml(pair);
+    var body = mneme_core_fm_pair_body(pair);
+    var title = 0;
+    var tags = vec_new();
+    if (yaml != 0) {
+        var fm = mneme_core_frontmatter_parse(yaml);
+        title = mneme_core_fm_title(fm);
+        var ft = mneme_core_fm_tags(fm);
+        var i = 0;
+        while (i < vec_len(ft)) { vec_push(tags, vec_get(ft, i)); i = i + 1; }
+    }
+    if (title == 0) { title = _imp_file_stem(file_path); }
+    var wl = mneme_io_extract_wikilinks(body);
+    var wtargets = vec_new();
+    var wi = 0;
+    while (wi < vec_len(wl)) { vec_push(wtargets, mneme_io_wikilink_target(vec_get(wl, wi))); wi = wi + 1; }
+    var content = body;
+    if (convert == 1) { content = mneme_io_wikilinks_to_markdown(body); }
+    _imp_inline_tags(body, tags);
+    var note = alloc(56);
+    store64(note, title);
+    store64(note + 8, content);
+    store64(note + 16, tags);
+    store64(note + 24, file_path);
+    store64(note + 32, _imp_relative(vault_root, file_path));
+    store64(note + 40, wtargets);
+    store64(note + 48, 0);
+    return note;
+}
+
+# import all .md files from an Obsidian vault dir; 0 = SourceNotFound
+fn mneme_io_import_obsidian_vault(vault_path: Str, convert): i64 {
+    if (is_dir(vault_path) == 0) { return 0; }
+    var md_files = find_files(vault_path, str_from(".md"));
+    _imp_sort(md_files);
+    var notes = vec_new();
+    var wlconv = 0;
+    var i = 0;
+    while (i < vec_len(md_files)) {
+        var note = _imp_single(vault_path, vec_get(md_files, i), convert);
+        wlconv = wlconv + vec_len(mneme_io_imported_note_wikilinks(note));
+        vec_push(notes, note);
+        i = i + 1;
+    }
+    var stats = alloc(32);
+    store64(stats, vec_len(md_files));
+    store64(stats + 8, vec_len(notes));
+    store64(stats + 16, wlconv);
+    store64(stats + 24, vec_new());
+    var result = alloc(16);
+    store64(result, notes);
+    store64(result + 8, stats);
+    return result;
+}

@@ -1,0 +1,95 @@
+# mneme-io Obsidian import tests — ported 1:1 from the 6 #[tokio::test]s in
+# rust-old/crates/mneme-io/src/import_obsidian.rs. Fresh temp vault dir per test.
+include "src/core_frontmatter.cyr"
+include "src/io_wikilink.cyr"
+include "src/io_obsidian.cyr"
+
+var _ibn = 0;
+fn _fresh_dir(): i64 {
+    _ibn = _ibn + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_ib");
+    str_builder_add_int(pb, _ibn);
+    return str_builder_build(pb);
+}
+fn _mkfile(path: Str, content: Str): i64 {
+    var parent = path_dirname(path);
+    var n = str_len(parent);
+    var d = str_data(parent);
+    var i = 1;
+    while (i <= n) {
+        if (i == n || load8(d + i) == 47) { sys_mkdir(_imp_cstr(str_substr(parent, 0, i)), 493); }
+        i = i + 1;
+    }
+    file_write_all(_imp_cstr(path), str_data(content), str_len(content));
+    return 0;
+}
+fn _join(dir: Str, name: Str): i64 { return path_join(dir, name); }
+fn _has(v, cstr): i64 {
+    var i = 0;
+    while (i < vec_len(v)) { if (str_eq_cstr(vec_get(v, i), cstr) == 1) { return 1; } i = i + 1; }
+    return 0;
+}
+fn _any_rel_has(notes, cstr): i64 {
+    var i = 0;
+    while (i < vec_len(notes)) {
+        if (str_contains(mneme_io_imported_note_relative_path(vec_get(notes, i)), str_from(cstr)) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("io_obsidian");
+
+    # import_simple_vault
+    var d1 = _fresh_dir();
+    _mkfile(_join(d1, str_from("note1.md")), str_from("---\ntitle: Note One\ntags: [test]\n---\nHello world."));
+    _mkfile(_join(d1, str_from("note2.md")), str_from("No frontmatter here."));
+    var r1 = mneme_io_import_obsidian_vault(d1, 1);
+    assert_eq(mneme_io_import_stats_notes_found(mneme_io_import_result_stats(r1)), 2, "found 2");
+    assert_eq(mneme_io_import_stats_notes_imported(mneme_io_import_result_stats(r1)), 2, "imported 2");
+    assert(str_eq(mneme_io_imported_note_title(vec_get(mneme_io_import_result_notes(r1), 0)), str_from("Note One")), "notes[0] title");
+
+    # import_wikilinks
+    var d2 = _fresh_dir();
+    _mkfile(_join(d2, str_from("main.md")), str_from("See [[Other Note]] and [[Third|see third]]."));
+    var r2 = mneme_io_import_obsidian_vault(d2, 1);
+    assert_eq(mneme_io_import_stats_wikilinks_converted(mneme_io_import_result_stats(r2)), 2, "2 wikilinks");
+    var c2 = mneme_io_imported_note_content(vec_get(mneme_io_import_result_notes(r2), 0));
+    assert(str_contains(c2, str_from("[Other Note](other-note.md)")), "converted link 1");
+    assert(str_contains(c2, str_from("[see third](third.md)")), "converted link 2");
+
+    # import_inline_tags
+    var d3 = _fresh_dir();
+    _mkfile(_join(d3, str_from("tagged.md")), str_from("Content with #rust and #project/agnos tags."));
+    var r3 = mneme_io_import_obsidian_vault(d3, 1);
+    var t3 = mneme_io_imported_note_tags(vec_get(mneme_io_import_result_notes(r3), 0));
+    assert_eq(_has(t3, "rust"), 1, "inline tag rust");
+    assert_eq(_has(t3, "project/agnos"), 1, "inline tag project/agnos");
+
+    # import_nested_directories
+    var d4 = _fresh_dir();
+    _mkfile(_join(d4, str_from("root.md")), str_from("Root note."));
+    _mkfile(_join(d4, str_from("sub/nested.md")), str_from("Nested note."));
+    var r4 = mneme_io_import_obsidian_vault(d4, 1);
+    assert_eq(mneme_io_import_stats_notes_found(mneme_io_import_result_stats(r4)), 2, "nested found 2");
+    assert_eq(_any_rel_has(mneme_io_import_result_notes(r4), "sub/"), 1, "has sub/ path");
+
+    # import_skips_hidden
+    var d5 = _fresh_dir();
+    _mkfile(_join(d5, str_from("visible.md")), str_from("Yes."));
+    _mkfile(_join(d5, str_from(".obsidian/config.json")), str_from("{}"));
+    var r5 = mneme_io_import_obsidian_vault(d5, 1);
+    assert_eq(mneme_io_import_stats_notes_found(mneme_io_import_result_stats(r5)), 1, "skips non-md hidden");
+    assert_eq(vec_len(mneme_io_import_result_notes(r5)), 1, "1 note");
+
+    # import_nonexistent_dir
+    assert_eq(mneme_io_import_obsidian_vault(str_from("/nonexistent"), 1), 0, "nonexistent -> 0");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);
