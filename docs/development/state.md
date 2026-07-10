@@ -54,11 +54,14 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
     PDF export. serde_json request bodies are hand-parsed (string/bool/array,
     with `\n`/`\t` unescaping); the daimon client / event bus stay deferred
     (daimon always reported unavailable → local-fallback paths).
-  - **Deferred remainder:** `mneme-io/export_pdf` — the API's `/export/pdf`
-    emits a valid minimal `%PDF`, but export_pdf.rs's 8 tests exercise the full
-    PDF layout (fonts/wrapping/pages) → P2 backlog. `mneme-ui` `views`/`main`
-    are ratatui/crossterm rendering (0 tests). Live daimon/ONNX/sandhi calls
-    remain stubbed throughout M3–M5.
+  - **`mneme-io/export_pdf` — COMPLETE (hand-rolled).** `io_export_pdf` is a real
+    PDF writer (catalog/pages/font objects + byte-accurate xref; markdown → text
+    blocks with word-wrap + pagination; strip-inline / block-parse / wrap-text
+    helpers). All 8 export_pdf tests pass, and it backs the API `/export/pdf`.
+    Migrate to `bayan_pdf_*` when it lands (on bayan's roadmap) — same play as the
+    markdown subset.
+  - **Remaining:** `mneme-ui` `views`/`main` (ratatui/crossterm rendering, 0 tests)
+    and the live daimon/ONNX/sandhi bridges stubbed throughout M3–M5.
 
 Note: `search_semantic_engine`'s functions were renamed to the
 `mneme_search_semantic_engine_*` namespace (they previously shared
@@ -66,12 +69,12 @@ Note: `search_semantic_engine`'s functions were renamed to the
 
 ## Tests
 
-**56 `.tcyr` files — all green.** Every test-bearing Rust module across
-mneme-core, mneme-io (minus full PDF), mneme-store, mneme-search, mneme-ai,
-mneme-mcp, the mneme-ui app, and **the entire mneme-api HTTP surface** is mirrored
-1:1 against `rust-old/`. Deferred live-embedding/LLM/HTTP calls are stubbed to
-their degraded-mode return (None/empty/Ok) — exactly what the Rust tests exercise.
-The only unported test file is `mneme-io/export_pdf` (8 tests, full PDF layout — P2).
+**57 `.tcyr` files — all green.** **Every test-bearing Rust module in the entire
+21,014-LOC workspace** is mirrored 1:1 against `rust-old/` — mneme-core, mneme-io
+(incl. PDF), mneme-store, mneme-search, mneme-ai, mneme-mcp, the mneme-ui app, and
+the full mneme-api HTTP surface. Deferred live-embedding/LLM/HTTP calls are stubbed
+to their degraded-mode return (None/empty/Ok) — exactly what the Rust tests
+exercise. The only remaining code is untested rendering glue (mneme-ui views/main).
 
 ## Dependencies
 

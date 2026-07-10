@@ -1,37 +1,443 @@
-# mneme-io — minimal PDF export (partial port of rust-old/crates/mneme-io/src/export_pdf.rs).
-# The full faithful PDF layout (export_pdf.rs's 8 tests: fonts, wrapping, pages)
-# is P2 backlog; this emits a valid minimal single-page document — enough for the
-# API's `application/pdf` + `%PDF` contract. Text is the note title.
+# mneme-io — PDF export (hand-rolled, ported from rust-old/crates/mneme-io/src/export_pdf.rs).
+# Rust used the `printpdf` crate; there is no Cyrius PDF library yet, so this
+# hand-rolls a valid PDF writer (catalog/pages/font objects, per-page content
+# streams of BT..Tj..ET text ops, and a byte-accurate xref table) — the same
+# "hand-roll now, migrate to bayan later" play as the markdown renderer. A
+# `bayan_pdf_*` read/writer is on bayan's roadmap; swap to it when it lands.
+# Layout is in PDF points (A4 = 595x842); markdown is flattened to text blocks.
 
-fn _pdf_escape(sb, s: Str): i64 {
+enum MdBlock { MD_HEADING; MD_PARAGRAPH; MD_CODE; MD_LISTITEM; MD_EMPTY; }
+
+fn _pdf_cstr(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(s), n);
+    store8(buf + n, 0);
+    return buf;
+}
+fn _pdf_ws(c): i64 { if (c == 32 || c == 9 || c == 10 || c == 13) { return 1; } return 0; }
+fn _pdf_trim(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var a = 0;
+    while (a < n && _pdf_ws(load8(d + a)) == 1) { a = a + 1; }
+    var b = n;
+    while (b > a && _pdf_ws(load8(d + b - 1)) == 1) { b = b - 1; }
+    return str_substr(s, a, b);
+}
+fn _pdf_starts(s: Str, pfx): i64 {
+    var pl = strlen(pfx);
+    if (str_len(s) < pl) { return 0; }
+    if (memeq(str_data(s), pfx, pl) == 1) { return 1; }
+    return 0;
+}
+fn _pdf_lines(s: Str): i64 {
+    var out = vec_new();
+    var n = str_len(s);
+    var d = str_data(s);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; } elif (load8(d + i) == 10) { isend = 1; }
+        if (isend == 1) { vec_push(out, str_substr(s, start, i)); start = i + 1; }
+        i = i + 1;
+    }
+    return out;
+}
+
+# MdBlock (24): [kind@0, level@8, text@16]
+fn _pdf_block(kind, level, text): i64 {
+    var b = alloc(24);
+    store64(b, kind);
+    store64(b + 8, level);
+    store64(b + 16, text);
+    return b;
+}
+fn mneme_io_md_block_kind(b): i64 { return load64(b); }
+fn mneme_io_md_block_level(b): i64 { return load64(b + 8); }
+fn mneme_io_md_block_text(b): i64 { return load64(b + 16); }
+
+# strip [text](url) → text (non-links kept)
+fn _pdf_strip_links(s: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        if (load8(d + i) == 91) {   # '['
+            var close = i + 1;
+            while (close < n && load8(d + close) != 93) { close = close + 1; }   # ']'
+            if (close < n && close + 1 < n && load8(d + close + 1) == 40) {   # '('
+                var paren = close + 2;
+                while (paren < n && load8(d + paren) != 41) { paren = paren + 1; }   # ')'
+                if (paren < n) {
+                    str_builder_add(sb, str_substr(s, i + 1, close));
+                    i = paren + 1;
+                } else { str_builder_putc(sb, 91); i = i + 1; }
+            } else { str_builder_putc(sb, 91); i = i + 1; }
+        } else { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+    }
+    return str_builder_build(sb);
+}
+fn _pdf_replace_all(s: Str, from_cstr, to_cstr): i64 {
+    var sb = str_builder_new();
+    var flen = strlen(from_cstr);
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        if (flen > 0 && i + flen <= n && memeq(d + i, from_cstr, flen) == 1) {
+            str_builder_add_cstr(sb, to_cstr);
+            i = i + flen;
+        } else { str_builder_putc(sb, load8(d + i)); i = i + 1; }
+    }
+    return str_builder_build(sb);
+}
+fn _pdf_drop_chars(s: Str): i64 {   # drop * _ `
+    var sb = str_builder_new();
     var n = str_len(s);
     var d = str_data(s);
     var i = 0;
     while (i < n) {
         var c = load8(d + i);
-        if (c == 40 || c == 41 || c == 92) { str_builder_putc(sb, 92); }   # ( ) \
+        if (c != 42 && c != 95 && c != 96) { str_builder_putc(sb, c); }
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+fn mneme_io_strip_md_inline(text: Str): i64 {
+    var t = _pdf_replace_all(text, "**", "");
+    t = _pdf_replace_all(t, "__", "");
+    t = _pdf_drop_chars(t);
+    return _pdf_strip_links(t);
+}
+
+fn mneme_io_parse_markdown_blocks(md: Str): i64 {
+    var blocks = vec_new();
+    var in_code = 0;
+    var code_buf = str_builder_new();
+    var lines = _pdf_lines(md);
+    var i = 0;
+    while (i < vec_len(lines)) {
+        var line = vec_get(lines, i);
+        if (_pdf_starts(line, "```") == 1) {
+            if (in_code == 1) { vec_push(blocks, _pdf_block(MD_CODE, 0, str_builder_build(code_buf))); code_buf = str_builder_new(); in_code = 0; }
+            else { in_code = 1; }
+        } elif (in_code == 1) {
+            str_builder_add(code_buf, line);
+            str_builder_putc(code_buf, 10);
+        } else {
+            var trimmed = _pdf_trim(line);
+            if (str_len(trimmed) == 0) { vec_push(blocks, _pdf_block(MD_EMPTY, 0, str_from(""))); }
+            elif (_pdf_starts(trimmed, "### ") == 1) { vec_push(blocks, _pdf_block(MD_HEADING, 3, mneme_io_strip_md_inline(str_substr(trimmed, 4, str_len(trimmed))))); }
+            elif (_pdf_starts(trimmed, "## ") == 1) { vec_push(blocks, _pdf_block(MD_HEADING, 2, mneme_io_strip_md_inline(str_substr(trimmed, 3, str_len(trimmed))))); }
+            elif (_pdf_starts(trimmed, "# ") == 1) { vec_push(blocks, _pdf_block(MD_HEADING, 1, mneme_io_strip_md_inline(str_substr(trimmed, 2, str_len(trimmed))))); }
+            elif (_pdf_starts(trimmed, "- ") == 1) { vec_push(blocks, _pdf_block(MD_LISTITEM, 0, mneme_io_strip_md_inline(str_substr(trimmed, 2, str_len(trimmed))))); }
+            elif (_pdf_starts(trimmed, "* ") == 1) { vec_push(blocks, _pdf_block(MD_LISTITEM, 0, mneme_io_strip_md_inline(str_substr(trimmed, 2, str_len(trimmed))))); }
+            else { vec_push(blocks, _pdf_block(MD_PARAGRAPH, 0, mneme_io_strip_md_inline(trimmed))); }
+        }
+        i = i + 1;
+    }
+    return blocks;
+}
+
+fn mneme_io_wrap_text(text: Str, max_width): i64 {
+    var out = vec_new();
+    if (str_len(text) <= max_width) { vec_push(out, text); return out; }
+    var n = str_len(text);
+    var d = str_data(text);
+    # split into words, then greedily fill lines
+    var words = vec_new();
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var e2 = 0;
+        if (i == n) { e2 = 1; } elif (_pdf_ws(load8(d + i)) == 1) { e2 = 1; }
+        if (e2 == 1) {
+            if (i > start) { vec_push(words, str_substr(text, start, i)); }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    var line = str_from("");
+    var w = 0;
+    while (w < vec_len(words)) {
+        var word = vec_get(words, w);
+        if (str_len(line) == 0) { line = word; }
+        elif (str_len(line) + 1 + str_len(word) > max_width) { vec_push(out, line); line = word; }
+        else {
+            var sb = str_builder_new();
+            str_builder_add(sb, line);
+            str_builder_putc(sb, 32);
+            str_builder_add(sb, word);
+            line = str_builder_build(sb);
+        }
+        w = w + 1;
+    }
+    if (str_len(line) > 0) { vec_push(out, line); }
+    return out;
+}
+
+fn mneme_io_pdf_slug(s: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(s);
+    var d = str_data(s);
+    var prev_dash = 1;
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        var isaln = 0;
+        if ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)) { isaln = 1; }
+        if (isaln == 1) {
+            if (c >= 65 && c <= 90) { c = c + 32; }
+            str_builder_putc(sb, c);
+            prev_dash = 0;
+        } else {
+            if (prev_dash == 0) { str_builder_putc(sb, 45); prev_dash = 1; }
+        }
+        i = i + 1;
+    }
+    var res = str_builder_build(sb);
+    var rn = str_len(res);
+    while (rn > 0 && load8(str_data(res) + rn - 1) == 45) { rn = rn - 1; }
+    return str_substr(res, 0, rn);
+}
+
+# PdfNote (24): [title@0, content_md@8, tags@16(vec)]
+fn mneme_io_pdf_note_new(title, content_md, tags): i64 {
+    var n = alloc(24);
+    store64(n, title);
+    store64(n + 8, content_md);
+    store64(n + 16, tags);
+    return n;
+}
+fn mneme_io_pdf_note_title(n): i64 { return load64(n); }
+fn mneme_io_pdf_note_content(n): i64 { return load64(n + 8); }
+fn mneme_io_pdf_note_tags(n): i64 { return load64(n + 16); }
+fn mneme_io_pdf_options_default(): i64 { return 0; }   # layout constants hardcoded (A4)
+
+# --- PDF assembly ---
+fn _pdf_esc(sb, s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c == 40 || c == 41 || c == 92) { str_builder_putc(sb, 92); }
         if (c != 10 && c != 13) { str_builder_putc(sb, c); }
         i = i + 1;
     }
     return 0;
 }
-fn mneme_io_export_pdf(title: Str, content: Str): i64 {
-    var cs = str_builder_new();
-    str_builder_add_cstr(cs, "BT /F1 14 Tf 72 720 Td (");
-    _pdf_escape(cs, title);
-    str_builder_add_cstr(cs, ") Tj ET");
-    var stream = str_builder_build(cs);
+fn _pdf_op(cs, x, y, size, text: Str): i64 {
+    str_builder_add_cstr(cs, "BT /F1 ");
+    str_builder_add_int(cs, size);
+    str_builder_add_cstr(cs, " Tf ");
+    str_builder_add_int(cs, x);
+    str_builder_putc(cs, 32);
+    str_builder_add_int(cs, y);
+    str_builder_add_cstr(cs, " Td (");
+    _pdf_esc(cs, text);
+    str_builder_add_cstr(cs, ") Tj ET\n");
+    return 0;
+}
+# op record (40): [page@0, x@8, y@16, size@24, text@32]
+fn _pdf_line(ops, st, x, size, text): i64 {
+    if (load64(st + 8) < 90) { store64(st, load64(st) + 1); store64(st + 8, 770); }
+    var op = alloc(40);
+    store64(op, load64(st));
+    store64(op + 8, x);
+    store64(op + 16, load64(st + 8));
+    store64(op + 24, size);
+    store64(op + 32, text);
+    vec_push(ops, op);
+    return 0;
+}
+fn _pdf_obj(num, content: Str): i64 {
     var sb = str_builder_new();
-    str_builder_add_cstr(sb, "%PDF-1.4\n");
-    str_builder_add_cstr(sb, "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n");
-    str_builder_add_cstr(sb, "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n");
-    str_builder_add_cstr(sb, "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n");
-    str_builder_add_cstr(sb, "4 0 obj<</Length ");
-    str_builder_add_int(sb, str_len(stream));
-    str_builder_add_cstr(sb, ">>stream\n");
-    str_builder_add(sb, stream);
-    str_builder_add_cstr(sb, "\nendstream endobj\n");
-    str_builder_add_cstr(sb, "5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n");
-    str_builder_add_cstr(sb, "trailer<</Root 1 0 R/Size 6>>\nstartxref\n0\n%%EOF\n");
+    str_builder_add_int(sb, num);
+    str_builder_add_cstr(sb, " 0 obj\n");
+    str_builder_add(sb, content);
+    str_builder_add_cstr(sb, "\nendobj\n");
     return str_builder_build(sb);
+}
+fn _pdf_pad10(sb, v): i64 {
+    var digits = alloc(10);
+    var i = 9;
+    while (i >= 0) { store8(digits + i, 48 + v % 10); v = v / 10; i = i - 1; }
+    var k = 0;
+    while (k < 10) { str_builder_putc(sb, load8(digits + k)); k = k + 1; }
+    return 0;
+}
+
+fn mneme_io_render_pdf(note): i64 {
+    var ops = vec_new();
+    var st = alloc(16);
+    store64(st, 0);
+    store64(st + 8, 770);
+    _pdf_line(ops, st, 72, 18, mneme_io_pdf_note_title(note));
+    store64(st + 8, load64(st + 8) - 30);
+    var tags = mneme_io_pdf_note_tags(note);
+    if (vec_len(tags) > 0) {
+        var tb = str_builder_new();
+        var ti = 0;
+        while (ti < vec_len(tags)) {
+            if (ti > 0) { str_builder_add_cstr(tb, "  "); }
+            str_builder_putc(tb, 35);
+            str_builder_add(tb, vec_get(tags, ti));
+            ti = ti + 1;
+        }
+        _pdf_line(ops, st, 72, 10, str_builder_build(tb));
+        store64(st + 8, load64(st + 8) - 24);
+    }
+    store64(st + 8, load64(st + 8) - 8);
+    var blocks = mneme_io_parse_markdown_blocks(mneme_io_pdf_note_content(note));
+    var i = 0;
+    while (i < vec_len(blocks)) {
+        var b = vec_get(blocks, i);
+        var k = mneme_io_md_block_kind(b);
+        if (k == MD_HEADING) {
+            var size = 18;
+            if (mneme_io_md_block_level(b) == 2) { size = 15; }
+            if (mneme_io_md_block_level(b) >= 3) { size = 13; }
+            store64(st + 8, load64(st + 8) - 8);
+            _pdf_line(ops, st, 72, size, mneme_io_md_block_text(b));
+            store64(st + 8, load64(st + 8) - (size + 6));
+        } elif (k == MD_PARAGRAPH) {
+            var plines = mneme_io_wrap_text(mneme_io_md_block_text(b), 80);
+            var pi = 0;
+            while (pi < vec_len(plines)) { _pdf_line(ops, st, 72, 11, vec_get(plines, pi)); store64(st + 8, load64(st + 8) - 16); pi = pi + 1; }
+            store64(st + 8, load64(st + 8) - 5);
+        } elif (k == MD_CODE) {
+            var clines = _pdf_lines(mneme_io_md_block_text(b));
+            var ci = 0;
+            while (ci < vec_len(clines)) {
+                if (str_len(vec_get(clines, ci)) > 0) { _pdf_line(ops, st, 87, 10, vec_get(clines, ci)); store64(st + 8, load64(st + 8) - 16); }
+                ci = ci + 1;
+            }
+            store64(st + 8, load64(st + 8) - 5);
+        } elif (k == MD_LISTITEM) {
+            var bt = str_builder_new();
+            str_builder_add_cstr(bt, "  * ");
+            str_builder_add(bt, mneme_io_md_block_text(b));
+            var llines = mneme_io_wrap_text(str_builder_build(bt), 80);
+            var li = 0;
+            while (li < vec_len(llines)) { _pdf_line(ops, st, 72, 11, vec_get(llines, li)); store64(st + 8, load64(st + 8) - 16); li = li + 1; }
+        } else {
+            store64(st + 8, load64(st + 8) - 8);
+        }
+        i = i + 1;
+    }
+    # number of pages
+    var np = 1;
+    i = 0;
+    while (i < vec_len(ops)) {
+        if (load64(vec_get(ops, i)) + 1 > np) { np = load64(vec_get(ops, i)) + 1; }
+        i = i + 1;
+    }
+    # per-page content streams
+    var pages = vec_new();
+    var p = 0;
+    while (p < np) {
+        var cs = str_builder_new();
+        i = 0;
+        while (i < vec_len(ops)) {
+            var op = vec_get(ops, i);
+            if (load64(op) == p) { _pdf_op(cs, load64(op + 8), load64(op + 16), load64(op + 24), load64(op + 32)); }
+            i = i + 1;
+        }
+        vec_push(pages, str_builder_build(cs));
+        p = p + 1;
+    }
+    # objects
+    var objs = vec_new();
+    vec_push(objs, _pdf_obj(1, str_from("<</Type/Catalog/Pages 2 0 R>>")));
+    var kids = str_builder_new();
+    str_builder_add_cstr(kids, "<</Type/Pages/Kids [");
+    var kk = 0;
+    while (kk < np) {
+        if (kk > 0) { str_builder_putc(kids, 32); }
+        str_builder_add_int(kids, 4 + 2 * kk);
+        str_builder_add_cstr(kids, " 0 R");
+        kk = kk + 1;
+    }
+    str_builder_add_cstr(kids, "]/Count ");
+    str_builder_add_int(kids, np);
+    str_builder_add_cstr(kids, ">>");
+    vec_push(objs, _pdf_obj(2, str_builder_build(kids)));
+    vec_push(objs, _pdf_obj(3, str_from("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>")));
+    p = 0;
+    while (p < np) {
+        var pd = str_builder_new();
+        str_builder_add_cstr(pd, "<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents ");
+        str_builder_add_int(pd, 5 + 2 * p);
+        str_builder_add_cstr(pd, " 0 R/Resources<</Font<</F1 3 0 R>>>>>>");
+        vec_push(objs, _pdf_obj(4 + 2 * p, str_builder_build(pd)));
+        var stream = vec_get(pages, p);
+        var cb = str_builder_new();
+        str_builder_add_cstr(cb, "<</Length ");
+        str_builder_add_int(cb, str_len(stream));
+        str_builder_add_cstr(cb, ">>\nstream\n");
+        str_builder_add(cb, stream);
+        str_builder_add_cstr(cb, "\nendstream");
+        vec_push(objs, _pdf_obj(5 + 2 * p, str_builder_build(cb)));
+        p = p + 1;
+    }
+    # assemble with xref
+    var body = str_builder_new();
+    str_builder_add_cstr(body, "%PDF-1.4\n");
+    var offset = 9;
+    var offsets = vec_new();
+    i = 0;
+    while (i < vec_len(objs)) {
+        vec_push(offsets, offset);
+        str_builder_add(body, vec_get(objs, i));
+        offset = offset + str_len(vec_get(objs, i));
+        i = i + 1;
+    }
+    var xref_off = offset;
+    str_builder_add_cstr(body, "xref\n0 ");
+    str_builder_add_int(body, vec_len(objs) + 1);
+    str_builder_add_cstr(body, "\n0000000000 65535 f \n");
+    i = 0;
+    while (i < vec_len(offsets)) {
+        _pdf_pad10(body, vec_get(offsets, i));
+        str_builder_add_cstr(body, " 00000 n \n");
+        i = i + 1;
+    }
+    str_builder_add_cstr(body, "trailer<</Size ");
+    str_builder_add_int(body, vec_len(objs) + 1);
+    str_builder_add_cstr(body, "/Root 1 0 R>>\nstartxref\n");
+    str_builder_add_int(body, xref_off);
+    str_builder_add_cstr(body, "\n%%EOF\n");
+    return str_builder_build(body);
+}
+
+# convenience wrapper used by the API's /export/pdf endpoint
+fn mneme_io_export_pdf(title, content): i64 {
+    return mneme_io_render_pdf(mneme_io_pdf_note_new(title, content, vec_new()));
+}
+
+fn mneme_io_export_note_to_pdf(note, path: Str, options): i64 {
+    var pdf = mneme_io_render_pdf(note);
+    file_write_all(_pdf_cstr(path), str_data(pdf), str_len(pdf));
+    return 0;
+}
+fn mneme_io_export_notes_to_pdf(notes, dir: Str, options): i64 {
+    sys_mkdir(_pdf_cstr(dir), 493);
+    var count = 0;
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var note = vec_get(notes, i);
+        var pb = str_builder_new();
+        str_builder_add(pb, dir);
+        str_builder_putc(pb, 47);
+        str_builder_add(pb, mneme_io_pdf_slug(mneme_io_pdf_note_title(note)));
+        str_builder_add_cstr(pb, ".pdf");
+        mneme_io_export_note_to_pdf(note, str_builder_build(pb), options);
+        count = count + 1;
+        i = i + 1;
+    }
+    return count;
 }

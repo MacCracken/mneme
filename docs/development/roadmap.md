@@ -53,14 +53,17 @@ client / event bus stay deferred (reported unavailable → local-fallback paths)
 
 Skipped intentionally during the port; revisit after v1.0 parity lands:
 
-- **`mneme-io` export_pdf** — PDF export (printpdf). Lowest value-per-effort; HTML
-  export covers most needs. Needs a minimal PDF writer or an external service.
 - **`mneme-io` import_notion async import** — the directory-walk `import_notion_export`
   (the 4 pure cleanup fns are already ported in `io_notion`). Mechanical: reuse
   `io_notion` + the `io_obsidian` fs-walk pattern.
 - **Real markdown parser via `bayan`** — currently a hand-rolled subset
   (`mneme_io_markdown_to_html`); migrate to `bayan_markdown_*` once it ships (already
   on bayan's roadmap).
+- **Real PDF read/write via `bayan`** — `io_export_pdf` is now a hand-rolled PDF
+  writer (valid catalog/pages/font objects + xref; markdown flattened to text
+  blocks with wrapping + pagination; all 8 export_pdf tests + the API `/export/pdf`
+  pass). Migrate to `bayan_pdf_*` once it ships (added to bayan's roadmap) — that
+  brings embedded fonts, images, and a PDF *reader* (for import) the hand-roll skips.
 - **Canonical uuid string in `core_uuid`** — `_db_uuid_to_str`/`_from_str` exist in
   store_db/store_registry; promote a `mneme_core_uuid_to_string`/`_parse` to core_uuid.
 - **`GraphLayout::from_subgraph`** — the f64 force-directed spring layout (untested by

@@ -1,0 +1,111 @@
+# mneme-io PDF-export tests — ported 1:1 from
+# rust-old/crates/mneme-io/src/export_pdf.rs (8 test cases).
+include "src/io_export_pdf.cyr"
+
+var _pn = 0;
+fn _dir(): i64 {
+    _pn = _pn + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_pdf");
+    str_builder_add_int(pb, _pn);
+    return str_builder_build(pb);
+}
+fn _cstr(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(s), n);
+    store8(buf + n, 0);
+    return buf;
+}
+fn _join(a: Str, b): i64 {
+    var sb = str_builder_new();
+    str_builder_add(sb, a);
+    str_builder_putc(sb, 47);
+    str_builder_add_cstr(sb, b);
+    return str_builder_build(sb);
+}
+
+fn main() {
+    alloc_init();
+    test_group("io_export_pdf");
+
+    # parse_heading_blocks
+    var b1 = mneme_io_parse_markdown_blocks(str_from("# Title\n\nParagraph text.\n\n## Section"));
+    assert_eq(mneme_io_md_block_kind(vec_get(b1, 0)), MD_HEADING, "block0 heading");
+    assert_eq(mneme_io_md_block_level(vec_get(b1, 0)), 1, "block0 level 1");
+    assert_eq(mneme_io_md_block_kind(vec_get(b1, 2)), MD_PARAGRAPH, "block2 paragraph");
+    assert_eq(mneme_io_md_block_kind(vec_get(b1, 4)), MD_HEADING, "block4 heading");
+    assert_eq(mneme_io_md_block_level(vec_get(b1, 4)), 2, "block4 level 2");
+
+    # parse_code_block
+    var b2 = mneme_io_parse_markdown_blocks(str_from("text\n```\ncode line\n```\nmore text"));
+    assert_eq(mneme_io_md_block_kind(vec_get(b2, 1)), MD_CODE, "block1 code");
+
+    # parse_list_items
+    var b3 = mneme_io_parse_markdown_blocks(str_from("- item one\n- item two\n* item three"));
+    assert_eq(mneme_io_md_block_kind(vec_get(b3, 0)), MD_LISTITEM, "list0");
+    assert_eq(mneme_io_md_block_kind(vec_get(b3, 1)), MD_LISTITEM, "list1");
+    assert_eq(mneme_io_md_block_kind(vec_get(b3, 2)), MD_LISTITEM, "list2");
+
+    # strip_inline_markdown
+    assert_eq(str_eq_cstr(mneme_io_strip_md_inline(str_from("**bold** and *italic*")), "bold and italic"), 1, "strip bold/italic");
+    assert_eq(str_eq_cstr(mneme_io_strip_md_inline(str_from("`code`")), "code"), 1, "strip code");
+    assert_eq(str_eq_cstr(mneme_io_strip_md_inline(str_from("[link](http://example.com)")), "link"), 1, "strip link");
+
+    # word_wrap
+    var w = mneme_io_wrap_text(str_from("hello world this is a test of word wrapping"), 20);
+    assert_eq(vec_len(w) > 1, 1, "wrap multiple lines");
+    var wok = 1;
+    var wi = 0;
+    while (wi < vec_len(w)) {
+        if (str_len(vec_get(w, wi)) > 25) { wok = 0; }
+        wi = wi + 1;
+    }
+    assert_eq(wok, 1, "wrap lines within slack");
+
+    # export_single_pdf
+    var d5 = _dir();
+    sys_mkdir(_cstr(d5), 493);
+    var note = mneme_io_pdf_note_new(str_from("Test Note"), str_from("# Hello\n\nThis is a **test** note.\n\n## Section\n\n- item 1\n- item 2\n\n```\ncode block\n```"), vec_new());
+    var tags5 = mneme_io_pdf_note_tags(note);
+    vec_push(tags5, str_from("test"));
+    vec_push(tags5, str_from("pdf"));
+    var path5 = _join(d5, "test.pdf");
+    mneme_io_export_note_to_pdf(note, path5, mneme_io_pdf_options_default());
+    assert_eq(file_exists(_cstr(path5)), 1, "single pdf exists");
+    var buf = alloc(65536);
+    var rn = file_read_all(_cstr(path5), buf, 65536);
+    assert_eq(rn > 100, 1, "single pdf > 100 bytes");
+    assert_eq(str_index_of_cstr(str_new(buf, rn), "%PDF") == 0, 1, "single pdf %PDF header");
+
+    # export_multiple_pdfs
+    var d6 = _dir();
+    var notes = vec_new();
+    vec_push(notes, mneme_io_pdf_note_new(str_from("Note One"), str_from("Content one."), vec_new()));
+    vec_push(notes, mneme_io_pdf_note_new(str_from("Note Two"), str_from("Content two."), vec_new()));
+    assert_eq(mneme_io_export_notes_to_pdf(notes, d6, mneme_io_pdf_options_default()), 2, "multiple count 2");
+    assert_eq(file_exists(_cstr(_join(d6, "note-one.pdf"))), 1, "note-one.pdf exists");
+    assert_eq(file_exists(_cstr(_join(d6, "note-two.pdf"))), 1, "note-two.pdf exists");
+
+    # export_pdf_with_page_break
+    var d7 = _dir();
+    sys_mkdir(_cstr(d7), 493);
+    var lb = str_builder_new();
+    var pi = 0;
+    while (pi < 100) {
+        if (pi > 0) { str_builder_add_cstr(lb, "\n\n"); }
+        str_builder_add_cstr(lb, "This is paragraph number ");
+        str_builder_add_int(lb, pi);
+        str_builder_add_cstr(lb, " with enough text to fill space.");
+        pi = pi + 1;
+    }
+    var lnote = mneme_io_pdf_note_new(str_from("Long Note"), str_builder_build(lb), vec_new());
+    var lpath = _join(d7, "long.pdf");
+    mneme_io_export_note_to_pdf(lnote, lpath, mneme_io_pdf_options_default());
+    assert_eq(file_exists(_cstr(lpath)), 1, "long pdf exists");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);
