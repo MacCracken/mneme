@@ -1,0 +1,306 @@
+# mneme-ui — view rendering (ported from rust-old/crates/mneme-ui/src/views.rs).
+# The Rust renders ratatui widgets (Block/List/Paragraph/Canvas) into a terminal
+# Frame; there is no ratatui analog in Cyrius, so this renders each view into an
+# in-memory vec<Str> of display lines (the raw ANSI/box-drawing/color adapter over
+# `darshana` is the deferred terminal bridge, the TUI equivalent of the HTTP/embed
+# bridges). Selection is shown with a "> " cursor (ratatui used bold/color). The
+# graph canvas degrades to the "no data" path (force-directed layout is deferred).
+
+fn mneme_ui_panel_name(panel): i64 {
+    if (panel == PANEL_NOTE_LIST) { return str_from("NOTES"); }
+    if (panel == PANEL_NOTE_VIEW) { return str_from("VIEW"); }
+    if (panel == PANEL_SEARCH) { return str_from("SEARCH"); }
+    if (panel == PANEL_TAGS) { return str_from("TAGS"); }
+    if (panel == PANEL_GRAPH) { return str_from("GRAPH"); }
+    if (panel == PANEL_SPLIT_VIEW) { return str_from("SPLIT"); }
+    if (panel == PANEL_VAULT_PICKER) { return str_from("VAULTS"); }
+    if (panel == PANEL_STALE) { return str_from("STALE"); }
+    return str_from("CLUSTERS");
+}
+fn mneme_ui_help_text(panel): i64 {
+    if (panel == PANEL_GRAPH) { return str_from("[q]uit [Esc]back [arrows]pan [+/-]zoom [Tab]cycle [Enter]open"); }
+    if (panel == PANEL_SPLIT_VIEW) { return str_from("[q]uit [Esc]back [Tab]switch pane [j/k]scroll [o]open note"); }
+    if (panel == PANEL_STALE) { return str_from("[q]uit [Esc]back [Enter]open [j/k]navigate"); }
+    if (panel == PANEL_CLUSTERS) { return str_from("[q]uit [Esc]back [Enter]expand/open [j/k]navigate"); }
+    return str_from("[q]uit [/]search [n]otes [t]ags [g]raph [s]plit [!]stale [c]lusters [?]help");
+}
+
+fn _ui_pad2(sb, n): i64 {
+    if (n < 10) { str_builder_putc(sb, 48); }
+    str_builder_add_int(sb, n);
+    return 0;
+}
+fn _ui_mmdd(ts): i64 {
+    var secs = ts / 1000000000;
+    if (secs < 0) { secs = 0; }
+    var dt = epoch_to_date(secs);
+    var sb = str_builder_new();
+    _ui_pad2(sb, load64(dt + 8));   # month
+    str_builder_putc(sb, 47);
+    _ui_pad2(sb, load64(dt + 16));  # day
+    return str_builder_build(sb);
+}
+fn _ui_marker(sb, i, sel): i64 {
+    if (i == sel) { str_builder_add_cstr(sb, "> "); } else { str_builder_add_cstr(sb, "  "); }
+    return 0;
+}
+fn _ui_title(count, prefix, suffix): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, prefix);
+    str_builder_add_int(sb, count);
+    str_builder_add_cstr(sb, suffix);
+    return str_builder_build(sb);
+}
+
+fn _ui_render_note_list(app, lines): i64 {
+    var notes = mneme_ui_app_notes(app);
+    vec_push(lines, _ui_title(vec_len(notes), " Notes (", ") "));
+    var sel = mneme_ui_app_selected_index(app);
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var note = vec_get(notes, i);
+        var sb = str_builder_new();
+        _ui_marker(sb, i, sel);
+        str_builder_add(sb, _ui_mmdd(mneme_core_note_updated_at(note)));
+        str_builder_add_cstr(sb, "  ");
+        str_builder_add(sb, mneme_core_note_title(note));
+        vec_push(lines, str_builder_build(sb));
+        i = i + 1;
+    }
+    return 0;
+}
+fn _ui_render_note_view(app, lines): i64 {
+    vec_push(lines, str_from(" Note "));
+    # content (line-split)
+    var content = mneme_ui_app_note_content(app);
+    var n = str_len(content);
+    var d = str_data(content);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; } elif (load8(d + i) == 10) { isend = 1; }
+        if (isend == 1) { vec_push(lines, str_substr(content, start, i)); start = i + 1; }
+        i = i + 1;
+    }
+    var tags = mneme_ui_app_note_tags(app);
+    vec_push(lines, _ui_title(vec_len(tags), " Tags (", ") "));
+    i = 0;
+    while (i < vec_len(tags)) {
+        var tb = str_builder_new();
+        str_builder_add_cstr(tb, "  #");
+        str_builder_add(tb, vec_get(tags, i));
+        vec_push(lines, str_builder_build(tb));
+        i = i + 1;
+    }
+    var bls = mneme_ui_app_note_backlinks(app);
+    vec_push(lines, _ui_title(vec_len(bls), " Backlinks (", ") "));
+    i = 0;
+    while (i < vec_len(bls)) {
+        var bb = str_builder_new();
+        str_builder_add_cstr(bb, "  <- ");
+        str_builder_add(bb, vec_get(bls, i));
+        vec_push(lines, str_builder_build(bb));
+        i = i + 1;
+    }
+    return 0;
+}
+fn _ui_f64_2(x): i64 {
+    var sb = str_builder_new();
+    if (f64_le(x, f64_from(0)) == 1 && x != f64_from(0)) { str_builder_putc(sb, 45); x = f64_neg(x); }
+    var ip = f64_to(f64_trunc(x));
+    var scaled = f64_to(f64_round(f64_mul(f64_sub(x, f64_from(ip)), f64_from(100))));
+    if (scaled >= 100) { ip = ip + 1; scaled = scaled - 100; }
+    str_builder_add_int(sb, ip);
+    str_builder_putc(sb, 46);
+    _ui_pad2(sb, scaled);
+    return str_builder_build(sb);
+}
+fn _ui_trust_letter(app, id): i64 {
+    var notes = mneme_ui_app_notes(app);
+    var i = 0;
+    while (i < vec_len(notes)) {
+        if (mneme_core_uuid_eq(mneme_core_note_id(vec_get(notes, i)), id) == 1) {
+            var t = mneme_core_note_trust_score(vec_get(notes, i));
+            if (f64_le(f64_parse("0.9"), t) == 1) { return str_from("H"); }
+            if (f64_le(f64_parse("0.6"), t) == 1) { return str_from("M"); }
+            return str_from("L");
+        }
+        i = i + 1;
+    }
+    return str_from("H");
+}
+fn _ui_render_search(app, lines): i64 {
+    var qb = str_builder_new();
+    str_builder_add_cstr(qb, " Search:   ");
+    str_builder_add(qb, mneme_ui_app_search_query(app));
+    vec_push(lines, str_builder_build(qb));
+    var results = mneme_ui_app_search_results(app);
+    vec_push(lines, _ui_title(vec_len(results), " Results (", ") "));
+    var sel = mneme_ui_app_selected_index(app);
+    var i = 0;
+    while (i < vec_len(results)) {
+        var r = vec_get(results, i);
+        var sb = str_builder_new();
+        _ui_marker(sb, i, sel);
+        str_builder_add(sb, _ui_f64_2(load64(r + 16)));
+        str_builder_add_cstr(sb, " [");
+        str_builder_add(sb, _ui_trust_letter(app, load64(r)));
+        str_builder_add_cstr(sb, "] ");
+        str_builder_add(sb, load64(r + 8));
+        vec_push(lines, str_builder_build(sb));
+        i = i + 1;
+    }
+    return 0;
+}
+fn _ui_render_tags(app, lines): i64 {
+    var tags = mneme_ui_app_tag_list(app);
+    vec_push(lines, _ui_title(vec_len(tags), " Tags (", ") "));
+    var sel = mneme_ui_app_selected_index(app);
+    var i = 0;
+    while (i < vec_len(tags)) {
+        var sb = str_builder_new();
+        _ui_marker(sb, i, sel);
+        str_builder_putc(sb, 35);
+        str_builder_add(sb, vec_get(tags, i));
+        vec_push(lines, str_builder_build(sb));
+        i = i + 1;
+    }
+    return 0;
+}
+fn _ui_render_graph(app, lines): i64 {
+    if (mneme_ui_app_graph_layout(app) == 0) {
+        vec_push(lines, str_from(" Graph "));
+        vec_push(lines, str_from("No graph data. Press 'g' to load."));
+        return 0;
+    }
+    vec_push(lines, str_from(" Knowledge Graph "));
+    return 0;
+}
+fn _ui_render_split(app, lines): i64 {
+    var active = mneme_ui_app_active_pane(app);
+    var i = 0;
+    while (i < 2) {
+        var sb = str_builder_new();
+        str_builder_add_cstr(sb, " Pane ");
+        str_builder_add_int(sb, i + 1);
+        str_builder_add_cstr(sb, " (empty) ");
+        if (i == active) { str_builder_add_cstr(sb, "*"); }
+        vec_push(lines, str_builder_build(sb));
+        i = i + 1;
+    }
+    return 0;
+}
+fn _ui_render_vault_picker(app, lines): i64 {
+    vec_push(lines, str_from(" Vaults - Enter to switch, Esc to cancel "));
+    var vaults = mneme_ui_app_vault_list(app);
+    var active_id = mneme_store_manager_active_id(load64(app));
+    var sel = mneme_ui_app_selected_index(app);
+    var i = 0;
+    while (i < vec_len(vaults)) {
+        var v = vec_get(vaults, i);
+        var sb = str_builder_new();
+        _ui_marker(sb, i, sel);
+        str_builder_add(sb, load64(v + 8));
+        if (active_id != 0 && mneme_core_uuid_eq(active_id, load64(v)) == 1) { str_builder_add_cstr(sb, " (active)"); }
+        if (load64(v + 48) != 0) { str_builder_add_cstr(sb, " [default]"); }
+        vec_push(lines, str_builder_build(sb));
+        i = i + 1;
+    }
+    return 0;
+}
+fn _ui_render_stale(app, lines): i64 {
+    var stale = mneme_ui_app_stale_notes(app);
+    vec_push(lines, _ui_title(vec_len(stale), " Stale Notes (", ") - days | freshness | title "));
+    var sel = mneme_ui_app_selected_index(app);
+    var i = 0;
+    while (i < vec_len(stale)) {
+        var s = vec_get(stale, i);   # [id@0, title@8, days@16, freshness@24]
+        var sb = str_builder_new();
+        _ui_marker(sb, i, sel);
+        str_builder_add_int(sb, load64(s + 16));
+        str_builder_add_cstr(sb, "d  ");
+        str_builder_add(sb, load64(s + 8));
+        vec_push(lines, str_builder_build(sb));
+        i = i + 1;
+    }
+    return 0;
+}
+fn _ui_render_clusters(app, lines): i64 {
+    var clusters = mneme_ui_app_clusters(app);
+    var expanded = mneme_ui_app_cluster_expanded(app);
+    var sel = mneme_ui_app_selected_index(app);
+    if (expanded >= 0 && expanded < vec_len(clusters)) {
+        var cl = vec_get(clusters, expanded);   # [label@0, notes@8]
+        var notes = load64(cl + 8);
+        var tb = str_builder_new();
+        str_builder_add_cstr(tb, " ");
+        str_builder_add(tb, load64(cl));
+        str_builder_add_cstr(tb, " (");
+        str_builder_add_int(tb, vec_len(notes));
+        str_builder_add_cstr(tb, " notes) - Esc to go back ");
+        vec_push(lines, str_builder_build(tb));
+        var i = 0;
+        while (i < vec_len(notes)) {
+            var sb = str_builder_new();
+            _ui_marker(sb, i, sel);
+            str_builder_add(sb, load64(vec_get(notes, i) + 8));   # title
+            vec_push(lines, str_builder_build(sb));
+            i = i + 1;
+        }
+        return 0;
+    }
+    vec_push(lines, _ui_title(vec_len(clusters), " Clusters (", ") - Enter to expand "));
+    var i = 0;
+    while (i < vec_len(clusters)) {
+        var cl2 = vec_get(clusters, i);
+        var sb = str_builder_new();
+        _ui_marker(sb, i, sel);
+        str_builder_add_int(sb, vec_len(load64(cl2 + 8)));
+        str_builder_add_cstr(sb, "  ");
+        str_builder_add(sb, load64(cl2));
+        vec_push(lines, str_builder_build(sb));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _ui_status_line(app): i64 {
+    var panel = mneme_ui_app_panel(app);
+    var sb = str_builder_new();
+    str_builder_putc(sb, 32);
+    str_builder_add(sb, mneme_ui_panel_name(panel));
+    str_builder_add_cstr(sb, "  ");
+    str_builder_add(sb, mneme_ui_app_status_message(app));
+    str_builder_add_cstr(sb, "  ");
+    str_builder_add(sb, mneme_ui_help_text(panel));
+    return str_builder_build(sb);
+}
+# render the full screen → vec<Str> of display lines (content + status bar)
+fn mneme_ui_render(app): i64 {
+    var lines = vec_new();
+    var panel = mneme_ui_app_panel(app);
+    if (panel == PANEL_NOTE_LIST) { _ui_render_note_list(app, lines); }
+    elif (panel == PANEL_NOTE_VIEW) { _ui_render_note_view(app, lines); }
+    elif (panel == PANEL_SEARCH) { _ui_render_search(app, lines); }
+    elif (panel == PANEL_TAGS) { _ui_render_tags(app, lines); }
+    elif (panel == PANEL_GRAPH) { _ui_render_graph(app, lines); }
+    elif (panel == PANEL_SPLIT_VIEW) { _ui_render_split(app, lines); }
+    elif (panel == PANEL_VAULT_PICKER) { _ui_render_vault_picker(app, lines); }
+    elif (panel == PANEL_STALE) { _ui_render_stale(app, lines); }
+    else { _ui_render_clusters(app, lines); }
+    vec_push(lines, _ui_status_line(app));
+    return lines;
+}
+# join rendered lines with '\n' (for the terminal writer / tests)
+fn mneme_ui_render_to_string(app): i64 {
+    var lines = mneme_ui_render(app);
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < vec_len(lines)) {
+        if (i > 0) { str_builder_putc(sb, 10); }
+        str_builder_add(sb, vec_get(lines, i));
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}

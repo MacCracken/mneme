@@ -41,9 +41,12 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
     tests run against a real on-disk vault, composing VaultManager + SearchEngine
     + SemanticEngine(disabled) + RetrievalOptimizer. JSON `serde_json::Value`
     args are modelled as a tagged key→value object; daimon/HTTP paths deferred.
-  - **M7 `mneme-ui` (TUI) — app COMPLETE.** `ui_app` ports the tested state
-    layer (vault/engine wiring, note-list load, panel navigation, empty-query
-    search guard). `views`/`main` are ratatui/crossterm rendering with 0 tests.
+  - **M7 `mneme-ui` (TUI) — COMPLETE.** `ui_app` (state), `ui_render` (all 9
+    panel views + status bar → in-memory `vec<Str>` lines, since there's no
+    ratatui analog), `ui_events` (per-panel `handle_key` dispatch). views.rs and
+    main.rs had 0 Rust tests, so `ui_render`/`ui_events` add characterization
+    tests. Only the raw terminal adapter (crossterm/ratatui frame → ANSI over
+    `darshana`) is deferred — the TUI equivalent of the HTTP/embedding bridges.
   - **M5 `mneme-api` — COMPLETE.** `api_server` ports the full HTTP surface as an
     in-process router: `handle_request(state, method, path, body) → (status,
     content_type, body)`. Since `tower::oneshot` drives the axum router without a
@@ -60,8 +63,9 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
     helpers). All 8 export_pdf tests pass, and it backs the API `/export/pdf`.
     Migrate to `bayan_pdf_*` when it lands (on bayan's roadmap) — same play as the
     markdown subset.
-  - **Remaining:** `mneme-ui` `views`/`main` (ratatui/crossterm rendering, 0 tests)
-    and the live daimon/ONNX/sandhi bridges stubbed throughout M3–M5.
+  - **Deferred (external bridges only):** the raw terminal adapter (`darshana`
+    ANSI/termios) under `ui_render`/`ui_events`, and the live daimon/ONNX/sandhi
+    calls stubbed throughout M3–M5. No pure logic remains unported.
 
 Note: `search_semantic_engine`'s functions were renamed to the
 `mneme_search_semantic_engine_*` namespace (they previously shared
@@ -69,12 +73,13 @@ Note: `search_semantic_engine`'s functions were renamed to the
 
 ## Tests
 
-**57 `.tcyr` files — all green.** **Every test-bearing Rust module in the entire
-21,014-LOC workspace** is mirrored 1:1 against `rust-old/` — mneme-core, mneme-io
-(incl. PDF), mneme-store, mneme-search, mneme-ai, mneme-mcp, the mneme-ui app, and
-the full mneme-api HTTP surface. Deferred live-embedding/LLM/HTTP calls are stubbed
-to their degraded-mode return (None/empty/Ok) — exactly what the Rust tests
-exercise. The only remaining code is untested rendering glue (mneme-ui views/main).
+**59 `.tcyr` files — all green.** **The entire 21,014-LOC workspace is ported** —
+every test-bearing Rust module 1:1 against `rust-old/` (core, io incl. PDF, store,
+search, ai, mcp, api HTTP surface, ui app), **plus** the mneme-ui `views`/`main`
+rendering + event glue (which had no Rust tests) now carried by characterization
+tests (`ui_render`, `ui_events`). Deferred live-embedding/LLM/HTTP calls are
+stubbed to their degraded-mode return (None/empty/Ok). The only code NOT ported is
+the raw terminal adapter (darshana ANSI/termios) — pure logic is 100% done.
 
 ## Dependencies
 

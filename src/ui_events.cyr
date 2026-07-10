@@ -1,0 +1,137 @@
+# mneme-ui — key event dispatch (ported from rust-old/crates/mneme-ui/src/main.rs).
+# The terminal setup (raw mode / alternate screen / event::read) is the deferred
+# `darshana` adapter; the per-panel key handling is pure app-state mutation and is
+# ported here as handle_key(app, key). Keys: a positive value is a char code; the
+# negatives below are the special keys crossterm exposes. Graph pan/zoom keys are
+# no-ops (the force-directed layout + graph_center/zoom are deferred).
+
+enum UiKey { _UIKEY_PAD; KEY_ESC; KEY_ENTER; KEY_BACKSPACE; KEY_UP; KEY_DOWN; KEY_LEFT; KEY_RIGHT; KEY_TAB; }
+fn mneme_ui_key_esc(): i64 { return 0 - KEY_ESC; }
+fn mneme_ui_key_enter(): i64 { return 0 - KEY_ENTER; }
+fn mneme_ui_key_backspace(): i64 { return 0 - KEY_BACKSPACE; }
+fn mneme_ui_key_up(): i64 { return 0 - KEY_UP; }
+fn mneme_ui_key_down(): i64 { return 0 - KEY_DOWN; }
+fn mneme_ui_key_left(): i64 { return 0 - KEY_LEFT; }
+fn mneme_ui_key_right(): i64 { return 0 - KEY_RIGHT; }
+fn mneme_ui_key_tab(): i64 { return 0 - KEY_TAB; }
+
+fn _ui_search_append(app, ch): i64 {
+    var sb = str_builder_new();
+    str_builder_add(sb, mneme_ui_app_search_query(app));
+    str_builder_putc(sb, ch);
+    mneme_ui_app_set_search_query(app, str_builder_build(sb));
+    mneme_ui_app_run_search(app);
+    return 0;
+}
+fn _ui_search_backspace(app): i64 {
+    var q = mneme_ui_app_search_query(app);
+    if (str_len(q) > 0) { mneme_ui_app_set_search_query(app, str_substr(q, 0, str_len(q) - 1)); }
+    mneme_ui_app_run_search(app);
+    return 0;
+}
+fn _ui_switch_vault_by_index(app, index): i64 {
+    var vaults = mneme_ui_app_vault_list(app);
+    if (index < 0 || index >= vec_len(vaults)) { return 0; }
+    var info = vec_get(vaults, index);
+    mneme_store_manager_switch_vault(load64(app), load64(info));
+    mneme_ui_app_set_panel(app, PANEL_NOTE_LIST);
+    mneme_ui_app_load_notes(app);
+    mneme_ui_app_load_tags(app);
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "Switched to vault '");
+    str_builder_add(sb, load64(info + 8));
+    str_builder_putc(sb, 39);
+    mneme_ui_app_set_status_message(app, str_builder_build(sb));
+    return 0;
+}
+
+# dispatch one key press; mutates app. key>0 = char code, key<0 = special (see above).
+fn mneme_ui_handle_key(app, key): i64 {
+    var panel = mneme_ui_app_panel(app);
+    var sel = mneme_ui_app_selected_index(app);
+
+    if (panel == PANEL_SEARCH) {
+        if (key == 0 - KEY_ESC) { mneme_ui_app_set_panel(app, PANEL_NOTE_LIST); mneme_ui_app_set_selected_index(app, 0); }
+        elif (key == 0 - KEY_BACKSPACE) { _ui_search_backspace(app); }
+        elif (key == 0 - KEY_ENTER) {
+            var results = mneme_ui_app_search_results(app);
+            if (sel < vec_len(results)) { mneme_ui_app_select_note(app, load64(vec_get(results, sel))); }
+        }
+        elif (key == 0 - KEY_UP) { mneme_ui_app_select_prev(app); }
+        elif (key == 0 - KEY_DOWN) { mneme_ui_app_select_next(app); }
+        elif (key > 0) { _ui_search_append(app, key); }
+        return 0;
+    }
+    if (panel == PANEL_GRAPH) {
+        if (key == 113) { store64(app + 96, 1); }
+        elif (key == 0 - KEY_ESC) { mneme_ui_app_set_panel(app, PANEL_NOTE_LIST); }
+        return 0;
+    }
+    if (panel == PANEL_SPLIT_VIEW) {
+        if (key == 113) { store64(app + 96, 1); }
+        elif (key == 0 - KEY_ESC) { mneme_ui_app_set_panel(app, PANEL_NOTE_LIST); }
+        elif (key == 0 - KEY_TAB) {
+            store64(app + 168, 1 - mneme_ui_app_active_pane(app));
+            var sb = str_builder_new();
+            str_builder_add_cstr(sb, "Active: Pane ");
+            str_builder_add_int(sb, mneme_ui_app_active_pane(app) + 1);
+            mneme_ui_app_set_status_message(app, str_builder_build(sb));
+        }
+        elif (key == 0 - KEY_UP || key == 107) { mneme_ui_app_select_prev(app); }
+        elif (key == 0 - KEY_DOWN || key == 106) { mneme_ui_app_select_next(app); }
+        return 0;
+    }
+    if (panel == PANEL_VAULT_PICKER) {
+        if (key == 0 - KEY_ESC || key == 113) { mneme_ui_app_set_panel(app, PANEL_NOTE_LIST); }
+        elif (key == 0 - KEY_UP || key == 107) { mneme_ui_app_select_prev(app); }
+        elif (key == 0 - KEY_DOWN || key == 106) { mneme_ui_app_select_next(app); }
+        elif (key == 0 - KEY_ENTER) { _ui_switch_vault_by_index(app, sel); }
+        return 0;
+    }
+    if (panel == PANEL_STALE) {
+        if (key == 0 - KEY_ESC) { mneme_ui_app_set_panel(app, PANEL_NOTE_LIST); }
+        elif (key == 113) { store64(app + 96, 1); }
+        elif (key == 0 - KEY_UP || key == 107) { mneme_ui_app_select_prev(app); }
+        elif (key == 0 - KEY_DOWN || key == 106) { mneme_ui_app_select_next(app); }
+        elif (key == 0 - KEY_ENTER) {
+            var stale = mneme_ui_app_stale_notes(app);
+            if (sel < vec_len(stale)) { mneme_ui_app_select_note(app, load64(vec_get(stale, sel))); }
+        }
+        return 0;
+    }
+    if (panel == PANEL_CLUSTERS) {
+        if (key == 113) { store64(app + 96, 1); }
+        elif (key == 0 - KEY_ESC) {
+            if (mneme_ui_app_cluster_expanded(app) >= 0) { store64(app + 120, 0 - 1); }
+            else { mneme_ui_app_set_panel(app, PANEL_NOTE_LIST); }
+        }
+        elif (key == 0 - KEY_UP || key == 107) { mneme_ui_app_select_prev(app); }
+        elif (key == 0 - KEY_DOWN || key == 106) { mneme_ui_app_select_next(app); }
+        elif (key == 0 - KEY_ENTER) {
+            if (mneme_ui_app_cluster_expanded(app) < 0) { store64(app + 120, sel); mneme_ui_app_set_selected_index(app, 0); }
+        }
+        return 0;
+    }
+    # default (NoteList / NoteView / Tags)
+    if (key == 113) { store64(app + 96, 1); }
+    elif (key == 47) { mneme_ui_app_set_panel(app, PANEL_SEARCH); mneme_ui_app_set_search_query(app, str_from("")); mneme_ui_app_set_search_results(app, vec_new()); mneme_ui_app_set_selected_index(app, 0); }
+    elif (key == 110) { mneme_ui_app_set_panel(app, PANEL_NOTE_LIST); mneme_ui_app_set_selected_index(app, 0); mneme_ui_app_load_notes(app); }
+    elif (key == 116) { mneme_ui_app_set_panel(app, PANEL_TAGS); mneme_ui_app_set_selected_index(app, 0); mneme_ui_app_load_tags(app); }
+    elif (key == 103) { mneme_ui_app_load_graph(app); }
+    elif (key == 118) { mneme_ui_app_set_panel(app, PANEL_VAULT_PICKER); mneme_ui_app_load_vault_list(app); }
+    elif (key == 33) { mneme_ui_app_load_stale_notes(app); }
+    elif (key == 99) { mneme_ui_app_set_selected_index(app, 0); mneme_ui_app_set_status_message(app, str_from("Clustering notes...")); mneme_ui_app_load_clusters(app); }
+    elif (key == 115) {
+        if (panel == PANEL_NOTE_VIEW && mneme_ui_app_selected_note_id(app) != 0) { mneme_ui_app_set_panel(app, PANEL_SPLIT_VIEW); store64(app + 168, 0); }
+    }
+    elif (key == 0 - KEY_ESC) { if (panel == PANEL_NOTE_VIEW) { mneme_ui_app_set_panel(app, PANEL_NOTE_LIST); } }
+    elif (key == 0 - KEY_UP || key == 107) { mneme_ui_app_select_prev(app); }
+    elif (key == 0 - KEY_DOWN || key == 106) { mneme_ui_app_select_next(app); }
+    elif (key == 0 - KEY_ENTER) {
+        if (panel == PANEL_NOTE_LIST) {
+            var notes = mneme_ui_app_notes(app);
+            if (sel < vec_len(notes)) { mneme_ui_app_select_note(app, mneme_core_note_id(vec_get(notes, sel))); }
+        }
+    }
+    return 0;
+}

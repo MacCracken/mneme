@@ -7,9 +7,11 @@
 
 enum Panel { PANEL_NOTE_LIST; PANEL_NOTE_VIEW; PANEL_SEARCH; PANEL_TAGS; PANEL_GRAPH; PANEL_SPLIT_VIEW; PANEL_VAULT_PICKER; PANEL_STALE; PANEL_CLUSTERS; }
 
-# App (128): [manager@0, engines@8, models_dir@16, panel@24, notes@32, selected_index@40,
+# App (200): [manager@0, engines@8, models_dir@16, panel@24, notes@32, selected_index@40,
 #   search_query@48, search_results@56, tag_list@64, vault_list@72, stale_notes@80,
-#   clusters@88, should_quit@96, status_message@104, context_buffer@112, cluster_expanded@120]
+#   clusters@88, should_quit@96, status_message@104, context_buffer@112, cluster_expanded@120,
+#   note_content@128, note_tags@136, note_backlinks@144(vec<Str> titles), graph_layout@152(0=None),
+#   graph_selected@160(-1=None), active_pane@168, selected_note_id@176(0=None), split_pick_pane@184(-1=None)]
 fn _ui_engines_get(engines, vault_id): i64 {
     var i = 0;
     while (i < vec_len(engines)) {
@@ -19,7 +21,7 @@ fn _ui_engines_get(engines, vault_id): i64 {
     return 0;
 }
 fn mneme_ui_app_new(manager, models_dir): i64 {
-    var app = alloc(128);
+    var app = alloc(200);
     store64(app, manager);
     var engines = vec_new();
     var ov = mneme_store_manager_active(manager);
@@ -44,9 +46,39 @@ fn mneme_ui_app_new(manager, models_dir): i64 {
     store64(app + 96, 0);
     store64(app + 104, str_from("Press ? for help, v for vault picker"));
     store64(app + 112, 0);
-    store64(app + 120, 0);
+    store64(app + 120, 0 - 1);
+    store64(app + 128, str_from(""));
+    store64(app + 136, vec_new());
+    store64(app + 144, vec_new());
+    store64(app + 152, 0);
+    store64(app + 160, 0 - 1);
+    store64(app + 168, 0);
+    store64(app + 176, 0);
+    store64(app + 184, 0 - 1);
     return app;
 }
+fn mneme_ui_app_note_content(app): i64 { return load64(app + 128); }
+fn mneme_ui_app_note_tags(app): i64 { return load64(app + 136); }
+fn mneme_ui_app_note_backlinks(app): i64 { return load64(app + 144); }
+fn mneme_ui_app_graph_layout(app): i64 { return load64(app + 152); }
+fn mneme_ui_app_graph_selected(app): i64 { return load64(app + 160); }
+fn mneme_ui_app_active_pane(app): i64 { return load64(app + 168); }
+fn mneme_ui_app_selected_note_id(app): i64 { return load64(app + 176); }
+fn mneme_ui_app_cluster_expanded(app): i64 { return load64(app + 120); }
+fn mneme_ui_app_clusters(app): i64 { return load64(app + 88); }
+fn mneme_ui_app_stale_notes(app): i64 { return load64(app + 80); }
+fn mneme_ui_app_tag_list(app): i64 { return load64(app + 64); }
+fn mneme_ui_app_status_message(app): i64 { return load64(app + 104); }
+# --- setters (used to seed state in tests / by loaders) ---
+fn mneme_ui_app_set_selected_index(app, i): i64 { store64(app + 40, i); return 0; }
+fn mneme_ui_app_set_note_content(app, s): i64 { store64(app + 128, s); return 0; }
+fn mneme_ui_app_set_note_tags(app, v): i64 { store64(app + 136, v); return 0; }
+fn mneme_ui_app_set_note_backlinks(app, v): i64 { store64(app + 144, v); return 0; }
+fn mneme_ui_app_set_search_results(app, v): i64 { store64(app + 56, v); return 0; }
+fn mneme_ui_app_set_tag_list(app, v): i64 { store64(app + 64, v); return 0; }
+fn mneme_ui_app_set_stale_notes(app, v): i64 { store64(app + 80, v); return 0; }
+fn mneme_ui_app_set_clusters(app, v): i64 { store64(app + 88, v); return 0; }
+fn mneme_ui_app_set_status_message(app, s): i64 { store64(app + 104, s); return 0; }
 fn mneme_ui_app_panel(app): i64 { return load64(app + 24); }
 fn mneme_ui_app_set_panel(app, p): i64 { store64(app + 24, p); return 0; }
 fn mneme_ui_app_notes(app): i64 { return load64(app + 32); }
@@ -128,5 +160,56 @@ fn mneme_ui_app_select_prev(app): i64 {
     var panel = load64(app + 24);
     if (panel == PANEL_GRAPH || panel == PANEL_SPLIT_VIEW) { return 0; }
     if (load64(app + 40) > 0) { store64(app + 40, load64(app + 40) - 1); }
+    return 0;
+}
+fn mneme_ui_app_load_tags(app): i64 {
+    var ov = mneme_store_manager_active(load64(app));
+    if (ov == 0) { return 0; }
+    var tags = mneme_store_vault_list_tags(mneme_store_openvault_vault(ov));
+    var names = vec_new();
+    var i = 0;
+    while (i < vec_len(tags)) { vec_push(names, mneme_store_tag_name(vec_get(tags, i))); i = i + 1; }
+    store64(app + 64, names);
+    return 0;
+}
+# select + load a note into NoteView (backlinks flattened to titles)
+fn mneme_ui_app_select_note(app, id): i64 {
+    var ov = mneme_store_manager_active(load64(app));
+    if (ov == 0) { return 0; }
+    var nwc = mneme_store_vault_get_note(mneme_store_openvault_vault(ov), id);
+    if (nwc == 0) { store64(app + 104, str_from("Error: note not found")); return 0; }
+    store64(app + 176, id);
+    store64(app + 128, mneme_store_nwc_content(nwc));
+    store64(app + 136, mneme_store_nwc_tags(nwc));
+    var bls = mneme_store_nwc_backlinks(nwc);
+    var titles = vec_new();
+    var i = 0;
+    while (i < vec_len(bls)) { vec_push(titles, mneme_store_backlink_source_title(vec_get(bls, i))); i = i + 1; }
+    store64(app + 144, titles);
+    store64(app + 24, PANEL_NOTE_VIEW);
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "Viewing: ");
+    str_builder_add(sb, mneme_core_note_title(mneme_store_nwc_note(nwc)));
+    store64(app + 104, str_builder_build(sb));
+    return 0;
+}
+# graph/clusters/stale loaders — the heavy paths (force-directed layout, K-means on
+# live embeddings, consolidation) are DEFERRED; these set the panel + a status line.
+fn mneme_ui_app_load_graph(app): i64 {
+    store64(app + 24, PANEL_GRAPH);
+    store64(app + 152, 0);
+    store64(app + 104, str_from("Graph: 0 nodes, 0 edges"));
+    return 0;
+}
+fn mneme_ui_app_load_clusters(app): i64 {
+    store64(app + 24, PANEL_CLUSTERS);
+    store64(app + 40, 0);
+    store64(app + 104, str_from("0 cluster(s) found"));
+    return 0;
+}
+fn mneme_ui_app_load_stale_notes(app): i64 {
+    store64(app + 24, PANEL_STALE);
+    store64(app + 40, 0);
+    store64(app + 104, str_from("0 stale note(s)"));
     return 0;
 }

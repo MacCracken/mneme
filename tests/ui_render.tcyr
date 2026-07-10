@@ -1,0 +1,158 @@
+# mneme-ui render tests — characterization of the ported view renderers (views.rs
+# has no Rust #[test]s; these pin the text each panel produces).
+include "lib/patra.cyr"
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/sigil.cyr"
+include "lib/bayan.cyr"
+include "src/core_uuid.cyr"
+include "src/core_note.cyr"
+include "src/core_link.cyr"
+include "src/core_config.cyr"
+include "src/core_frontmatter.cyr"
+include "src/store_db.cyr"
+include "src/store_files.cyr"
+include "src/store_registry.cyr"
+include "src/store_vault.cyr"
+include "src/store_manager.cyr"
+include "src/search_vector_store.cyr"
+include "src/search_embedding_backend.cyr"
+include "src/search_semantic_engine.cyr"
+include "src/search_engine.cyr"
+include "src/ui_app.cyr"
+include "src/ui_render.cyr"
+
+var _rn = 0;
+fn _app(): i64 {
+    _rn = _rn + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_uir");
+    str_builder_add_int(pb, _rn);
+    return mneme_ui_app_new(mneme_store_manager_single(str_builder_build(pb)), str_from("/nonexistent"));
+}
+fn _seed_notes(app, n): i64 {
+    var vault = mneme_store_openvault_vault(mneme_store_manager_active(load64(app)));
+    var i = 0;
+    while (i < n) {
+        var tb = str_builder_new();
+        str_builder_add_cstr(tb, "Note ");
+        str_builder_add_int(tb, i);
+        mneme_store_vault_create_note(vault, mneme_store_create_note_new(str_builder_build(tb), 0, str_from("body"), vec_new(), 0 - 1));
+        i = i + 1;
+    }
+    return 0;
+}
+fn _has(s: Str, w): i64 { if (str_index_of_cstr(s, w) >= 0) { return 1; } return 0; }
+fn _strvec(a): i64 { var v = vec_new(); vec_push(v, str_from(a)); return v; }
+
+fn main() {
+    alloc_init();
+    test_group("ui_render");
+
+    # NoteList — title with count, note titles, selection cursor, status bar
+    var app1 = _app();
+    _seed_notes(app1, 3);
+    mneme_ui_app_load_notes(app1);
+    var r1 = mneme_ui_render_to_string(app1);
+    assert_eq(_has(r1, " Notes (3) "), 1, "note-list title+count");
+    assert_eq(_has(r1, "Note 0"), 1, "note-list has note");
+    assert_eq(_has(r1, "> "), 1, "note-list selection cursor");
+    assert_eq(_has(r1, "NOTES"), 1, "status panel name");
+    assert_eq(_has(r1, "[q]uit"), 1, "status help text");
+
+    # Search — query echo + results + trust indicator
+    var app2 = _app();
+    mneme_ui_app_set_panel(app2, PANEL_SEARCH);
+    mneme_ui_app_set_search_query(app2, str_from("rust"));
+    var res = vec_new();
+    var item = alloc(24);
+    store64(item, mneme_core_uuid_v4());
+    store64(item + 8, str_from("Rust Guide"));
+    store64(item + 16, f64_parse("0.87"));
+    vec_push(res, item);
+    mneme_ui_app_set_search_results(app2, res);
+    var r2 = mneme_ui_render_to_string(app2);
+    assert_eq(_has(r2, "rust"), 1, "search query echoed");
+    assert_eq(_has(r2, " Results (1) "), 1, "search results count");
+    assert_eq(_has(r2, "Rust Guide"), 1, "search result title");
+    assert_eq(_has(r2, "SEARCH"), 1, "search status name");
+
+    # Tags
+    var app3 = _app();
+    mneme_ui_app_set_panel(app3, PANEL_TAGS);
+    var tl = vec_new();
+    vec_push(tl, str_from("alpha"));
+    vec_push(tl, str_from("beta"));
+    mneme_ui_app_set_tag_list(app3, tl);
+    var r3 = mneme_ui_render_to_string(app3);
+    assert_eq(_has(r3, " Tags (2) "), 1, "tags count");
+    assert_eq(_has(r3, "#alpha"), 1, "tags item");
+
+    # VaultPicker
+    var app4 = _app();
+    mneme_ui_app_set_panel(app4, PANEL_VAULT_PICKER);
+    mneme_ui_app_load_vault_list(app4);
+    var r4 = mneme_ui_render_to_string(app4);
+    assert_eq(_has(r4, "Vaults"), 1, "vault picker header");
+    assert_eq(_has(r4, "default"), 1, "vault picker vault name");
+    assert_eq(_has(r4, "(active)"), 1, "vault picker active marker");
+
+    # Stale
+    var app5 = _app();
+    mneme_ui_app_set_panel(app5, PANEL_STALE);
+    var sn = vec_new();
+    var srec = alloc(32);
+    store64(srec, mneme_core_uuid_v4());
+    store64(srec + 8, str_from("Old Note"));
+    store64(srec + 16, 200);
+    store64(srec + 24, f64_from(1));
+    vec_push(sn, srec);
+    mneme_ui_app_set_stale_notes(app5, sn);
+    var r5 = mneme_ui_render_to_string(app5);
+    assert_eq(_has(r5, " Stale Notes (1) "), 1, "stale count");
+    assert_eq(_has(r5, "Old Note"), 1, "stale title");
+    assert_eq(_has(r5, "200d"), 1, "stale days");
+
+    # Clusters
+    var app6 = _app();
+    mneme_ui_app_set_panel(app6, PANEL_CLUSTERS);
+    var cls = vec_new();
+    var cl = alloc(16);
+    store64(cl, str_from("Rust Cluster"));
+    var cnotes = vec_new();
+    var cnote = alloc(16);
+    store64(cnote, mneme_core_uuid_v4());
+    store64(cnote + 8, str_from("Member"));
+    vec_push(cnotes, cnote);
+    store64(cl + 8, cnotes);
+    vec_push(cls, cl);
+    mneme_ui_app_set_clusters(app6, cls);
+    var r6 = mneme_ui_render_to_string(app6);
+    assert_eq(_has(r6, " Clusters (1) "), 1, "clusters count");
+    assert_eq(_has(r6, "Rust Cluster"), 1, "cluster label");
+
+    # Graph (no layout → degraded)
+    var app7 = _app();
+    mneme_ui_app_set_panel(app7, PANEL_GRAPH);
+    assert_eq(_has(mneme_ui_render_to_string(app7), "No graph data"), 1, "graph degraded");
+
+    # NoteView — content lines + tags + backlinks
+    var app8 = _app();
+    mneme_ui_app_set_panel(app8, PANEL_NOTE_VIEW);
+    mneme_ui_app_set_note_content(app8, str_from("Hello line one\nSecond line"));
+    mneme_ui_app_set_note_tags(app8, _strvec("rust"));
+    mneme_ui_app_set_note_backlinks(app8, _strvec("Referring Note"));
+    var r8 = mneme_ui_render_to_string(app8);
+    assert_eq(_has(r8, " Note "), 1, "note-view header");
+    assert_eq(_has(r8, "Hello line one"), 1, "note-view content line1");
+    assert_eq(_has(r8, "Second line"), 1, "note-view content line2");
+    assert_eq(_has(r8, " Tags (1) "), 1, "note-view tags");
+    assert_eq(_has(r8, "#rust"), 1, "note-view tag item");
+    assert_eq(_has(r8, " Backlinks (1) "), 1, "note-view backlinks");
+    assert_eq(_has(r8, "Referring Note"), 1, "note-view backlink item");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

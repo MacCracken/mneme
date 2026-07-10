@@ -39,9 +39,11 @@ SM-2 / serde ported; daimon LLM/embedding/HTTP calls deferred.
 protocol (JSON-RPC 2.0 + 8 tool schemas) + tools (full dispatch, tested against a
 real on-disk vault composing store + search + optimizer).
 
-### M7 — TUI (darshana) — ⧗ app done
-`ui_app` = the tested state layer (vault/engine wiring, load_notes, navigation,
-search guard). `views`/`main` = ratatui/crossterm rendering (0 tests) — remaining.
+### M7 — TUI (darshana) — ✅ done
+`ui_app` (state), `ui_render` (all 9 panel views + status bar → in-memory line
+buffer, no ratatui analog), `ui_events` (per-panel `handle_key` dispatch). views.rs
+/main.rs had no Rust tests → carried by characterization tests. Only the raw
+terminal adapter (frame→ANSI over `darshana`) is deferred.
 
 ### M5 — `mneme-api` — ✅ done
 Full HTTP surface as an in-process router (`handle_request(method, path, body) →

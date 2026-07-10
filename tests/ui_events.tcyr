@@ -1,0 +1,127 @@
+# mneme-ui event-dispatch tests — characterization of handle_key (main.rs's event
+# loop has no Rust #[test]s; these pin the per-panel key behavior).
+include "lib/patra.cyr"
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/sigil.cyr"
+include "lib/bayan.cyr"
+include "src/core_uuid.cyr"
+include "src/core_note.cyr"
+include "src/core_link.cyr"
+include "src/core_config.cyr"
+include "src/core_frontmatter.cyr"
+include "src/store_db.cyr"
+include "src/store_files.cyr"
+include "src/store_registry.cyr"
+include "src/store_vault.cyr"
+include "src/store_manager.cyr"
+include "src/search_vector_store.cyr"
+include "src/search_embedding_backend.cyr"
+include "src/search_semantic_engine.cyr"
+include "src/search_engine.cyr"
+include "src/ui_app.cyr"
+include "src/ui_events.cyr"
+
+var _en = 0;
+fn _app(): i64 {
+    _en = _en + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_uie");
+    str_builder_add_int(pb, _en);
+    return mneme_ui_app_new(mneme_store_manager_single(str_builder_build(pb)), str_from("/nonexistent"));
+}
+fn _seed_notes(app, n): i64 {
+    var vault = mneme_store_openvault_vault(mneme_store_manager_active(load64(app)));
+    var i = 0;
+    while (i < n) {
+        var tb = str_builder_new();
+        str_builder_add_cstr(tb, "Note ");
+        str_builder_add_int(tb, i);
+        mneme_store_vault_create_note(vault, mneme_store_create_note_new(str_builder_build(tb), 0, str_from("body"), vec_new(), 0 - 1));
+        i = i + 1;
+    }
+    mneme_ui_app_load_notes(app);
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("ui_events");
+
+    # 'q' quits
+    var a1 = _app();
+    mneme_ui_handle_key(a1, 113);
+    assert_eq(mneme_ui_app_should_quit(a1), 1, "q quits");
+
+    # '/' → Search panel, cleared query
+    var a2 = _app();
+    mneme_ui_handle_key(a2, 47);
+    assert_eq(mneme_ui_app_panel(a2), PANEL_SEARCH, "/ opens search");
+    assert_eq(str_len(mneme_ui_app_search_query(a2)), 0, "search query cleared");
+
+    # search typing appends + backspace removes
+    mneme_ui_handle_key(a2, 114);   # 'r'
+    mneme_ui_handle_key(a2, 117);   # 'u'
+    mneme_ui_handle_key(a2, 115);   # 's'
+    mneme_ui_handle_key(a2, 116);   # 't'
+    assert_eq(str_eq_cstr(mneme_ui_app_search_query(a2), "rust"), 1, "typed rust");
+    mneme_ui_handle_key(a2, mneme_ui_key_backspace());
+    assert_eq(str_eq_cstr(mneme_ui_app_search_query(a2), "rus"), 1, "backspace");
+    mneme_ui_handle_key(a2, mneme_ui_key_esc());
+    assert_eq(mneme_ui_app_panel(a2), PANEL_NOTE_LIST, "search esc → note list");
+
+    # navigation: Down/Up clamp
+    var a3 = _app();
+    _seed_notes(a3, 3);
+    mneme_ui_handle_key(a3, mneme_ui_key_down());
+    assert_eq(mneme_ui_app_selected_index(a3), 1, "down → 1");
+    mneme_ui_handle_key(a3, mneme_ui_key_down());
+    assert_eq(mneme_ui_app_selected_index(a3), 2, "down → 2");
+    mneme_ui_handle_key(a3, mneme_ui_key_down());
+    assert_eq(mneme_ui_app_selected_index(a3), 2, "down clamps");
+    mneme_ui_handle_key(a3, mneme_ui_key_up());
+    assert_eq(mneme_ui_app_selected_index(a3), 1, "up → 1");
+    mneme_ui_handle_key(a3, 106);   # 'j' also down
+    assert_eq(mneme_ui_app_selected_index(a3), 2, "j → down");
+    mneme_ui_handle_key(a3, 107);   # 'k' also up
+    assert_eq(mneme_ui_app_selected_index(a3), 1, "k → up");
+
+    # Enter on NoteList → select note → NoteView with content
+    mneme_ui_app_set_selected_index(a3, 0);
+    mneme_ui_handle_key(a3, mneme_ui_key_enter());
+    assert_eq(mneme_ui_app_panel(a3), PANEL_NOTE_VIEW, "enter → note view");
+    assert_eq(str_index_of_cstr(mneme_ui_app_status_message(a3), "Viewing:") >= 0, 1, "viewing status");
+
+    # panel switches — global shortcuts only fire from a default-arm panel
+    # (NoteList/NoteView/Tags), matching Rust; reset to NoteList between checks.
+    var a4 = _app();
+    mneme_ui_handle_key(a4, 116);   # 't'
+    assert_eq(mneme_ui_app_panel(a4), PANEL_TAGS, "t → tags");
+    mneme_ui_app_set_panel(a4, PANEL_NOTE_LIST);
+    mneme_ui_handle_key(a4, 118);   # 'v'
+    assert_eq(mneme_ui_app_panel(a4), PANEL_VAULT_PICKER, "v → vaults");
+    assert_eq(vec_len(mneme_ui_app_vault_list(a4)), 1, "vault list loaded");
+    mneme_ui_app_set_panel(a4, PANEL_NOTE_LIST);
+    mneme_ui_handle_key(a4, 33);    # '!'
+    assert_eq(mneme_ui_app_panel(a4), PANEL_STALE, "! → stale");
+    mneme_ui_app_set_panel(a4, PANEL_NOTE_LIST);
+    mneme_ui_handle_key(a4, 99);    # 'c'
+    assert_eq(mneme_ui_app_panel(a4), PANEL_CLUSTERS, "c → clusters");
+    mneme_ui_app_set_panel(a4, PANEL_NOTE_LIST);
+    mneme_ui_handle_key(a4, 103);   # 'g'
+    assert_eq(mneme_ui_app_panel(a4), PANEL_GRAPH, "g → graph");
+    # graph esc back to note list
+    mneme_ui_handle_key(a4, mneme_ui_key_esc());
+    assert_eq(mneme_ui_app_panel(a4), PANEL_NOTE_LIST, "graph esc → note list");
+
+    # vault picker: Enter switches (stays valid), Esc returns
+    var a5 = _app();
+    mneme_ui_handle_key(a5, 118);   # v
+    mneme_ui_handle_key(a5, mneme_ui_key_enter());
+    assert_eq(mneme_ui_app_panel(a5), PANEL_NOTE_LIST, "vault enter → note list");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);
