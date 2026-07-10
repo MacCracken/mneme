@@ -97,10 +97,37 @@ fn mneme_search_embconfig_from_json(json: Str): i64 {
     return mneme_search_embconfig_new(backend, _eb_json_str(json, "\"remote_url\""), _eb_json_str(json, "\"model\""), _eb_json_str(json, "\"api_key\""), _eb_json_int(json, "\"dimensions\""));
 }
 
-# build_remote: 0 (None) if no remote_url; live HTTP backend DEFERRED (daimon/sandhi)
+# Live embedding over HTTP is injected via a hook (default 0 → degraded, so the
+# config/dispatch tests need no HTTP stack). `net_http.cyr` installs the real
+# sandhi-backed implementation; the hook signature is
+# embed(base_url, model, api_key, text) → vec<f64 bits> (or 0 on failure).
+var _eb_embed_hook = 0;
+fn mneme_search_set_embed_hook(h): i64 { _eb_embed_hook = h; return 0; }
+fn mneme_search_embed_hook(): i64 { return _eb_embed_hook; }
+
+# RemoteHttpBackend (32): [base_url@0, model@8, api_key@16, dimension@24]
+fn mneme_search_remote_backend_base_url(b): i64 { return load64(b); }
+fn mneme_search_remote_backend_dimension(b): i64 { return load64(b + 24); }
+fn mneme_search_remote_embed(backend, text): i64 {
+    if (_eb_embed_hook == 0) { return 0; }
+    return fncall4(_eb_embed_hook, load64(backend), load64(backend + 8), load64(backend + 16), text);
+}
+# build_remote: 0 (None) if no remote_url OR no HTTP wired OR the probe fails
+# (matches Rust: RemoteHttpBackend::new probes embed("dimension probe")).
 fn mneme_search_build_remote(c): i64 {
     if (load64(c + 8) == 0) { return 0; }
-    return 0;   # TODO: RemoteHttpBackend over sandhi /v1/embeddings — deferred
+    if (_eb_embed_hook == 0) { return 0; }
+    var model = load64(c + 16);
+    if (model == 0) { model = str_from("default"); }
+    var backend = alloc(32);
+    store64(backend, load64(c + 8));    # base_url
+    store64(backend + 8, model);
+    store64(backend + 16, load64(c + 24));   # api_key
+    store64(backend + 24, 384);
+    var probe = mneme_search_remote_embed(backend, str_from("dimension probe"));
+    if (probe == 0) { return 0; }
+    store64(backend + 24, vec_len(probe));
+    return backend;
 }
 # build_local: 0 (None) if the ONNX model file is absent; ONNX load DEFERRED
 fn mneme_search_build_local(c, models_dir: Str): i64 {

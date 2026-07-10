@@ -1,0 +1,152 @@
+# mneme — live HTTP bridge to daimon + remote embeddings (over `sandhi`).
+# This is the concrete implementation of the previously-deferred network bridges:
+#  - the remote embedding backend (search_embedding_backend's embed hook →
+#    OpenAI-compatible POST {base}/v1/embeddings), installed via an fnptr hook so
+#    the config/dispatch tests need no HTTP stack;
+#  - the daimon REST client (ai_client's DaimonClient → /health, /v1/rag/*).
+# Request building + response parsing are pure (and unit-tested); the socket
+# round-trip runs on AGNOS via sandhi's sock_connect/send/recv (verified against a
+# live daimon; unreachable/malformed → graceful 0, keeping the degraded paths).
+
+fn _net_cstr(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(s), n);
+    store8(buf + n, 0);
+    return buf;
+}
+fn _net_esc(sb, s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c == 34 || c == 92) { str_builder_putc(sb, 92); str_builder_putc(sb, c); }
+        elif (c == 10) { str_builder_add_cstr(sb, "\\n"); }
+        else { str_builder_putc(sb, c); }
+        i = i + 1;
+    }
+    return 0;
+}
+# trim a single trailing '/' from a base url
+fn _net_trim_slash(s: Str): i64 {
+    var n = str_len(s);
+    if (n > 0 && load8(str_data(s) + n - 1) == 47) { return str_substr(s, 0, n - 1); }
+    return s;
+}
+fn _net_join(base: Str, path_cstr): i64 {
+    var sb = str_builder_new();
+    str_builder_add(sb, _net_trim_slash(base));
+    str_builder_add_cstr(sb, path_cstr);
+    return str_builder_build(sb);
+}
+
+# --- sandhi wrappers: return the response body Str on 2xx, else 0 ---
+fn mneme_net_http_post_json(url: Str, body: Str, api_key): i64 {
+    var headers = sandhi_headers_new();
+    sandhi_headers_add(headers, "content-type", "application/json");
+    if (api_key != 0) {
+        var bsb = str_builder_new();
+        str_builder_add_cstr(bsb, "Bearer ");
+        str_builder_add(bsb, api_key);
+        sandhi_headers_add(headers, "authorization", _net_cstr(str_builder_build(bsb)));
+    }
+    var resp = sandhi_http_post(_net_cstr(url), headers, str_data(body), str_len(body));
+    if (resp == 0) { return 0; }
+    if (sandhi_http_err_kind(resp) != 0) { return 0; }
+    var status = sandhi_http_status(resp);
+    if (status < 200 || status >= 300) { return 0; }
+    return str_new(sandhi_http_body(resp), sandhi_http_body_len(resp));
+}
+fn mneme_net_http_get(url: Str): i64 {
+    var resp = sandhi_http_get(_net_cstr(url), sandhi_headers_new());
+    if (resp == 0) { return 0; }
+    if (sandhi_http_err_kind(resp) != 0) { return 0; }
+    var status = sandhi_http_status(resp);
+    if (status < 200 || status >= 300) { return 0; }
+    return str_new(sandhi_http_body(resp), sandhi_http_body_len(resp));
+}
+
+# --- pure request/response helpers (unit-tested) ---
+fn mneme_net_build_embed_body(model: Str, text: Str): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"model\":\"");
+    _net_esc(sb, model);
+    str_builder_add_cstr(sb, "\",\"input\":\"");
+    _net_esc(sb, text);
+    str_builder_add_cstr(sb, "\"}");
+    return str_builder_build(sb);
+}
+# parse an OpenAI-compatible embeddings response → vec<f64 bits> (0 if none)
+fn mneme_net_parse_embedding(json: Str): i64 {
+    var pos = str_index_of_cstr(json, "\"embedding\"");
+    if (pos < 0) { return 0; }
+    var n = str_len(json);
+    var d = str_data(json);
+    var i = pos;
+    while (i < n && load8(d + i) != 91) { i = i + 1; }   # '['
+    if (i >= n) { return 0; }
+    i = i + 1;
+    var out = vec_new();
+    var start = i;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; }
+        elif (load8(d + i) == 44 || load8(d + i) == 93) { isend = 1; }   # ',' ']'
+        if (isend == 1) {
+            var tok = _net_trim_num(str_substr(json, start, i));
+            if (str_len(tok) > 0) { vec_push(out, f64_parse(_net_cstr(tok))); }
+            if (i < n && load8(d + i) == 93) { return out; }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+fn _net_trim_num(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var a = 0;
+    while (a < n && (load8(d + a) == 32 || load8(d + a) == 10 || load8(d + a) == 9 || load8(d + a) == 13)) { a = a + 1; }
+    var b = n;
+    while (b > a && (load8(d + b - 1) == 32 || load8(d + b - 1) == 10 || load8(d + b - 1) == 9 || load8(d + b - 1) == 13)) { b = b - 1; }
+    return str_substr(s, a, b);
+}
+
+# --- remote embedding hook: embed(base_url, model, api_key, text) → vec<f64>|0 ---
+fn _mneme_embed_http(base_url, model, api_key, text): i64 {
+    var url = _net_join(base_url, "/v1/embeddings");
+    var body = mneme_net_build_embed_body(model, text);
+    var resp = mneme_net_http_post_json(url, body, api_key);
+    if (resp == 0) { return 0; }
+    var emb = mneme_net_parse_embedding(resp);
+    if (emb == 0 || vec_len(emb) == 0) { return 0; }
+    return emb;
+}
+# install the live embedding backend (call once at startup)
+fn mneme_net_wire_embeddings(): i64 {
+    mneme_search_set_embed_hook(&_mneme_embed_http);
+    return 0;
+}
+
+# --- daimon REST client methods (over the DaimonClient in ai_client.cyr) ---
+fn mneme_ai_daimon_health(client): i64 {
+    if (mneme_net_http_get(_net_join(mneme_ai_daimon_client_base_url(client), "/health")) == 0) { return 0; }
+    return 1;
+}
+fn mneme_ai_daimon_rag_query(client, query: Str, top_k): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"query\":\"");
+    _net_esc(sb, query);
+    str_builder_add_cstr(sb, "\",\"top_k\":");
+    str_builder_add_int(sb, top_k);
+    str_builder_add_cstr(sb, "}");
+    return mneme_net_http_post_json(_net_join(mneme_ai_daimon_client_base_url(client), "/v1/rag/query"), str_builder_build(sb), mneme_ai_daimon_client_api_key(client));
+}
+fn mneme_ai_daimon_rag_ingest(client, text: Str): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"text\":\"");
+    _net_esc(sb, text);
+    str_builder_add_cstr(sb, "\",\"agent_id\":\"mneme\"}");
+    return mneme_net_http_post_json(_net_join(mneme_ai_daimon_client_base_url(client), "/v1/rag/ingest"), str_builder_build(sb), mneme_ai_daimon_client_api_key(client));
+}

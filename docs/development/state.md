@@ -10,7 +10,7 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
 
 ## Toolchain
 
-- **Cyrius pin**: `6.4.41` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.4.42` (in `cyrius.cyml [package].cyrius`)
 
 ## Source
 
@@ -63,9 +63,21 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
     helpers). All 8 export_pdf tests pass, and it backs the API `/export/pdf`.
     Migrate to `bayan_pdf_*` when it lands (on bayan's roadmap) — same play as the
     markdown subset.
-  - **Deferred (external bridges only):** the raw terminal adapter (`darshana`
-    ANSI/termios) under `ui_render`/`ui_events`, and the live daimon/ONNX/sandhi
-    calls stubbed throughout M3–M5. No pure logic remains unported.
+  - **Network + terminal bridges — WIRED (no longer deferred).**
+    - `net_http` — live HTTP over **`sandhi`** (works on AGNOS via sock_connect/
+      send/recv). Remote embeddings (`search_embedding_backend`'s embed hook →
+      OpenAI-compatible `POST {base}/v1/embeddings`, installed by an fnptr hook so
+      the 7 config-test consumers stay HTTP-free) + the daimon REST client
+      (`/health`, `/v1/rag/query|ingest`). Request-build + response-parse are
+      unit-tested; the socket round-trip runs against a live daimon.
+    - `ui_terminal` — real console render (ANSI clear+home over `sys_write` fd 1) +
+      stdin key decoder (`sys_read` fd 0, arrow/ctrl escape sequences) + the event
+      loop. `src/main.cyr` is now the real TUI entry (`cyrius build` → a working
+      binary) that installs the embedding hook and runs the loop.
+  - **Still deferred:** local ONNX inference (`build_local` → the sovereign ML
+    stack akshara/rosnet/rupantara) — the only remaining external bridge. The AI
+    modules keep their local fallbacks (the daimon client is available for
+    higher-level dispatch when wired).
 
 Note: `search_semantic_engine`'s functions were renamed to the
 `mneme_search_semantic_engine_*` namespace (they previously shared
@@ -73,29 +85,33 @@ Note: `search_semantic_engine`'s functions were renamed to the
 
 ## Tests
 
-**59 `.tcyr` files — all green.** **The entire 21,014-LOC workspace is ported** —
-every test-bearing Rust module 1:1 against `rust-old/` (core, io incl. PDF, store,
-search, ai, mcp, api HTTP surface, ui app), **plus** the mneme-ui `views`/`main`
-rendering + event glue (which had no Rust tests) now carried by characterization
-tests (`ui_render`, `ui_events`). Deferred live-embedding/LLM/HTTP calls are
-stubbed to their degraded-mode return (None/empty/Ok). The only code NOT ported is
-the raw terminal adapter (darshana ANSI/termios) — pure logic is 100% done.
+**61 `.tcyr` files — all green.** The entire 21,014-LOC workspace is ported (core,
+io incl. PDF, store, search, ai, mcp, full api HTTP surface, ui app), plus the
+mneme-ui `views`/`main` glue (`ui_render`, `ui_events`) and the **live network +
+terminal bridges** (`net_http` = sandhi HTTP to daimon + remote embeddings;
+`ui_terminal` = real console I/O; `src/main.cyr` builds to a working TUI binary).
+Modules that need a live server keep a graceful-degrade path (verified fast/green);
+their pure request/response + hook wiring is unit-tested. Only local ONNX inference
+(the sovereign ML stack) remains bridged-out.
 
 ## Dependencies
 
-Direct (declared in `cyrius.cyml [deps].stdlib`):
+Direct (declared in `cyrius.cyml [deps].stdlib`): string, fmt, alloc, vec, str,
+hashmap, math, chrono, random, sha1, ct, keccak, thread, thread_local, slice,
+sigil, tagged, fnptr, bayan, patra, fs, syscalls, io, args, assert, **net, http,
+tls, ws, async, atomic, sandhi, fdlopen, dynlib, mmap, freelist, process, sakshi**.
 
-- string, fmt, alloc, vec, str, hashmap, math, chrono, random, sha1, tagged,
-  fnptr, bayan, syscalls, io, args, assert
-- `bayan` (TOML/JSON) is a carve — also explicitly `include "lib/bayan.cyr"`.
-- Planned: `patra` (embedded SQL) for `mneme-store`; sibling deps (`bote`, daimon
-  HTTP) in later milestones.
+- Carves (explicit `include "lib/X.cyr"` in tests): `patra`, `bayan`, `sigil`
+  (+ `ct`/`keccak`). `sandhi`/`net`/`tls`/`fnptr` auto-resolve from stdlib.
+- `sandhi` (HTTP) backs `net_http` (daimon + remote embeddings). `patra` (embedded
+  SQL) backs `mneme-store`. `sigil` = real SHA-256.
 
 ## Consumers
 
-_None yet._
+`src/main.cyr` — the TUI binary (builds via `cyrius build src/main.cyr build/mneme`).
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Finish M2's pure-logic modules, then the
-`fs` + `patra` + async I/O tier (store/db, files, vault, manager; io imports).
+See [`roadmap.md`](roadmap.md). Pure logic + network/terminal bridges are complete.
+Remaining: local ONNX inference (sovereign ML stack), and optional higher-level
+AI-module → daimon dispatch (modules currently prefer their local fallbacks).

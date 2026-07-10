@@ -1,0 +1,49 @@
+# mneme net-http tests — the daimon/embeddings HTTP bridge. The socket round-trip
+# needs a live daimon (blocking sock_connect), so here we test the pure request
+# building + response parsing + hook wiring; the live path is exercised against a
+# running daimon at deploy time.
+include "src/ai_client.cyr"
+include "src/search_embedding_backend.cyr"
+include "src/net_http.cyr"
+
+fn _approx(a, b): i64 {
+    var d = f64_sub(a, b);
+    if (f64_le(d, f64_from(0)) == 1) { d = f64_neg(d); }
+    if (f64_le(d, f64_parse("0.0001")) == 1) { return 1; }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("net_http");
+
+    # build_embed_body — OpenAI-compatible request
+    var body = mneme_net_build_embed_body(str_from("all-MiniLM-L6-v2"), str_from("hello world"));
+    assert_eq(str_index_of_cstr(body, "\"model\":\"all-MiniLM-L6-v2\"") >= 0, 1, "embed body model");
+    assert_eq(str_index_of_cstr(body, "\"input\":\"hello world\"") >= 0, 1, "embed body input");
+
+    # parse_embedding — extract the float vector
+    var emb = mneme_net_parse_embedding(str_from("{\"data\":[{\"embedding\":[0.1, 0.2, 0.3, -0.4]}],\"model\":\"x\"}"));
+    assert_eq(vec_len(emb), 4, "parsed 4 floats");
+    assert_eq(_approx(vec_get(emb, 0), f64_parse("0.1")), 1, "emb[0] ~ 0.1");
+    assert_eq(_approx(vec_get(emb, 3), f64_parse("-0.4")), 1, "emb[3] ~ -0.4");
+
+    # parse_embedding — no embedding field → 0
+    assert_eq(mneme_net_parse_embedding(str_from("{\"error\":\"nope\"}")), 0, "no embedding → 0");
+
+    # embed hook: unwired → build_remote degrades (no live HTTP), wired → hook set
+    var cfg = mneme_search_embconfig_new(str_from("remote"), str_from("http://127.0.0.1:8090"), str_from("m"), 0, 0 - 1);
+    assert_eq(mneme_search_embed_hook(), 0, "hook unset initially");
+    assert_eq(mneme_search_build_remote(cfg), 0, "build_remote degrades without hook");
+    mneme_net_wire_embeddings();
+    assert_eq(mneme_search_embed_hook() != 0, 1, "hook installed after wiring");
+
+    # daimon client base url still flows through
+    var client = mneme_ai_daimon_client_new(0, 0);
+    assert_eq(str_eq_cstr(mneme_ai_daimon_client_base_url(client), "http://127.0.0.1:8090"), 1, "daimon default url");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

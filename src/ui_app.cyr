@@ -88,7 +88,6 @@ fn mneme_ui_app_set_search_query(app, s): i64 { store64(app + 48, s); return 0; 
 fn mneme_ui_app_search_results(app): i64 { return load64(app + 56); }
 fn mneme_ui_app_vault_list(app): i64 { return load64(app + 72); }
 fn mneme_ui_app_should_quit(app): i64 { return load64(app + 96); }
-fn mneme_ui_app_status_message(app): i64 { return load64(app + 104); }
 
 fn mneme_ui_app_active_vault_name(app): i64 {
     var ov = mneme_store_manager_active(load64(app));

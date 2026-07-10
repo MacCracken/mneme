@@ -39,11 +39,18 @@ SM-2 / serde ported; daimon LLM/embedding/HTTP calls deferred.
 protocol (JSON-RPC 2.0 + 8 tool schemas) + tools (full dispatch, tested against a
 real on-disk vault composing store + search + optimizer).
 
-### M7 — TUI (darshana) — ✅ done
-`ui_app` (state), `ui_render` (all 9 panel views + status bar → in-memory line
-buffer, no ratatui analog), `ui_events` (per-panel `handle_key` dispatch). views.rs
-/main.rs had no Rust tests → carried by characterization tests. Only the raw
-terminal adapter (frame→ANSI over `darshana`) is deferred.
+### M7 — TUI — ✅ done (incl. terminal adapter)
+`ui_app` (state), `ui_render` (all 9 panel views → line buffer, no ratatui analog),
+`ui_events` (`handle_key`), and **`ui_terminal`** — the real console adapter (ANSI
+render over `sys_write`, stdin key decode over `sys_read`, event loop). `src/main.cyr`
+is the working TUI entry (`cyrius build` → binary). Characterization tests cover the
+renderers, event dispatch, and key decoder.
+
+### Network bridge — ✅ done (daimon + remote embeddings over `sandhi`)
+`net_http` wires the previously-deferred HTTP: remote embeddings (embed-hook →
+`POST /v1/embeddings`) + the daimon REST client (`/health`, `/v1/rag/*`). Runs on
+AGNOS via sandhi's TCP syscalls; graceful-degrades when unreachable. Only local
+ONNX inference (sovereign ML stack) is still bridged out.
 
 ### M5 — `mneme-api` — ✅ done
 Full HTTP surface as an in-process router (`handle_request(method, path, body) →

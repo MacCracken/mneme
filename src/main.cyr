@@ -1,11 +1,42 @@
-# mneme — Cyrius port
-# Ported from 21014 lines of Rust
+# mneme — TUI entry point (ported from rust-old/crates/mneme-ui/src/main.rs).
+# Builds the single-vault app, installs the live daimon embedding bridge, loads
+# the note/tag lists, and runs the terminal event loop. Deploy build:
+#   cyrius build src/main.cyr build/mneme
+include "lib/patra.cyr"
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/sigil.cyr"
+include "lib/bayan.cyr"
+include "src/core_uuid.cyr"
+include "src/core_note.cyr"
+include "src/core_link.cyr"
+include "src/core_config.cyr"
+include "src/core_frontmatter.cyr"
+include "src/store_db.cyr"
+include "src/store_files.cyr"
+include "src/store_registry.cyr"
+include "src/store_vault.cyr"
+include "src/store_manager.cyr"
+include "src/search_vector_store.cyr"
+include "src/search_embedding_backend.cyr"
+include "src/search_semantic_engine.cyr"
+include "src/search_engine.cyr"
+include "src/ai_client.cyr"
+include "src/net_http.cyr"
+include "src/ui_app.cyr"
+include "src/ui_render.cyr"
+include "src/ui_events.cyr"
+include "src/ui_terminal.cyr"
 
-# Stdlib auto-included via cyrius.cyml
-
-fn main() {
+fn main(): i64 {
     alloc_init();
-    println("mneme ready");
+    # live daimon embeddings when a server is reachable (degrades to full-text only)
+    mneme_net_wire_embeddings();
+    var manager = mneme_store_manager_single(str_from("/mneme"));
+    var app = mneme_ui_app_new(manager, str_from("/mneme/models"));
+    mneme_ui_app_load_notes(app);
+    mneme_ui_app_load_tags(app);
+    mneme_ui_run(app);
     return 0;
 }
 

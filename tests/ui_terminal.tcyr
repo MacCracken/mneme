@@ -1,0 +1,59 @@
+# mneme-ui terminal-adapter tests — the pure key decoder (the render/read loop is
+# terminal I/O, driven at runtime; here we pin the escape-sequence → key-code map).
+include "lib/patra.cyr"
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/sigil.cyr"
+include "lib/bayan.cyr"
+include "src/core_uuid.cyr"
+include "src/core_note.cyr"
+include "src/core_link.cyr"
+include "src/core_config.cyr"
+include "src/core_frontmatter.cyr"
+include "src/store_db.cyr"
+include "src/store_files.cyr"
+include "src/store_registry.cyr"
+include "src/store_vault.cyr"
+include "src/store_manager.cyr"
+include "src/search_vector_store.cyr"
+include "src/search_embedding_backend.cyr"
+include "src/search_semantic_engine.cyr"
+include "src/search_engine.cyr"
+include "src/ui_app.cyr"
+include "src/ui_render.cyr"
+include "src/ui_events.cyr"
+include "src/ui_terminal.cyr"
+
+fn _buf1(a): i64 { var b = alloc(8); store8(b, a); return b; }
+fn _buf3(a, b, c): i64 { var x = alloc(8); store8(x, a); store8(x + 1, b); store8(x + 2, c); return x; }
+
+fn main() {
+    alloc_init();
+    test_group("ui_terminal");
+
+    # printable char → its code
+    assert_eq(mneme_ui_decode_key(_buf1(97), 1), 97, "'a' → 97");
+    assert_eq(mneme_ui_decode_key(_buf1(113), 1), 113, "'q' → 113");
+
+    # control keys
+    assert_eq(mneme_ui_decode_key(_buf1(27), 1), mneme_ui_key_esc(), "ESC");
+    assert_eq(mneme_ui_decode_key(_buf1(13), 1), mneme_ui_key_enter(), "CR → Enter");
+    assert_eq(mneme_ui_decode_key(_buf1(10), 1), mneme_ui_key_enter(), "LF → Enter");
+    assert_eq(mneme_ui_decode_key(_buf1(127), 1), mneme_ui_key_backspace(), "DEL → Backspace");
+    assert_eq(mneme_ui_decode_key(_buf1(8), 1), mneme_ui_key_backspace(), "BS → Backspace");
+    assert_eq(mneme_ui_decode_key(_buf1(9), 1), mneme_ui_key_tab(), "TAB");
+
+    # arrow escape sequences (ESC [ A/B/C/D)
+    assert_eq(mneme_ui_decode_key(_buf3(27, 91, 65), 3), mneme_ui_key_up(), "ESC[A → Up");
+    assert_eq(mneme_ui_decode_key(_buf3(27, 91, 66), 3), mneme_ui_key_down(), "ESC[B → Down");
+    assert_eq(mneme_ui_decode_key(_buf3(27, 91, 67), 3), mneme_ui_key_right(), "ESC[C → Right");
+    assert_eq(mneme_ui_decode_key(_buf3(27, 91, 68), 3), mneme_ui_key_left(), "ESC[D → Left");
+
+    # empty read → 0 (no key)
+    assert_eq(mneme_ui_decode_key(_buf1(0), 0), 0, "empty → 0");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

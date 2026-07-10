@@ -1,0 +1,69 @@
+# mneme-ui — real terminal adapter (the deferred crossterm/ratatui bridge, made
+# concrete). Renders the ui_render line buffer to the console (fd 1) with an ANSI
+# clear+home, and reads keys from stdin (fd 0) via the portable sys_read/sys_write
+# wrappers — on AGNOS fd 0 is the blocking keyboard, on the host it's the tty.
+# The escape-sequence → key-code decoder is pure (unit-tested); the run loop drives
+# ui_events::handle_key. (A full color/box-drawing renderer over `darshana` is the
+# eventual upgrade; this is the minimal always-works layer.)
+
+fn _ui_write(s: Str): i64 { sys_write(1, str_data(s), str_len(s)); return 0; }
+fn _ui_clear(): i64 {
+    var sb = str_builder_new();
+    str_builder_putc(sb, 27);
+    str_builder_add_cstr(sb, "[2J");
+    str_builder_putc(sb, 27);
+    str_builder_add_cstr(sb, "[H");
+    return _ui_write(str_builder_build(sb));
+}
+
+# decode a raw key buffer (`n` bytes) → the ui_events key code (char>0, special<0).
+fn mneme_ui_decode_key(buf, n): i64 {
+    if (n <= 0) { return 0; }
+    var b0 = load8(buf);
+    if (n >= 3 && b0 == 27 && load8(buf + 1) == 91) {   # ESC [ — arrows
+        var b2 = load8(buf + 2);
+        if (b2 == 65) { return 0 - KEY_UP; }
+        if (b2 == 66) { return 0 - KEY_DOWN; }
+        if (b2 == 67) { return 0 - KEY_RIGHT; }
+        if (b2 == 68) { return 0 - KEY_LEFT; }
+        return 0 - KEY_ESC;
+    }
+    if (n == 1) {
+        if (b0 == 27) { return 0 - KEY_ESC; }
+        if (b0 == 13 || b0 == 10) { return 0 - KEY_ENTER; }
+        if (b0 == 127 || b0 == 8) { return 0 - KEY_BACKSPACE; }
+        if (b0 == 9) { return 0 - KEY_TAB; }
+        return b0;
+    }
+    if (b0 == 27) { return 0 - KEY_ESC; }
+    return b0;
+}
+
+fn mneme_ui_term_read_key(): i64 {
+    var buf = alloc(8);
+    var n = sys_read(0, buf, 8);
+    if (n <= 0) { return 0; }
+    return mneme_ui_decode_key(buf, n);
+}
+fn mneme_ui_term_render(app): i64 {
+    _ui_clear();
+    var lines = mneme_ui_render(app);
+    var i = 0;
+    while (i < vec_len(lines)) {
+        _ui_write(vec_get(lines, i));
+        _ui_write(str_from("\r\n"));
+        i = i + 1;
+    }
+    return 0;
+}
+# the TUI event loop: draw → read key → dispatch, until should_quit.
+fn mneme_ui_run(app): i64 {
+    var done = 0;
+    while (done == 0) {
+        mneme_ui_term_render(app);
+        mneme_ui_handle_key(app, mneme_ui_term_read_key());
+        if (mneme_ui_app_should_quit(app) == 1) { done = 1; }
+    }
+    _ui_clear();
+    return 0;
+}
