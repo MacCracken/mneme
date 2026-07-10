@@ -1,0 +1,137 @@
+# mneme-search retrieval optimizer tests — ported 1:1 from
+# rust-old/crates/mneme-search/src/retrieval_optimizer.rs (12 #[test] cases).
+include "src/search_retrieval_optimizer.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("search_retrieval_optimizer");
+
+    # 1. default_optimizer_has_four_arms
+    var opt1 = mneme_search_retrieval_optimizer_new();
+    assert_eq(mneme_search_retrieval_optimizer_num_arms(opt1), 4, "default num_arms 4");
+    assert_eq(mneme_search_retrieval_optimizer_total_searches(opt1), 0, "default total_searches 0");
+    assert_eq(mneme_search_retrieval_optimizer_total_successes(opt1), 0, "default total_successes 0");
+
+    # 2. select_arm_returns_valid_index
+    var opt2 = mneme_search_retrieval_optimizer_new();
+    var pair2 = mneme_search_retrieval_optimizer_select_arm(opt2);
+    var idx2 = mneme_search_select_result_index(pair2);
+    var lt = 0;
+    if (idx2 < mneme_search_retrieval_optimizer_num_arms(opt2)) { lt = 1; }
+    assert_eq(lt, 1, "select idx < num_arms");
+    var ft = mneme_search_blend_weights_fulltext(mneme_search_select_result_weights(pair2));
+    var ftpos = 0;
+    if (f64_ge(ft, f64_from(0)) == 1 && f64_eq(ft, f64_from(0)) == 0) { ftpos = 1; }
+    assert_eq(ftpos, 1, "select weights.fulltext > 0");
+
+    # 3. record_search_increments_count
+    var opt3 = mneme_search_retrieval_optimizer_new();
+    mneme_search_retrieval_optimizer_record_search(opt3, 0);
+    assert_eq(mneme_search_retrieval_optimizer_total_searches(opt3), 1, "record_search total 1");
+
+    # 4. record_feedback_increments_success
+    var opt4 = mneme_search_retrieval_optimizer_new();
+    mneme_search_retrieval_optimizer_record_search(opt4, 0);
+    mneme_search_retrieval_optimizer_record_feedback(opt4, 0);
+    assert_eq(mneme_search_retrieval_optimizer_total_successes(opt4), 1, "feedback total_successes 1");
+    var stats4 = mneme_search_retrieval_optimizer_arm_stats(opt4);
+    var a4 = mneme_search_arm_stats_alpha(vec_get(stats4, 0));
+    var a4gt = 0;
+    if (f64_ge(a4, f64_from(1)) == 1 && f64_eq(a4, f64_from(1)) == 0) { a4gt = 1; }
+    assert_eq(a4gt, 1, "feedback alpha > 1.0");
+
+    # 5. feedback_without_search_is_safe
+    var opt5 = mneme_search_retrieval_optimizer_new();
+    mneme_search_retrieval_optimizer_record_feedback(opt5, 0);   # no prior search
+    assert_eq(mneme_search_retrieval_optimizer_total_successes(opt5), 1, "feedback no search total_successes 1");
+
+    # 6. feedback_invalid_arm_is_noop
+    var opt6 = mneme_search_retrieval_optimizer_new();
+    mneme_search_retrieval_optimizer_record_feedback(opt6, 99);  # out of bounds
+    assert_eq(mneme_search_retrieval_optimizer_total_successes(opt6), 0, "feedback invalid total_successes 0");
+
+    # 7. decay_moves_toward_prior
+    var opt7 = mneme_search_retrieval_optimizer_new();
+    var j = 0;
+    while (j < 10) {
+        mneme_search_retrieval_optimizer_record_search(opt7, 0);
+        mneme_search_retrieval_optimizer_record_feedback(opt7, 0);
+        j = j + 1;
+    }
+    var before7 = mneme_search_arm_stats_alpha(vec_get(mneme_search_retrieval_optimizer_arm_stats(opt7), 0));
+    var before_gt5 = 0;
+    if (f64_ge(before7, f64_parse("5.0")) == 1 && f64_eq(before7, f64_parse("5.0")) == 0) { before_gt5 = 1; }
+    assert_eq(before_gt5, 1, "decay before > 5.0");
+    mneme_search_retrieval_optimizer_decay_all(opt7, f64_parse("0.5"));
+    var after7 = mneme_search_arm_stats_alpha(vec_get(mneme_search_retrieval_optimizer_arm_stats(opt7), 0));
+    var after_lt = 0;
+    if (f64_le(after7, before7) == 1 && f64_eq(after7, before7) == 0) { after_lt = 1; }
+    assert_eq(after_lt, 1, "decay after < before");
+    var after_gt1 = 0;
+    if (f64_ge(after7, f64_from(1)) == 1 && f64_eq(after7, f64_from(1)) == 0) { after_gt1 = 1; }
+    assert_eq(after_gt1, 1, "decay after > 1.0");
+
+    # 8. arm_expected_reward_is_bounded
+    var opt8 = mneme_search_retrieval_optimizer_new();
+    var stats8 = mneme_search_retrieval_optimizer_arm_stats(opt8);
+    var s8 = 0;
+    while (s8 < vec_len(stats8)) {
+        var er = mneme_search_arm_stats_expected_reward(vec_get(stats8, s8));
+        var bounded = 0;
+        if (f64_ge(er, f64_from(0)) == 1 && f64_le(er, f64_from(1)) == 1) { bounded = 1; }
+        assert_eq(bounded, 1, "reward bounded [0,1]");
+        s8 = s8 + 1;
+    }
+
+    # 9. successful_arm_gets_higher_reward
+    var opt9 = mneme_search_retrieval_optimizer_new();
+    var k = 0;
+    while (k < 20) {
+        mneme_search_retrieval_optimizer_record_search(opt9, 0);
+        mneme_search_retrieval_optimizer_record_feedback(opt9, 0);
+        k = k + 1;
+    }
+    var m = 0;
+    while (m < 20) {
+        mneme_search_retrieval_optimizer_record_search(opt9, 1);
+        m = m + 1;
+    }
+    var stats9 = mneme_search_retrieval_optimizer_arm_stats(opt9);
+    var er0 = mneme_search_arm_stats_expected_reward(vec_get(stats9, 0));
+    var er1 = mneme_search_arm_stats_expected_reward(vec_get(stats9, 1));
+    var higher = 0;
+    if (f64_ge(er0, er1) == 1 && f64_eq(er0, er1) == 0) { higher = 1; }
+    assert_eq(higher, 1, "successful arm higher reward");
+
+    # 10. blend_weights_default
+    var w = mneme_search_blend_weights_default();
+    assert_eq(mneme_search_blend_weights_fulltext(w), f64_from(1), "default weights fulltext 1.0");
+    assert_eq(mneme_search_blend_weights_semantic(w), f64_from(1), "default weights semantic 1.0");
+    assert_eq(mneme_search_blend_weights_recency(w), f64_from(0), "default weights recency 0.0");
+
+    # 11. arm_sample_is_bounded
+    var arm = mneme_search_arm_new(str_from("test"), mneme_search_blend_weights_default());
+    var seed = 0;
+    while (seed < 100) {
+        var sv = mneme_search_arm_sample(arm, seed);
+        var sbounded = 0;
+        if (f64_ge(sv, f64_from(0)) == 1 && f64_le(sv, f64_from(1)) == 1) { sbounded = 1; }
+        assert_eq(sbounded, 1, "sample bounded [0,1]");
+        seed = seed + 1;
+    }
+
+    # 12. optimizer_serde_roundtrip
+    var opt12 = mneme_search_retrieval_optimizer_new();
+    mneme_search_retrieval_optimizer_record_search(opt12, 0);
+    mneme_search_retrieval_optimizer_record_feedback(opt12, 0);
+    var json = mneme_search_retrieval_optimizer_to_json(opt12);
+    var restored = mneme_search_retrieval_optimizer_from_json(json);
+    assert_eq(mneme_search_retrieval_optimizer_total_searches(restored), 1, "roundtrip total_searches 1");
+    assert_eq(mneme_search_retrieval_optimizer_total_successes(restored), 1, "roundtrip total_successes 1");
+    assert_eq(mneme_search_retrieval_optimizer_num_arms(restored), 4, "roundtrip num_arms 4");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

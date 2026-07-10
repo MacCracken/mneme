@@ -1,0 +1,232 @@
+# mneme-search — cross-vault search merge (ported from rust-old/crates/mneme-search/src/cross_vault.rs)
+# Zero-I/O. Fan out queries across vaults and merge results with weighted RRF.
+# Each vault's fulltext + semantic hits are RRF-ranked internally (rrf = 1/(k+rank+1),
+# k=60), summed per note, multiplied by the vault weight, then merged and sorted desc.
+# f64 scores are IEEE-754 bit patterns (Cyrius convention). Requires math (f64_*).
+# Note ids are 16-byte uuid blobs; the Rust HashMap keys on Uuid — tests reuse the same
+# note_id handle within a vault, so pointer-keying (map_u64) is the faithful equivalent.
+
+# --- CrossVaultSource enum ---
+enum CrossVaultSource {
+    CROSS_VAULT_FULLTEXT;
+    CROSS_VAULT_SEMANTIC;
+    CROSS_VAULT_BOTH;
+}
+
+# canonical snake_case wire name (cstr) — matches #[serde(rename_all = "snake_case")]
+fn mneme_search_cross_vault_source_as_str(s): i64 {
+    if (s == CROSS_VAULT_FULLTEXT) { return "full_text"; }
+    elif (s == CROSS_VAULT_SEMANTIC) { return "semantic"; }
+    elif (s == CROSS_VAULT_BOTH) { return "both"; }
+    return "full_text";
+}
+
+# --- SearchResult (40 bytes): [note_id@0, title@8, path@16, snippet@24, score@32 (f64)] ---
+# Full-text hit fed into the merge. score is unused by the merge (rank-based RRF) but
+# kept for fidelity with the Rust struct.
+fn mneme_search_result_new(note_id, title: Str, path: Str, snippet: Str, score): i64 {
+    var r = alloc(40);
+    store64(r, note_id);
+    store64(r + 8, title);
+    store64(r + 16, path);
+    store64(r + 24, snippet);
+    store64(r + 32, score);
+    return r;
+}
+fn mneme_search_result_note_id(r): i64 { return load64(r); }
+fn mneme_search_result_title(r): i64 { return load64(r + 8); }
+fn mneme_search_result_path(r): i64 { return load64(r + 16); }
+fn mneme_search_result_snippet(r): i64 { return load64(r + 24); }
+fn mneme_search_result_score(r): i64 { return load64(r + 32); }
+
+# --- SemanticResult (32 bytes): [note_id@0 (0=None), title@8 (0=None), content@16, score@24 (f64)] ---
+fn mneme_search_semantic_result_new(note_id, title, content: Str, score): i64 {
+    var r = alloc(32);
+    store64(r, note_id);
+    store64(r + 8, title);
+    store64(r + 16, content);
+    store64(r + 24, score);
+    return r;
+}
+fn mneme_search_semantic_result_note_id(r): i64 { return load64(r); }
+fn mneme_search_semantic_result_title(r): i64 { return load64(r + 8); }
+fn mneme_search_semantic_result_content(r): i64 { return load64(r + 16); }
+fn mneme_search_semantic_result_score(r): i64 { return load64(r + 24); }
+
+# --- CrossVaultResult (64 bytes):
+#   [vault_id@0, vault_name@8, note_id@16, title@24, path@32, snippet@40, score@48 (f64), source@56] ---
+fn mneme_search_cross_vault_result_vault_id(r): i64 { return load64(r); }
+fn mneme_search_cross_vault_result_vault_name(r): i64 { return load64(r + 8); }
+fn mneme_search_cross_vault_result_note_id(r): i64 { return load64(r + 16); }
+fn mneme_search_cross_vault_result_title(r): i64 { return load64(r + 24); }
+fn mneme_search_cross_vault_result_path(r): i64 { return load64(r + 32); }
+fn mneme_search_cross_vault_result_snippet(r): i64 { return load64(r + 40); }
+fn mneme_search_cross_vault_result_score(r): i64 { return load64(r + 48); }
+fn mneme_search_cross_vault_result_source(r): i64 { return load64(r + 56); }
+
+# --- VaultResults (40 bytes): [vault_id@0, vault_name@8, weight@16 (f64), fulltext@24 (vec), semantic@32 (vec)] ---
+fn mneme_search_vault_results_new(vault_id, vault_name: Str, weight, fulltext, semantic): i64 {
+    var vr = alloc(40);
+    store64(vr, vault_id);
+    store64(vr + 8, vault_name);
+    store64(vr + 16, weight);
+    store64(vr + 24, fulltext);
+    store64(vr + 32, semantic);
+    return vr;
+}
+fn mneme_search_vault_results_vault_id(vr): i64 { return load64(vr); }
+fn mneme_search_vault_results_vault_name(vr): i64 { return load64(vr + 8); }
+fn mneme_search_vault_results_weight(vr): i64 { return load64(vr + 16); }
+fn mneme_search_vault_results_fulltext(vr): i64 { return load64(vr + 24); }
+fn mneme_search_vault_results_semantic(vr): i64 { return load64(vr + 32); }
+
+# --- CrossVaultEntry (internal, 48 bytes):
+#   [title@0, path@8, snippet@16, score@24 (f64), has_fulltext@32, has_semantic@40] ---
+fn _cv_entry_new(title: Str, path: Str, snippet: Str): i64 {
+    var e = alloc(48);
+    store64(e, title);
+    store64(e + 8, path);
+    store64(e + 16, snippet);
+    store64(e + 24, f64_from(0));   # score = 0.0
+    store64(e + 32, 0);             # has_fulltext = false
+    store64(e + 40, 0);             # has_semantic = false
+    return e;
+}
+
+# truncate(s, max_len): byte-length truncation matching Rust's `&s[..max_len]` + "..."
+fn _cv_truncate(s: Str, max_len): i64 {
+    if (str_len(s) <= max_len) { return s; }
+    var sb = str_builder_new();
+    str_builder_add(sb, str_substr(s, 0, max_len));
+    str_builder_add_cstr(sb, "...");
+    return str_builder_build(sb);
+}
+
+# rrf = 1.0 / (k + rank + 1.0), k = 60
+fn _cv_rrf(rank): i64 {
+    return f64_div(f64_from(1), f64_from(60 + rank + 1));
+}
+
+# insertion of one merged CrossVaultResult (64 bytes)
+fn _cv_result(vault_id, vault_name: Str, note_id, title: Str, path: Str, snippet: Str, score, source): i64 {
+    var r = alloc(64);
+    store64(r, vault_id);
+    store64(r + 8, vault_name);
+    store64(r + 16, note_id);
+    store64(r + 24, title);
+    store64(r + 32, path);
+    store64(r + 40, snippet);
+    store64(r + 48, score);
+    store64(r + 56, source);
+    return r;
+}
+
+# stable descending sort by score (bit-pattern f64), preserving insertion order on ties.
+# No break/continue: flag-guarded insertion sort over the vec of CrossVaultResult ptrs.
+fn _cv_sort_desc(all): i64 {
+    var n = vec_len(all);
+    var i = 1;
+    while (i < n) {
+        var cur = vec_get(all, i);
+        var cur_score = load64(cur + 48);
+        var j = i;
+        var moving = 1;
+        while (moving == 1) {
+            if (j == 0) { moving = 0; }
+            else {
+                var prev = vec_get(all, j - 1);
+                # move cur left while prev.score < cur.score (strict → stable on ties)
+                if (f64_ge(load64(prev + 48), cur_score) == 1) { moving = 0; }
+                else {
+                    vec_set(all, j, prev);
+                    j = j - 1;
+                }
+            }
+        }
+        vec_set(all, j, cur);
+        i = i + 1;
+    }
+    return all;
+}
+
+# Merge results from multiple vaults using weighted RRF.
+# vault_results: vec of VaultResults; limit: max results (>=0). Returns vec of CrossVaultResult.
+fn mneme_search_cross_vault_merge(vault_results, limit): i64 {
+    var all = vec_new();
+    var vi = 0;
+    while (vi < vec_len(vault_results)) {
+        var vr = vec_get(vault_results, vi);
+        var note_scores = map_u64_new();
+        var order = vec_new();   # preserve first-seen note_id order for deterministic collection
+
+        # Score fulltext results by rank
+        var ft = mneme_search_vault_results_fulltext(vr);
+        var rank = 0;
+        while (rank < vec_len(ft)) {
+            var res = vec_get(ft, rank);
+            var nid = mneme_search_result_note_id(res);
+            var entry = map_u64_get_or(note_scores, nid, 0);
+            if (entry == 0) {
+                entry = _cv_entry_new(mneme_search_result_title(res), mneme_search_result_path(res), mneme_search_result_snippet(res));
+                map_u64_set(note_scores, nid, entry);
+                vec_push(order, nid);
+            }
+            store64(entry + 24, f64_add(load64(entry + 24), _cv_rrf(rank)));
+            store64(entry + 32, 1);   # has_fulltext = true
+            rank = rank + 1;
+        }
+
+        # Score semantic results by rank
+        var sem = mneme_search_vault_results_semantic(vr);
+        var srank = 0;
+        while (srank < vec_len(sem)) {
+            var sres = vec_get(sem, srank);
+            var snid = mneme_search_semantic_result_note_id(sres);
+            if (snid != 0) {
+                var sentry = map_u64_get_or(note_scores, snid, 0);
+                if (sentry == 0) {
+                    var stitle = mneme_search_semantic_result_title(sres);
+                    if (stitle == 0) { stitle = str_from(""); }   # unwrap_or_default
+                    sentry = _cv_entry_new(stitle, str_from(""), _cv_truncate(mneme_search_semantic_result_content(sres), 200));
+                    map_u64_set(note_scores, snid, sentry);
+                    vec_push(order, snid);
+                }
+                store64(sentry + 24, f64_add(load64(sentry + 24), _cv_rrf(srank)));
+                store64(sentry + 40, 1);   # has_semantic = true
+            }
+            srank = srank + 1;
+        }
+
+        # Apply vault weight and collect
+        var weight = mneme_search_vault_results_weight(vr);
+        var vault_id = mneme_search_vault_results_vault_id(vr);
+        var vault_name = mneme_search_vault_results_vault_name(vr);
+        var oi = 0;
+        while (oi < vec_len(order)) {
+            var note_id = vec_get(order, oi);
+            var e = map_u64_get_or(note_scores, note_id, 0);
+            var has_ft = load64(e + 32);
+            var has_sem = load64(e + 40);
+            var source = CROSS_VAULT_FULLTEXT;
+            if (has_ft == 1 && has_sem == 1) { source = CROSS_VAULT_BOTH; }
+            elif (has_ft == 1 && has_sem == 0) { source = CROSS_VAULT_FULLTEXT; }
+            elif (has_ft == 0 && has_sem == 1) { source = CROSS_VAULT_SEMANTIC; }
+            else { source = CROSS_VAULT_FULLTEXT; }
+            var wscore = f64_mul(load64(e + 24), weight);   # entry.score * vault.weight
+            vec_push(all, _cv_result(vault_id, vault_name, note_id, load64(e), load64(e + 8), load64(e + 16), wscore, source));
+            oi = oi + 1;
+        }
+        vi = vi + 1;
+    }
+
+    _cv_sort_desc(all);
+
+    # truncate to limit
+    var out = vec_new();
+    var k = 0;
+    while (k < vec_len(all) && k < limit) {
+        vec_push(out, vec_get(all, k));
+        k = k + 1;
+    }
+    return out;
+}

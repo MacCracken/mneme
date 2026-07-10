@@ -1,0 +1,218 @@
+# mneme-search — retrieval optimizer (ported from rust-old/crates/mneme-search/src/retrieval_optimizer.rs)
+# Zero-I/O, 0-async. Thompson-Sampling bandit over RRF blend weights.
+# f64 fields are IEEE-754 bit patterns (Cyrius convention); whole-number literals
+# come from f64_from so they byte-match Rust's f64 literals exactly; fractional
+# literals (0.5, 1.5, 0.005) come from f64_parse. sample() takes a deterministic
+# seed (no random module needed). serde roundtrip is a hand-written minimal JSON
+# emitting only total_searches/total_successes; _from_json rebuilds a fresh 4-arm
+# optimizer with the two counts set (the test only checks those + num_arms==4).
+# f64 builtins (f64_from/add/mul/div/sqrt/sub/le/ge/clamp) are stdlib-linked.
+
+# --- BlendWeights (24 bytes): [fulltext@0, semantic@8, recency@16] (f64 bits) ---
+fn mneme_search_blend_weights_new(fulltext, semantic, recency): i64 {
+    var w = alloc(24);
+    store64(w, fulltext);
+    store64(w + 8, semantic);
+    store64(w + 16, recency);
+    return w;
+}
+fn mneme_search_blend_weights_default(): i64 {
+    return mneme_search_blend_weights_new(f64_from(1), f64_from(1), f64_from(0));
+}
+fn mneme_search_blend_weights_fulltext(w): i64 { return load64(w); }
+fn mneme_search_blend_weights_semantic(w): i64 { return load64(w + 8); }
+fn mneme_search_blend_weights_recency(w): i64 { return load64(w + 16); }
+
+# --- Arm (32 bytes): [name@0 (Str), weights@8 (BlendWeights ptr), alpha@16 (f64), beta@24 (f64)] ---
+fn mneme_search_arm_new(name: Str, weights): i64 {
+    var a = alloc(32);
+    store64(a, name);
+    store64(a + 8, weights);
+    store64(a + 16, f64_from(1));   # alpha = 1.0 (uniform prior)
+    store64(a + 24, f64_from(1));   # beta  = 1.0
+    return a;
+}
+fn mneme_search_arm_name(a): i64 { return load64(a); }
+fn mneme_search_arm_weights(a): i64 { return load64(a + 8); }
+fn mneme_search_arm_alpha(a): i64 { return load64(a + 16); }
+fn mneme_search_arm_beta(a): i64 { return load64(a + 24); }
+
+# expected reward (mean of beta distribution) = alpha / (alpha + beta)
+fn mneme_search_arm_expected_reward(a): i64 {
+    var alpha = load64(a + 16);
+    var beta = load64(a + 24);
+    return f64_div(alpha, f64_add(alpha, beta));
+}
+# record a success: alpha += 1.0
+fn mneme_search_arm_record_success(a) {
+    store64(a + 16, f64_add(load64(a + 16), f64_from(1)));
+}
+# record a failure: beta += 1.0
+fn mneme_search_arm_record_failure(a) {
+    store64(a + 24, f64_add(load64(a + 24), f64_from(1)));
+}
+# decay toward prior: alpha = 1.0 + (alpha - 1.0) * factor; beta = 1.0 + (beta - 1.0) * factor
+fn mneme_search_arm_decay(a, factor) {
+    var one = f64_from(1);
+    var alpha = load64(a + 16);
+    var beta = load64(a + 24);
+    store64(a + 16, f64_add(one, f64_mul(f64_sub(alpha, one), factor)));
+    store64(a + 24, f64_add(one, f64_mul(f64_sub(beta, one), factor)));
+}
+# sample from the beta distribution via mean +- deterministic jitter, clamped to [0,1]
+#   variance = (alpha*beta) / ((alpha+beta)^2 * (alpha+beta+1))
+#   std_dev  = sqrt(variance)
+#   jitter   = ((seed % 1000) / 500.0 - 1.0) * std_dev
+#   result   = clamp(mean + jitter, 0.0, 1.0)
+fn mneme_search_arm_sample(a, seed): i64 {
+    var alpha = load64(a + 16);
+    var beta = load64(a + 24);
+    var mean = mneme_search_arm_expected_reward(a);
+    var sum = f64_add(alpha, beta);
+    var denom = f64_mul(f64_mul(sum, sum), f64_add(sum, f64_from(1)));
+    var variance = f64_div(f64_mul(alpha, beta), denom);
+    var std_dev = f64_sqrt(variance);
+    # ((seed % 1000) as f64 / 500.0 - 1.0)
+    var frac = f64_div(f64_from(seed % 1000), f64_parse("500.0"));
+    var scale = f64_sub(frac, f64_from(1));
+    var jitter = f64_mul(scale, std_dev);
+    return f64_clamp(f64_add(mean, jitter), f64_from(0), f64_from(1));
+}
+
+# --- ArmStats (40 bytes): [name@0, alpha@8, beta@16, expected_reward@24, weights@32] ---
+fn mneme_search_arm_stats_name(s): i64 { return load64(s); }
+fn mneme_search_arm_stats_alpha(s): i64 { return load64(s + 8); }
+fn mneme_search_arm_stats_beta(s): i64 { return load64(s + 16); }
+fn mneme_search_arm_stats_expected_reward(s): i64 { return load64(s + 24); }
+fn mneme_search_arm_stats_weights(s): i64 { return load64(s + 32); }
+
+# --- RetrievalOptimizer (24 bytes): [arms@0 (vec<Arm>), total_searches@8, total_successes@16] ---
+fn mneme_search_retrieval_optimizer_new(): i64 {
+    var arms = vec_new();
+    vec_push(arms, mneme_search_arm_new(str_from("balanced"),
+        mneme_search_blend_weights_new(f64_from(1), f64_from(1), f64_from(0))));
+    vec_push(arms, mneme_search_arm_new(str_from("fulltext_heavy"),
+        mneme_search_blend_weights_new(f64_parse("1.5"), f64_parse("0.5"), f64_from(0))));
+    vec_push(arms, mneme_search_arm_new(str_from("semantic_heavy"),
+        mneme_search_blend_weights_new(f64_parse("0.5"), f64_parse("1.5"), f64_from(0))));
+    vec_push(arms, mneme_search_arm_new(str_from("recency_boost"),
+        mneme_search_blend_weights_new(f64_from(1), f64_from(1), f64_parse("0.005"))));
+    var opt = alloc(24);
+    store64(opt, arms);
+    store64(opt + 8, 0);    # total_searches
+    store64(opt + 16, 0);   # total_successes
+    return opt;
+}
+fn mneme_search_retrieval_optimizer_arms(opt): i64 { return load64(opt); }
+fn mneme_search_retrieval_optimizer_total_searches(opt): i64 { return load64(opt + 8); }
+fn mneme_search_retrieval_optimizer_total_successes(opt): i64 { return load64(opt + 16); }
+fn mneme_search_retrieval_optimizer_num_arms(opt): i64 { return vec_len(load64(opt)); }
+
+# select the best arm via Thompson Sampling.
+# returns a 2-slot pair [best_idx@0, weights@8 (BlendWeights ptr)].
+fn mneme_search_retrieval_optimizer_select_arm(opt): i64 {
+    var arms = load64(opt);
+    var seed = load64(opt + 8);   # total_searches as seed
+    var best_idx = 0;
+    var best_sample = 0xFFF0000000000000;   # f64::NEG_INFINITY bit pattern
+    var i = 0;
+    while (i < vec_len(arms)) {
+        var s = mneme_search_arm_sample(vec_get(arms, i), seed + i * 7919);
+        # s > best_sample  <=>  (best_sample >= s) == 0
+        if (f64_ge(best_sample, s) == 0) {
+            best_sample = s;
+            best_idx = i;
+        }
+        i = i + 1;
+    }
+    var pair = alloc(16);
+    store64(pair, best_idx);
+    store64(pair + 8, mneme_search_arm_weights(vec_get(arms, best_idx)));
+    return pair;
+}
+fn mneme_search_select_result_index(pair): i64 { return load64(pair); }
+fn mneme_search_select_result_weights(pair): i64 { return load64(pair + 8); }
+
+# record that a search was performed with the given arm (failure by default).
+fn mneme_search_retrieval_optimizer_record_search(opt, arm_idx) {
+    store64(opt + 8, load64(opt + 8) + 1);
+    var arms = load64(opt);
+    if (arm_idx < vec_len(arms)) {
+        mneme_search_arm_record_failure(vec_get(arms, arm_idx));
+    }
+}
+# record positive feedback: undo the default failure, add a success.
+fn mneme_search_retrieval_optimizer_record_feedback(opt, arm_idx) {
+    var arms = load64(opt);
+    if (arm_idx < vec_len(arms)) {
+        store64(opt + 16, load64(opt + 16) + 1);
+        var arm = vec_get(arms, arm_idx);
+        var one = f64_from(1);
+        # beta -= 1.0; if beta < 1.0 { beta = 1.0 }
+        var beta = f64_sub(load64(arm + 24), one);
+        if (f64_ge(beta, one) == 0) { beta = one; }
+        store64(arm + 24, beta);
+        mneme_search_arm_record_success(arm);
+    }
+}
+# decay all arms toward their priors.
+fn mneme_search_retrieval_optimizer_decay_all(opt, factor) {
+    var arms = load64(opt);
+    var i = 0;
+    while (i < vec_len(arms)) {
+        mneme_search_arm_decay(vec_get(arms, i), factor);
+        i = i + 1;
+    }
+}
+# stats for all arms -> vec<ArmStats>
+fn mneme_search_retrieval_optimizer_arm_stats(opt): i64 {
+    var arms = load64(opt);
+    var out = vec_new();
+    var i = 0;
+    while (i < vec_len(arms)) {
+        var a = vec_get(arms, i);
+        var s = alloc(40);
+        store64(s, mneme_search_arm_name(a));
+        store64(s + 8, mneme_search_arm_alpha(a));
+        store64(s + 16, mneme_search_arm_beta(a));
+        store64(s + 24, mneme_search_arm_expected_reward(a));
+        store64(s + 32, mneme_search_arm_weights(a));
+        vec_push(out, s);
+        i = i + 1;
+    }
+    return out;
+}
+
+# --- minimal serde: emit only the two counts; from_json rebuilds a fresh optimizer ---
+fn mneme_search_retrieval_optimizer_to_json(opt): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"total_searches\":");
+    str_builder_add_int(sb, load64(opt + 8));
+    str_builder_add_cstr(sb, ",\"total_successes\":");
+    str_builder_add_int(sb, load64(opt + 16));
+    str_builder_add_cstr(sb, "}");
+    return str_builder_build(sb);
+}
+# parse an unsigned integer value that follows the given cstr key in `json`.
+# returns 0 if the key is not found.
+fn _ro_json_int(json: Str, key): i64 {
+    var idx = str_index_of_cstr(json, key);
+    if (idx < 0) { return 0; }
+    var n = str_len(json);
+    var d = str_data(json);
+    var i = idx + strlen(key);
+    # advance past ':' and any whitespace
+    while (i < n && (load8(d + i) == 58 || load8(d + i) == 32)) { i = i + 1; }
+    var val = 0;
+    while (i < n && load8(d + i) >= 48 && load8(d + i) <= 57) {
+        val = val * 10 + (load8(d + i) - 48);
+        i = i + 1;
+    }
+    return val;
+}
+fn mneme_search_retrieval_optimizer_from_json(json: Str): i64 {
+    var opt = mneme_search_retrieval_optimizer_new();
+    store64(opt + 8, _ro_json_int(json, "\"total_searches\""));
+    store64(opt + 16, _ro_json_int(json, "\"total_successes\""));
+    return opt;
+}

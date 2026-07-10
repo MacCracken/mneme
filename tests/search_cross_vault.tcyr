@@ -1,0 +1,129 @@
+# mneme-search cross-vault tests — ported 1:1 from rust-old/crates/mneme-search/src/cross_vault.rs.
+include "src/core_uuid.cyr"
+include "src/search_cross_vault.cyr"
+
+# make_ft(id, title, score) -> SearchResult { note_id: id, title, path: "{title}.md",
+#                                              snippet: "Content of {title}", score }
+fn _make_ft(id, title: Str, score): i64 {
+    var sbp = str_builder_new();
+    str_builder_add(sbp, title);
+    str_builder_add_cstr(sbp, ".md");
+    var path = str_builder_build(sbp);
+    var sbs = str_builder_new();
+    str_builder_add_cstr(sbs, "Content of ");
+    str_builder_add(sbs, title);
+    var snippet = str_builder_build(sbs);
+    return mneme_search_result_new(id, title, path, snippet, score);
+}
+
+# make_sem(id, title, score) -> SemanticResult { note_id: Some(id), title: Some(title),
+#                                                content: "Semantic content of {title}", score }
+fn _make_sem(id, title: Str, score): i64 {
+    var sbc = str_builder_new();
+    str_builder_add_cstr(sbc, "Semantic content of ");
+    str_builder_add(sbc, title);
+    var content = str_builder_build(sbc);
+    return mneme_search_semantic_result_new(id, title, content, score);
+}
+
+fn _names_contains(results, cstr): i64 {
+    var i = 0;
+    while (i < vec_len(results)) {
+        if (str_eq_cstr(mneme_search_cross_vault_result_vault_name(vec_get(results, i)), cstr) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("search_cross_vault");
+
+    # ---- single_vault_merge ----
+    var id1 = mneme_core_uuid_v4();
+    var id2 = mneme_core_uuid_v4();
+    var vault_id = mneme_core_uuid_v4();
+
+    var ft1 = vec_new();
+    vec_push(ft1, _make_ft(id1, str_from("Note A"), f64_parse("2.0")));
+    vec_push(ft1, _make_ft(id2, str_from("Note B"), f64_parse("1.0")));
+    var sem1 = vec_new();
+    vec_push(sem1, _make_sem(id1, str_from("Note A"), f64_parse("0.9")));
+
+    var vrs1 = vec_new();
+    vec_push(vrs1, mneme_search_vault_results_new(vault_id, str_from("main"), f64_parse("1.0"), ft1, sem1));
+    var results = mneme_search_cross_vault_merge(vrs1, 10);
+
+    assert_eq(vec_len(results), 2, "single: len 2");
+    # id1 appears in both -> higher score, sorts first
+    assert(mneme_core_uuid_eq(mneme_search_cross_vault_result_note_id(vec_get(results, 0)), id1) == 1, "single: results[0] is id1");
+    assert_eq(mneme_search_cross_vault_result_source(vec_get(results, 0)), CROSS_VAULT_BOTH, "single: results[0] source Both");
+    assert(str_eq(mneme_search_cross_vault_result_vault_name(vec_get(results, 0)), str_from("main")), "single: results[0] vault_name main");
+
+    # ---- multi_vault_merge ----
+    var m_id1 = mneme_core_uuid_v4();
+    var m_id2 = mneme_core_uuid_v4();
+    var v1 = mneme_core_uuid_v4();
+    var v2 = mneme_core_uuid_v4();
+
+    var ft_a = vec_new();
+    vec_push(ft_a, _make_ft(m_id1, str_from("Work Note"), f64_parse("2.0")));
+    var ft_b = vec_new();
+    vec_push(ft_b, _make_ft(m_id2, str_from("Personal Note"), f64_parse("2.0")));
+
+    var vrs2 = vec_new();
+    vec_push(vrs2, mneme_search_vault_results_new(v1, str_from("work"), f64_parse("1.0"), ft_a, vec_new()));
+    vec_push(vrs2, mneme_search_vault_results_new(v2, str_from("personal"), f64_parse("1.0"), ft_b, vec_new()));
+    var results2 = mneme_search_cross_vault_merge(vrs2, 10);
+
+    assert_eq(vec_len(results2), 2, "multi: len 2");
+    assert_eq(_names_contains(results2, "work"), 1, "multi: contains work");
+    assert_eq(_names_contains(results2, "personal"), 1, "multi: contains personal");
+
+    # ---- vault_weight_affects_ranking ----
+    var w_id1 = mneme_core_uuid_v4();
+    var w_id2 = mneme_core_uuid_v4();
+
+    var ft_hi = vec_new();
+    vec_push(ft_hi, _make_ft(w_id1, str_from("Boosted"), f64_parse("1.0")));
+    var ft_lo = vec_new();
+    vec_push(ft_lo, _make_ft(w_id2, str_from("Dampened"), f64_parse("1.0")));
+
+    var vrs3 = vec_new();
+    vec_push(vrs3, mneme_search_vault_results_new(mneme_core_uuid_v4(), str_from("high"), f64_parse("2.0"), ft_hi, vec_new()));
+    vec_push(vrs3, mneme_search_vault_results_new(mneme_core_uuid_v4(), str_from("low"), f64_parse("0.5"), ft_lo, vec_new()));
+    var results3 = mneme_search_cross_vault_merge(vrs3, 10);
+
+    assert(str_eq(mneme_search_cross_vault_result_vault_name(vec_get(results3, 0)), str_from("high")), "weight: results[0] is high");
+    # results[0].score > results[1].score
+    var s0 = mneme_search_cross_vault_result_score(vec_get(results3, 0));
+    var s1 = mneme_search_cross_vault_result_score(vec_get(results3, 1));
+    var gt = 0;
+    if (f64_le(s0, s1) == 0) { gt = 1; }   # s0 > s1  <=>  !(s0 <= s1)
+    assert_eq(gt, 1, "weight: results[0].score > results[1].score");
+
+    # ---- respects_limit ----
+    var big_vault = mneme_core_uuid_v4();
+    var ft_big = vec_new();
+    var bi = 0;
+    while (bi < 20) {
+        var sbn = str_builder_new();
+        str_builder_add_cstr(sbn, "N");
+        str_builder_add_int(sbn, bi);
+        vec_push(ft_big, _make_ft(mneme_core_uuid_v4(), str_builder_build(sbn), f64_parse("1.0")));
+        bi = bi + 1;
+    }
+    var vrs4 = vec_new();
+    vec_push(vrs4, mneme_search_vault_results_new(big_vault, str_from("big"), f64_parse("1.0"), ft_big, vec_new()));
+    var results4 = mneme_search_cross_vault_merge(vrs4, 5);
+    assert_eq(vec_len(results4), 5, "limit: len 5");
+
+    # ---- empty_vaults ----
+    var results5 = mneme_search_cross_vault_merge(vec_new(), 10);
+    assert_eq(vec_len(results5), 0, "empty: is_empty");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

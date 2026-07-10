@@ -1,0 +1,145 @@
+# mneme-search context-buffer tests — ported 1:1 from
+# rust-old/crates/mneme-search/src/context_buffer.rs (11 #[test] cases).
+# Uuid IDs are distinct i64 handles; Vec<f32> embeddings are vecs of f64 bits.
+include "src/search_context_buffer.cyr"
+
+# build a vec<f64-bits> from up to 3 whole-number components
+fn _emb3(a, b, c): i64 {
+    var v = vec_new();
+    vec_push(v, f64_from(a));
+    vec_push(v, f64_from(b));
+    vec_push(v, f64_from(c));
+    return v;
+}
+fn _emb2(a, b): i64 {
+    var v = vec_new();
+    vec_push(v, f64_from(a));
+    vec_push(v, f64_from(b));
+    return v;
+}
+# |x - 1.0| < 1e-5 ? -> 1/0   (x is f64 bits)
+fn _near1(x): i64 {
+    var diff = _cb_f64_abs(f64_sub(x, f64_from(1)));
+    if (f64_lt(diff, f64_parse("0.00001")) == 1) { return 1; }
+    return 0;
+}
+# |x| < 1e-5 ? -> 1/0
+fn _near0(x): i64 {
+    var diff = _cb_f64_abs(x);
+    if (f64_lt(diff, f64_parse("0.00001")) == 1) { return 1; }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("search_context_buffer");
+
+    # ---- push_and_capacity ----
+    # ContextBuffer::new(3); push 5 distinct ids -> len 3, keeps last 3 in order.
+    var buf1 = mneme_search_context_buffer_new(3);
+    var id_1 = 101; var id_2 = 102; var id_3 = 103; var id_4 = 104; var id_5 = 105;
+    mneme_search_context_buffer_push(buf1, id_1);
+    mneme_search_context_buffer_push(buf1, id_2);
+    mneme_search_context_buffer_push(buf1, id_3);
+    mneme_search_context_buffer_push(buf1, id_4);
+    mneme_search_context_buffer_push(buf1, id_5);
+    assert_eq(mneme_search_context_buffer_len(buf1), 3, "cap len 3");
+    var r1 = mneme_search_context_buffer_recent_ids(buf1);
+    assert_eq(vec_get(r1, 0), id_3, "cap recent[0]=ids[2]");
+    assert_eq(vec_get(r1, 1), id_4, "cap recent[1]=ids[3]");
+    assert_eq(vec_get(r1, 2), id_5, "cap recent[2]=ids[4]");
+
+    # ---- push_deduplicates ----
+    # new(5); push id1, id2, id1 -> len 2, order [id2, id1].
+    var buf2 = mneme_search_context_buffer_new(5);
+    var d1 = 201; var d2 = 202;
+    mneme_search_context_buffer_push(buf2, d1);
+    mneme_search_context_buffer_push(buf2, d2);
+    mneme_search_context_buffer_push(buf2, d1);
+    assert_eq(mneme_search_context_buffer_len(buf2), 2, "dedup len 2");
+    var r2 = mneme_search_context_buffer_recent_ids(buf2);
+    assert_eq(vec_get(r2, 0), d2, "dedup recent[0]=id2");
+    assert_eq(vec_get(r2, 1), d1, "dedup recent[1]=id1");
+
+    # ---- empty_buffer ----
+    var buf3 = mneme_search_context_buffer_new(7);
+    assert_eq(mneme_search_context_buffer_is_empty(buf3), 1, "empty is_empty");
+    assert_eq(mneme_search_context_buffer_len(buf3), 0, "empty len 0");
+    assert_eq(mneme_search_context_buffer_context_embedding(buf3, vec_new()), 0, "empty ctx None");
+
+    # ---- clear_buffer ----
+    var buf4 = mneme_search_context_buffer_new(7);
+    mneme_search_context_buffer_push(buf4, 301);
+    mneme_search_context_buffer_clear(buf4);
+    assert_eq(mneme_search_context_buffer_is_empty(buf4), 1, "clear is_empty");
+
+    # ---- context_embedding_weighted_average ----
+    # new(3); push id1, id2; embeddings id1=[1,0,0], id2=[0,1,0].
+    # ctx len 3 and L2-normalized (norm ~ 1.0).
+    var buf5 = mneme_search_context_buffer_new(3);
+    var w1 = 401; var w2 = 402;
+    mneme_search_context_buffer_push(buf5, w1);
+    mneme_search_context_buffer_push(buf5, w2);
+    var embs5 = vec_new();
+    vec_push(embs5, mneme_search_ctx_pair_new(w1, _emb3(1, 0, 0)));
+    vec_push(embs5, mneme_search_ctx_pair_new(w2, _emb3(0, 1, 0)));
+    var ctx5 = mneme_search_context_buffer_context_embedding(buf5, embs5);
+    assert(ctx5 != 0, "wavg some");
+    assert_eq(vec_len(ctx5), 3, "wavg len 3");
+    var norm5 = _cb_f64_norm(ctx5);
+    assert_eq(_near1(norm5), 1, "wavg normalized");
+
+    # ---- context_embedding_skips_missing ----
+    # new(3); push id1, id2; only id1 has an embedding [1,0,0].
+    # result is id1's embedding normalized -> ctx[0] ~ 1.0.
+    var buf6 = mneme_search_context_buffer_new(3);
+    var s1 = 501; var s2 = 502;
+    mneme_search_context_buffer_push(buf6, s1);
+    mneme_search_context_buffer_push(buf6, s2);
+    var embs6 = vec_new();
+    vec_push(embs6, mneme_search_ctx_pair_new(s1, _emb3(1, 0, 0)));
+    var ctx6 = mneme_search_context_buffer_context_embedding(buf6, embs6);
+    assert(ctx6 != 0, "skip some");
+    assert_eq(_near1(vec_get(ctx6, 0)), 1, "skip ctx[0]~1");
+
+    # ---- context_embedding_none_when_no_matches ----
+    var buf7 = mneme_search_context_buffer_new(3);
+    mneme_search_context_buffer_push(buf7, 601);
+    assert_eq(mneme_search_context_buffer_context_embedding(buf7, vec_new()), 0, "no-match None");
+
+    # ---- fuse_embeddings_pure_query ----
+    # query=[1,0,0], context=[0,1,0], lambda=1.0 -> pure query: [0]~1, [1]~0.
+    var fq_q = _emb3(1, 0, 0);
+    var fq_c = _emb3(0, 1, 0);
+    var fq = mneme_search_fuse_embeddings(fq_q, fq_c, f64_from(1));
+    assert_eq(_near1(vec_get(fq, 0)), 1, "pure query [0]~1");
+    assert_eq(_near0(vec_get(fq, 1)), 1, "pure query [1]~0");
+
+    # ---- fuse_embeddings_pure_context ----
+    # lambda=0.0 -> pure context: [0]~0, [1]~1.
+    var fc_q = _emb3(1, 0, 0);
+    var fc_c = _emb3(0, 1, 0);
+    var fc = mneme_search_fuse_embeddings(fc_q, fc_c, f64_from(0));
+    assert_eq(_near0(vec_get(fc, 0)), 1, "pure ctx [0]~0");
+    assert_eq(_near1(vec_get(fc, 1)), 1, "pure ctx [1]~1");
+
+    # ---- fuse_embeddings_balanced ----
+    # query=[1,0], context=[0,1], lambda=0.5 -> 50/50: [0]~[1], normalized.
+    var fb_q = _emb2(1, 0);
+    var fb_c = _emb2(0, 1);
+    var fb = mneme_search_fuse_embeddings(fb_q, fb_c, f64_parse("0.5"));
+    assert_eq(_near0(f64_sub(vec_get(fb, 0), vec_get(fb, 1))), 1, "balanced [0]~[1]");
+    var normb = _cb_f64_norm(fb);
+    assert_eq(_near1(normb), 1, "balanced normalized");
+
+    # ---- fuse_embeddings_clamped ----
+    # lambda=2.0 clamped to 1.0 -> pure query: [0]~1.
+    var fcl_q = _emb2(1, 0);
+    var fcl_c = _emb2(0, 1);
+    var fcl = mneme_search_fuse_embeddings(fcl_q, fcl_c, f64_from(2));
+    assert_eq(_near1(vec_get(fcl, 0)), 1, "clamped [0]~1");
+
+    return assert_summary();
+}
+var e = main();
+syscall(60, e);

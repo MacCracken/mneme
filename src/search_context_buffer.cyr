@@ -1,0 +1,198 @@
+# mneme-search — working-memory context buffer (ported from
+# rust-old/crates/mneme-search/src/context_buffer.rs). Zero-I/O.
+#
+# Tracks the most recently accessed note IDs (a bounded deque) and computes a
+# recency-weighted, L2-normalized context embedding by averaging per-note
+# embeddings. `fuse_embeddings` blends a query embedding with a context
+# embedding under a clamped mix weight, then L2-normalizes.
+#
+# PORTING NOTES
+# - Uuid note IDs are opaque i64 handles here (dedup compares by == , which is
+#   what the Rust `id != note_id` retain does). Tests pass distinct integers.
+# - Vec<f32> embeddings are represented as a vec of f64 IEEE-754 bit patterns
+#   (Cyrius has no native f32/f64; f64 bits live in i64). Rust's f32 math is
+#   reproduced in f64 — the tests only check components / norm within 1e-5.
+# - `embeddings: &[(Uuid, Vec<f32>)]` is a vec of _cb_pair structs [id@0, emb@8].
+# - Requires math (f64_* builtins + f64_sqrt); in stdlib under `cyrius test`.
+
+# --- (Uuid, Vec<f32>) pair helper for the embeddings argument (16 bytes) ---
+fn mneme_search_ctx_pair_new(id, emb): i64 {
+    var p = alloc(16);
+    store64(p, id);
+    store64(p + 8, emb);
+    return p;
+}
+fn mneme_search_ctx_pair_id(p): i64 { return load64(p); }
+fn mneme_search_ctx_pair_emb(p): i64 { return load64(p + 8); }
+
+# --- module-private f64 helpers ---
+# absolute value of an f64 (bit pattern in i64)
+fn _cb_f64_abs(x): i64 {
+    if (f64_lt(x, f64_from(0)) == 1) { return f64_neg(x); }
+    return x;
+}
+# L2 norm of a vec<f64-bits>: sqrt(sum v*v)
+fn _cb_f64_norm(v): i64 {
+    var sum = f64_from(0);
+    var i = 0;
+    while (i < vec_len(v)) {
+        var x = vec_get(v, i);
+        sum = f64_add(sum, f64_mul(x, x));
+        i = i + 1;
+    }
+    return f64_sqrt(sum);
+}
+# in-place L2 normalize a vec<f64-bits> if its norm > 0
+fn _cb_f64_normalize(v): i64 {
+    var norm = _cb_f64_norm(v);
+    if (f64_gt(norm, f64_from(0)) == 1) {
+        var i = 0;
+        while (i < vec_len(v)) {
+            vec_set(v, i, f64_div(vec_get(v, i), norm));
+            i = i + 1;
+        }
+    }
+    return v;
+}
+
+# --- ContextBuffer (16 bytes): [recent@0 (vec of i64 id handles), capacity@8] ---
+# Recent note IDs, most recent at the back. capacity = max(given, 1).
+fn mneme_search_context_buffer_new(capacity): i64 {
+    var buf = alloc(16);
+    store64(buf, vec_new());
+    var cap = capacity;
+    if (cap < 1) { cap = 1; }
+    store64(buf + 8, cap);
+    return buf;
+}
+fn mneme_search_context_buffer_recent(buf): i64 { return load64(buf); }
+fn mneme_search_context_buffer_capacity(buf): i64 { return load64(buf + 8); }
+
+# recent note IDs, most recent last (returns the underlying vec)
+fn mneme_search_context_buffer_recent_ids(buf): i64 { return load64(buf); }
+# number of notes in the buffer
+fn mneme_search_context_buffer_len(buf): i64 { return vec_len(load64(buf)); }
+# whether the buffer is empty (1/0)
+fn mneme_search_context_buffer_is_empty(buf): i64 {
+    if (vec_len(load64(buf)) == 0) { return 1; }
+    return 0;
+}
+# clear the buffer
+fn mneme_search_context_buffer_clear(buf): i64 {
+    store64(buf, vec_new());
+    return buf;
+}
+
+# Record that a note was accessed. Deduplicates (moves to most recent).
+fn mneme_search_context_buffer_push(buf, note_id): i64 {
+    var old = load64(buf);
+    var cap = load64(buf + 8);
+    # rebuild without note_id (retain |id| id != note_id)
+    var kept = vec_new();
+    var i = 0;
+    while (i < vec_len(old)) {
+        var id = vec_get(old, i);
+        if (id != note_id) { vec_push(kept, id); }
+        i = i + 1;
+    }
+    # drop oldest (front) while at/over capacity
+    if (vec_len(kept) >= cap) {
+        var trimmed = vec_new();
+        var start = vec_len(kept) - cap + 1;
+        if (start < 0) { start = 0; }
+        var j = start;
+        while (j < vec_len(kept)) { vec_push(trimmed, vec_get(kept, j)); j = j + 1; }
+        kept = trimmed;
+    }
+    vec_push(kept, note_id);
+    store64(buf, kept);
+    return buf;
+}
+
+# Compute a recency-weighted, L2-normalized context embedding.
+# `embeddings` is a vec of _cb_pair [id, emb-vec]. Returns 0 (None) if the
+# buffer is empty or no recent id has a matching embedding.
+# weight(i) = 0.5 + 0.5 * (i / max(n,1)); more recent (higher i) => higher weight.
+fn mneme_search_context_buffer_context_embedding(buf, embeddings): i64 {
+    var recent = load64(buf);
+    var n = vec_len(recent);
+    if (n == 0) { return 0; }
+
+    # emb_map: note_id -> emb-vec (pointer). map_u64 keys on the i64 handle.
+    var emb_map = map_u64_new();
+    var e = 0;
+    while (e < vec_len(embeddings)) {
+        var pair = vec_get(embeddings, e);
+        map_u64_set(emb_map, mneme_search_ctx_pair_id(pair), mneme_search_ctx_pair_emb(pair));
+        e = e + 1;
+    }
+
+    var denom = n;
+    if (denom < 1) { denom = 1; }
+    var half = f64_parse("0.5");
+    # collect matched (weight, emb) pairs preserving order
+    var weights = vec_new();
+    var embs = vec_new();
+    var i = 0;
+    while (i < n) {
+        var id = vec_get(recent, i);
+        var emb = map_u64_get_or(emb_map, id, 0);
+        if (emb != 0) {
+            # weight = 0.5 + 0.5 * (i / denom)
+            var frac = f64_div(f64_from(i), f64_from(denom));
+            var w = f64_add(half, f64_mul(half, frac));
+            vec_push(weights, w);
+            vec_push(embs, emb);
+        }
+        i = i + 1;
+    }
+
+    if (vec_len(embs) == 0) { return 0; }
+
+    var dim = vec_len(vec_get(embs, 0));
+    # total_weight = sum of weights
+    var total = f64_from(0);
+    var wi = 0;
+    while (wi < vec_len(weights)) { total = f64_add(total, vec_get(weights, wi)); wi = wi + 1; }
+
+    # result[d] = sum_m (weight_m / total) * emb_m[d]
+    var result = vec_new();
+    var d = 0;
+    while (d < dim) { vec_push(result, f64_from(0)); d = d + 1; }
+    var m = 0;
+    while (m < vec_len(embs)) {
+        var w = vec_get(weights, m);
+        var emb = vec_get(embs, m);
+        var coef = f64_div(w, total);
+        var k = 0;
+        while (k < dim) {
+            var acc = f64_add(vec_get(result, k), f64_mul(coef, vec_get(emb, k)));
+            vec_set(result, k, acc);
+            k = k + 1;
+        }
+        m = m + 1;
+    }
+
+    # L2 normalize
+    return _cb_f64_normalize(result);
+}
+
+# Fuse a query embedding with a context embedding:
+#   search_vec = lambda*query + (1 - lambda)*context, lambda = clamp(query_weight, 0, 1)
+# then L2-normalize. Returns a fresh vec<f64-bits>.
+fn mneme_search_fuse_embeddings(query, context, query_weight): i64 {
+    var one = f64_from(1);
+    var lambda = f64_clamp(query_weight, f64_from(0), one);
+    var one_minus = f64_sub(one, lambda);
+    var fused = vec_new();
+    var n = vec_len(query);
+    var i = 0;
+    while (i < n) {
+        var q = vec_get(query, i);
+        var c = vec_get(context, i);
+        var val = f64_add(f64_mul(lambda, q), f64_mul(one_minus, c));
+        vec_push(fused, val);
+        i = i + 1;
+    }
+    return _cb_f64_normalize(fused);
+}
