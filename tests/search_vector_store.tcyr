@@ -1,0 +1,103 @@
+# mneme-search vector store tests — ported 1:1 from rust-old/crates/mneme-search/src/vector_store.rs.
+include "src/core_uuid.cyr"
+include "src/search_vector_store.cyr"
+
+var _vsn = 0;
+fn _vec3(a, b, c): i64 {
+    var v = vec_new();
+    vec_push(v, f64_parse(a));
+    vec_push(v, f64_parse(b));
+    vec_push(v, f64_parse(c));
+    return v;
+}
+fn _vec2(a, b): i64 {
+    var v = vec_new();
+    vec_push(v, f64_parse(a));
+    vec_push(v, f64_parse(b));
+    return v;
+}
+fn _dir(): i64 {
+    _vsn = _vsn + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_vs");
+    str_builder_add_int(pb, _vsn);
+    return str_builder_build(pb);
+}
+
+fn main() {
+    alloc_init();
+    test_group("search_vector_store");
+
+    # insert_and_search
+    var s1 = mneme_search_vstore_in_memory(3);
+    var id1 = mneme_core_uuid_v4();
+    mneme_search_vstore_insert(s1, id1, str_from("Test Note"), str_from("Some content"), _vec3("1.0", "0.0", "0.0"));
+    var r1 = mneme_search_vstore_search(s1, _vec3("1.0", "0.0", "0.0"), 5);
+    assert_eq(vec_len(r1), 1, "one result");
+    assert_eq(mneme_core_uuid_eq(mneme_search_semresult_note_id(vec_get(r1, 0)), id1), 1, "note id");
+    var okscore = 0;
+    if (f64_le(mneme_search_semresult_score(vec_get(r1, 0)), f64_parse("0.99")) == 0) { okscore = 1; }
+    assert_eq(okscore, 1, "score > 0.99");
+
+    # insert_updates_existing
+    var s2 = mneme_search_vstore_in_memory(3);
+    var id2 = mneme_core_uuid_v4();
+    mneme_search_vstore_insert(s2, id2, str_from("V1"), str_from("content v1"), _vec3("1.0", "0.0", "0.0"));
+    mneme_search_vstore_insert(s2, id2, str_from("V2"), str_from("content v2"), _vec3("0.0", "1.0", "0.0"));
+    assert_eq(mneme_search_vstore_len(s2), 1, "len 1 after update");
+    var r2 = mneme_search_vstore_search(s2, _vec3("0.0", "1.0", "0.0"), 5);
+    assert(str_eq(mneme_search_semresult_title(vec_get(r2, 0)), str_from("V2")), "title V2");
+
+    # remove_note
+    var s3 = mneme_search_vstore_in_memory(3);
+    var id3 = mneme_core_uuid_v4();
+    mneme_search_vstore_insert(s3, id3, str_from("Remove Me"), str_from("content"), _vec3("1.0", "0.0", "0.0"));
+    assert_eq(mneme_search_vstore_len(s3), 1, "len 1");
+    mneme_search_vstore_remove(s3, id3);
+    assert_eq(mneme_search_vstore_len(s3), 0, "len 0 after remove");
+
+    # search_empty_store
+    assert_eq(vec_len(mneme_search_vstore_search(mneme_search_vstore_in_memory(3), _vec3("1.0", "0.0", "0.0"), 5)), 0, "empty search");
+
+    # wrong_dimension_rejected
+    assert_eq(mneme_search_vstore_insert(mneme_search_vstore_in_memory(3), mneme_core_uuid_v4(), str_from("Bad"), str_from("x"), _vec2("1.0", "0.0")), 0, "wrong dim rejected");
+
+    # multiple_notes_ranked
+    var s6 = mneme_search_vstore_in_memory(3);
+    var i1 = mneme_core_uuid_v4();
+    mneme_search_vstore_insert(s6, i1, str_from("North"), str_from("up"), _vec3("0.0", "1.0", "0.0"));
+    mneme_search_vstore_insert(s6, mneme_core_uuid_v4(), str_from("East"), str_from("right"), _vec3("1.0", "0.0", "0.0"));
+    mneme_search_vstore_insert(s6, mneme_core_uuid_v4(), str_from("Northeast"), str_from("diagonal"), _vec3("0.707", "0.707", "0.0"));
+    var r6 = mneme_search_vstore_search(s6, _vec3("0.0", "1.0", "0.0"), 3);
+    assert_eq(vec_len(r6), 3, "three results");
+    assert_eq(mneme_core_uuid_eq(mneme_search_semresult_note_id(vec_get(r6, 0)), i1), 1, "north ranked first");
+
+    # remove_nonexistent_is_ok
+    assert_eq(mneme_search_vstore_remove(mneme_search_vstore_in_memory(3), mneme_core_uuid_v4()), 1, "remove missing ok");
+
+    # len_and_is_empty
+    var s8 = mneme_search_vstore_in_memory(3);
+    assert_eq(mneme_search_vstore_is_empty(s8), 1, "empty");
+    assert_eq(mneme_search_vstore_len(s8), 0, "len 0");
+    mneme_search_vstore_insert(s8, mneme_core_uuid_v4(), str_from("A"), str_from("a"), _vec3("1.0", "0.0", "0.0"));
+    assert_eq(mneme_search_vstore_is_empty(s8), 0, "not empty");
+    assert_eq(mneme_search_vstore_len(s8), 1, "len 1");
+
+    # persist_and_reload
+    var dir = _dir();
+    var sp = mneme_search_vstore_open(dir, 3);
+    var idp = mneme_core_uuid_v4();
+    mneme_search_vstore_insert(sp, idp, str_from("Persisted"), str_from("data"), _vec3("1.0", "0.0", "0.0"));
+    mneme_search_vstore_save(sp);
+    var sp2 = mneme_search_vstore_open(dir, 3);
+    assert_eq(mneme_search_vstore_len(sp2), 1, "reload len 1");
+    var rp = mneme_search_vstore_search(sp2, _vec3("1.0", "0.0", "0.0"), 5);
+    assert_eq(vec_len(rp), 1, "reload search 1");
+    assert_eq(mneme_core_uuid_eq(mneme_search_semresult_note_id(vec_get(rp, 0)), idp), 1, "reload note id");
+    assert(str_eq(mneme_search_semresult_title(vec_get(rp, 0)), str_from("Persisted")), "reload title");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

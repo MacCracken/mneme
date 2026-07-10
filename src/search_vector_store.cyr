@@ -1,0 +1,299 @@
+# mneme-search — vector store (ported from rust-old/crates/mneme-search/src/vector_store.rs)
+# usearch has no Cyrius analog → BRUTE-FORCE COSINE store (faithful; tests are tiny).
+# Embeddings are vecs of f64 IEEE-754 bit patterns (Cyrius has no f32/f64 type).
+# SemanticResult defined here (semantic module, not yet ported, will reconcile).
+# Requires core_uuid + math (f64) + io/fs/syscalls (persist).
+
+fn _vs_cstr(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(s), n);
+    store8(buf + n, 0);
+    return buf;
+}
+fn _vs_hexc(nib): i64 { if (nib < 10) { return 48 + nib; } return 87 + nib; }
+fn _vs_hexv(c): i64 {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    return 0 - 1;
+}
+fn _vs_uuid_hex(u): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < 16) {
+        var b = load8(u + i);
+        str_builder_putc(sb, _vs_hexc((b >> 4) & 15));
+        str_builder_putc(sb, _vs_hexc(b & 15));
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+fn _vs_uuid_parse(s: Str): i64 {
+    var u = alloc(16);
+    var n = str_len(s);
+    var d = str_data(s);
+    var bi = 0;
+    var hi = 0 - 1;
+    var i = 0;
+    while (i < n && bi < 16) {
+        var v = _vs_hexv(load8(d + i));
+        if (v >= 0) {
+            if (hi < 0) { hi = v; } else { store8(u + bi, (hi << 4) | v); bi = bi + 1; hi = 0 - 1; }
+        }
+        i = i + 1;
+    }
+    return u;
+}
+fn _vs_parse_i64(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    var neg = 0;
+    if (n > 0 && load8(d) == 45) { neg = 1; i = 1; }
+    var v = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c >= 48 && c <= 57) { v = v * 10 + (c - 48); }
+        i = i + 1;
+    }
+    if (neg == 1) { return 0 - v; }
+    return v;
+}
+# cosine similarity of two f64-bit vectors; 0 if either has zero norm
+fn _vs_cosine(a, b): i64 {
+    var dot = f64_from(0);
+    var na = f64_from(0);
+    var nb = f64_from(0);
+    var i = 0;
+    var m = vec_len(a);
+    while (i < m) {
+        var av = vec_get(a, i);
+        var bv = vec_get(b, i);
+        dot = f64_add(dot, f64_mul(av, bv));
+        na = f64_add(na, f64_mul(av, av));
+        nb = f64_add(nb, f64_mul(bv, bv));
+        i = i + 1;
+    }
+    var denom = f64_mul(f64_sqrt(na), f64_sqrt(nb));
+    if (denom == f64_from(0)) { return f64_from(0); }
+    return f64_div(dot, denom);
+}
+fn _vs_truncate(s: Str): i64 {
+    if (str_len(s) > 200) {
+        var sb = str_builder_new();
+        str_builder_add(sb, str_substr(s, 0, 200));
+        str_builder_add_cstr(sb, "...");
+        return str_builder_build(sb);
+    }
+    return s;
+}
+fn _vs_mkdir_p(dir: Str): i64 {
+    var n = str_len(dir);
+    var d = str_data(dir);
+    var i = 1;
+    while (i <= n) {
+        if (i == n || load8(d + i) == 47) { sys_mkdir(_vs_cstr(str_substr(dir, 0, i)), 493); }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# SemanticResult (32): [note_id@0(0=None), title@8(0=None), content@16, score@24(f64)]
+fn mneme_search_semresult_note_id(r): i64 { return load64(r); }
+fn mneme_search_semresult_title(r): i64 { return load64(r + 8); }
+fn mneme_search_semresult_content(r): i64 { return load64(r + 16); }
+fn mneme_search_semresult_score(r): i64 { return load64(r + 24); }
+
+# Entry (32): [note_id@0, title@8, snippet@16, embedding@24 (vec<f64bits>)]
+# VectorStore (24): [dim@0, entries@8 (vec<Entry>), persist_dir@16 (Str or 0)]
+fn mneme_search_vstore_in_memory(dim): i64 {
+    var s = alloc(24);
+    store64(s, dim);
+    store64(s + 8, vec_new());
+    store64(s + 16, 0);
+    return s;
+}
+fn mneme_search_vstore_len(s): i64 { return vec_len(load64(s + 8)); }
+fn mneme_search_vstore_is_empty(s): i64 { if (vec_len(load64(s + 8)) == 0) { return 1; } return 0; }
+fn mneme_search_vstore_note_ids(s): i64 {
+    var out = vec_new();
+    var es = load64(s + 8);
+    var i = 0;
+    while (i < vec_len(es)) { vec_push(out, load64(vec_get(es, i))); i = i + 1; }
+    return out;
+}
+fn _vs_find(s, id): i64 {
+    var es = load64(s + 8);
+    var i = 0;
+    while (i < vec_len(es)) {
+        if (mneme_core_uuid_eq(load64(vec_get(es, i)), id) == 1) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+fn mneme_search_vstore_remove(s, id): i64 {
+    var idx = _vs_find(s, id);
+    if (idx < 0) { return 1; }
+    var es = load64(s + 8);
+    var kept = vec_new();
+    var i = 0;
+    while (i < vec_len(es)) {
+        if (i != idx) { vec_push(kept, vec_get(es, i)); }
+        i = i + 1;
+    }
+    store64(s + 8, kept);
+    return 1;
+}
+# insert/update; returns 1 ok, 0 on dimension mismatch (Err)
+fn mneme_search_vstore_insert(s, id, title: Str, snippet: Str, embedding): i64 {
+    if (vec_len(embedding) != load64(s)) { return 0; }
+    mneme_search_vstore_remove(s, id);
+    var e = alloc(32);
+    store64(e, id);
+    store64(e + 8, title);
+    store64(e + 16, _vs_truncate(snippet));
+    store64(e + 24, embedding);
+    vec_push(load64(s + 8), e);
+    return 1;
+}
+fn mneme_search_vstore_search(s, query, limit): i64 {
+    var es = load64(s + 8);
+    var out = vec_new();
+    if (vec_len(es) == 0) { return out; }
+    # score each entry
+    var scored = vec_new();
+    var i = 0;
+    while (i < vec_len(es)) {
+        var e = vec_get(es, i);
+        var pair = alloc(16);
+        store64(pair, e);
+        store64(pair + 8, _vs_cosine(query, load64(e + 24)));
+        vec_push(scored, pair);
+        i = i + 1;
+    }
+    # sort by score desc (bubble; f64 compare)
+    var m = vec_len(scored);
+    var a = 0;
+    while (a < m) {
+        var b = 0;
+        while (b + 1 + a < m) {
+            if (f64_ge(load64(vec_get(scored, b) + 8), load64(vec_get(scored, b + 1) + 8)) == 0) {
+                var tmp = vec_get(scored, b);
+                vec_set(scored, b, vec_get(scored, b + 1));
+                vec_set(scored, b + 1, tmp);
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    var k = 0;
+    while (k < vec_len(scored) && k < limit) {
+        var e2 = load64(vec_get(scored, k));
+        var r = alloc(32);
+        store64(r, load64(e2));            # note_id
+        store64(r + 8, load64(e2 + 8));    # title
+        store64(r + 16, load64(e2 + 16));  # content (snippet)
+        store64(r + 24, load64(vec_get(scored, k) + 8));  # score
+        vec_push(out, r);
+        k = k + 1;
+    }
+    return out;
+}
+
+# --- persistence (simple line format: dim / count / [hex, title, snippet, "bits.." ]*) ---
+fn mneme_search_vstore_save(s): i64 {
+    if (load64(s + 16) == 0) { return 1; }
+    var es = load64(s + 8);
+    var dim = load64(s);
+    var sb = str_builder_new();
+    str_builder_add_int(sb, dim);
+    str_builder_putc(sb, 10);
+    str_builder_add_int(sb, vec_len(es));
+    str_builder_putc(sb, 10);
+    var i = 0;
+    while (i < vec_len(es)) {
+        var e = vec_get(es, i);
+        str_builder_add(sb, _vs_uuid_hex(load64(e)));
+        str_builder_putc(sb, 10);
+        str_builder_add(sb, load64(e + 8));
+        str_builder_putc(sb, 10);
+        str_builder_add(sb, load64(e + 16));
+        str_builder_putc(sb, 10);
+        var emb = load64(e + 24);
+        var j = 0;
+        while (j < vec_len(emb)) {
+            if (j > 0) { str_builder_putc(sb, 32); }
+            str_builder_add_int(sb, vec_get(emb, j));
+            j = j + 1;
+        }
+        str_builder_putc(sb, 10);
+        i = i + 1;
+    }
+    var path = _vs_cstr(path_join(load64(s + 16), str_from("vectors.meta.txt")));
+    var doc = str_builder_build(sb);
+    file_write_all(path, str_data(doc), str_len(doc));
+    return 1;
+}
+# split a Str into lines (by '\n')
+fn _vs_lines(s: Str): i64 {
+    var out = vec_new();
+    var n = str_len(s);
+    var d = str_data(s);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; } elif (load8(d + i) == 10) { isend = 1; }
+        if (isend == 1) { vec_push(out, str_substr(s, start, i)); start = i + 1; }
+        i = i + 1;
+    }
+    return out;
+}
+fn _vs_parse_floats(line: Str): i64 {
+    var out = vec_new();
+    var n = str_len(line);
+    var d = str_data(line);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; } elif (load8(d + i) == 32) { isend = 1; }
+        if (isend == 1) {
+            if (i > start) { vec_push(out, _vs_parse_i64(str_substr(line, start, i))); }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+fn mneme_search_vstore_open(dir: Str, dim): i64 {
+    _vs_mkdir_p(dir);
+    var s = alloc(24);
+    store64(s, dim);
+    store64(s + 8, vec_new());
+    store64(s + 16, dir);
+    var path = _vs_cstr(path_join(dir, str_from("vectors.meta.txt")));
+    if (file_exists(path) == 1) {
+        var buf = alloc(1048576);
+        var rn = file_read_all(path, buf, 1048576);
+        if (rn > 0) {
+            var lines = _vs_lines(str_new(buf, rn));
+            if (vec_len(lines) >= 2) {
+                var count = _vs_parse_i64(vec_get(lines, 1));
+                var li = 2;
+                var c = 0;
+                while (c < count && li + 3 < vec_len(lines)) {
+                    var e = alloc(32);
+                    store64(e, _vs_uuid_parse(vec_get(lines, li)));
+                    store64(e + 8, vec_get(lines, li + 1));
+                    store64(e + 16, vec_get(lines, li + 2));
+                    store64(e + 24, _vs_parse_floats(vec_get(lines, li + 3)));
+                    vec_push(load64(s + 8), e);
+                    li = li + 4;
+                    c = c + 1;
+                }
+            }
+        }
+    }
+    return s;
+}
