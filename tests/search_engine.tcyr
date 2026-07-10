@@ -1,0 +1,67 @@
+# mneme-search full-text engine tests — ported 1:1 from rust-old/crates/mneme-search/src/engine.rs.
+include "src/core_uuid.cyr"
+include "src/search_engine.cyr"
+
+fn _tags2(a, b): i64 { var v = vec_new(); vec_push(v, a); vec_push(v, b); return v; }
+fn _tags1(a): i64 { var v = vec_new(); vec_push(v, a); return v; }
+fn _any_title_eq(results, cstr): i64 {
+    var i = 0;
+    while (i < vec_len(results)) {
+        if (str_eq_cstr(mneme_search_result_title(vec_get(results, i)), cstr) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("search_engine");
+
+    # index_and_search
+    var e1 = mneme_search_engine_in_memory();
+    var id1 = mneme_core_uuid_v4();
+    mneme_search_engine_index_note(e1, id1, str_from("Rust Programming"), str_from("Rust is a systems language"), _tags2(str_from("rust"), str_from("programming")), str_from("rust.md"));
+    var r1 = mneme_search_engine_search(e1, str_from("rust"), 10);
+    assert_eq(vec_len(r1), 1, "one result");
+    assert_eq(mneme_core_uuid_eq(mneme_search_result_note_id(vec_get(r1, 0)), id1), 1, "note id matches");
+    assert(str_eq(mneme_search_result_title(vec_get(r1, 0)), str_from("Rust Programming")), "title matches");
+
+    # search_by_tag
+    var e2 = mneme_search_engine_in_memory();
+    mneme_search_engine_index_note(e2, mneme_core_uuid_v4(), str_from("My Note"), str_from("Some content"), _tags1(str_from("agnos")), str_from("note.md"));
+    assert_eq(vec_len(mneme_search_engine_search(e2, str_from("agnos"), 10)), 1, "tag search");
+
+    # search_no_results
+    assert_eq(vec_len(mneme_search_engine_search(mneme_search_engine_in_memory(), str_from("nonexistent"), 10)), 0, "no results");
+
+    # remove_note_from_index
+    var e4 = mneme_search_engine_in_memory();
+    var id4 = mneme_core_uuid_v4();
+    mneme_search_engine_index_note(e4, id4, str_from("Temporary"), str_from("Will be removed"), vec_new(), str_from("temp.md"));
+    assert_eq(vec_len(mneme_search_engine_search(e4, str_from("temporary"), 10)), 1, "found before remove");
+    mneme_search_engine_remove_note(e4, id4);
+    assert_eq(vec_len(mneme_search_engine_search(e4, str_from("temporary"), 10)), 0, "gone after remove");
+
+    # reindex_updates_content
+    var e5 = mneme_search_engine_in_memory();
+    var id5 = mneme_core_uuid_v4();
+    mneme_search_engine_index_note(e5, id5, str_from("Original"), str_from("old content about cats"), vec_new(), str_from("note.md"));
+    assert_eq(vec_len(mneme_search_engine_search(e5, str_from("cats"), 10)), 1, "cats before reindex");
+    mneme_search_engine_index_note(e5, id5, str_from("Updated"), str_from("new content about dogs"), vec_new(), str_from("note.md"));
+    assert_eq(vec_len(mneme_search_engine_search(e5, str_from("cats"), 10)), 0, "cats gone after reindex");
+    assert_eq(vec_len(mneme_search_engine_search(e5, str_from("dogs"), 10)), 1, "dogs after reindex");
+
+    # multiple_notes_ranked
+    var e6 = mneme_search_engine_in_memory();
+    mneme_search_engine_index_note(e6, mneme_core_uuid_v4(), str_from("Rust Guide"), str_from("A comprehensive guide to Rust programming language"), _tags1(str_from("rust")), str_from("rust-guide.md"));
+    mneme_search_engine_index_note(e6, mneme_core_uuid_v4(), str_from("Python Guide"), str_from("Python is a dynamic language"), _tags1(str_from("python")), str_from("python.md"));
+    mneme_search_engine_index_note(e6, mneme_core_uuid_v4(), str_from("Rust vs Go"), str_from("Comparing Rust and Go for systems programming"), _tags2(str_from("rust"), str_from("go")), str_from("rust-vs-go.md"));
+    var r6 = mneme_search_engine_search(e6, str_from("rust"), 10);
+    assert_eq(vec_len(r6), 2, "two rust results");
+    assert_eq(_any_title_eq(r6, "Python Guide"), 0, "python not in results");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

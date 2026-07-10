@@ -1,0 +1,227 @@
+# mneme-search — full-text search engine (ported from rust-old/crates/mneme-search/src/engine.rs)
+# Tantivy has no Cyrius analog, so this is a BUILD-IN-MNEME inverted index:
+# tokenize (lowercase, alnum runs) across title+body+tags → term→postings(doc-id set);
+# search = OR-match query terms, rank by #matched terms (Tantivy's exact BM25 scores
+# aren't observable in the tests, which check membership + counts). Requires core_uuid.
+
+fn _fte_is_alnum(c): i64 { if ((c >= 48 && c <= 57) || (c >= 97 && c <= 122) || (c >= 65 && c <= 90)) { return 1; } return 0; }
+fn _fte_lower(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c >= 65 && c <= 90) { store8(buf + i, c + 32); } else { store8(buf + i, c); }
+        i = i + 1;
+    }
+    return str_new(buf, n);
+}
+fn _fte_tokenize(text: Str): i64 {
+    var out = vec_new();
+    var n = str_len(text);
+    var d = str_data(text);
+    var i = 0;
+    while (i < n) {
+        while (i < n && _fte_is_alnum(load8(d + i)) == 0) { i = i + 1; }
+        var start = i;
+        while (i < n && _fte_is_alnum(load8(d + i)) == 1) { i = i + 1; }
+        if (i > start) { vec_push(out, _fte_lower(str_substr(text, start, i))); }
+    }
+    return out;
+}
+fn _fte_vec_has_str(v, s: Str): i64 {
+    var i = 0;
+    while (i < vec_len(v)) { if (str_eq(vec_get(v, i), s) == 1) { return 1; } i = i + 1; }
+    return 0;
+}
+fn _fte_unique_terms(text: Str): i64 {
+    var toks = _fte_tokenize(text);
+    var out = vec_new();
+    var i = 0;
+    while (i < vec_len(toks)) {
+        var t = vec_get(toks, i);
+        if (_fte_vec_has_str(out, t) == 0) { vec_push(out, t); }
+        i = i + 1;
+    }
+    return out;
+}
+fn _fte_combined(title: Str, body: Str, tags): i64 {
+    var sb = str_builder_new();
+    str_builder_add(sb, title);
+    str_builder_putc(sb, 32);
+    str_builder_add(sb, body);
+    var i = 0;
+    while (i < vec_len(tags)) {
+        str_builder_putc(sb, 32);
+        str_builder_add(sb, vec_get(tags, i));
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+
+# Doc (40): [id@0, title@8, body@16, tags_joined@24, path@32]
+# SearchEngine (24): [docs@0 (map_u64 id->Doc), inverted@8 (map_str term->vec<id>), doc_ids@16 (vec<id>)]
+fn mneme_search_engine_in_memory(): i64 {
+    var e = alloc(24);
+    store64(e, map_u64_new());
+    store64(e + 8, map_new_str());
+    store64(e + 16, vec_new());
+    return e;
+}
+
+fn mneme_search_engine_remove_note(e, id): i64 {
+    var docs = load64(e);
+    var doc = map_u64_get_or(docs, id, 0);
+    if (doc == 0) { return 0; }
+    var inverted = load64(e + 8);
+    var terms = _fte_unique_terms(_fte_combined_doc(doc));
+    var t = 0;
+    while (t < vec_len(terms)) {
+        var term = vec_get(terms, t);
+        var postings = map_get(inverted, term);
+        if (postings != 0) {
+            var kept = vec_new();
+            var p = 0;
+            while (p < vec_len(postings)) {
+                if (mneme_core_uuid_eq(vec_get(postings, p), id) == 0) { vec_push(kept, vec_get(postings, p)); }
+                p = p + 1;
+            }
+            map_set(inverted, term, kept);
+        }
+        t = t + 1;
+    }
+    map_u64_delete(docs, id);
+    var dids = load64(e + 16);
+    var kept2 = vec_new();
+    var i = 0;
+    while (i < vec_len(dids)) {
+        if (mneme_core_uuid_eq(vec_get(dids, i), id) == 0) { vec_push(kept2, vec_get(dids, i)); }
+        i = i + 1;
+    }
+    store64(e + 16, kept2);
+    return 0;
+}
+# doc's combined text (from its stored fields) for re-tokenization
+fn _fte_combined_doc(doc): i64 {
+    var sb = str_builder_new();
+    str_builder_add(sb, load64(doc + 8));    # title
+    str_builder_putc(sb, 32);
+    str_builder_add(sb, load64(doc + 16));   # body
+    str_builder_putc(sb, 32);
+    str_builder_add(sb, load64(doc + 24));   # tags_joined
+    return str_builder_build(sb);
+}
+
+fn mneme_search_engine_index_note(e, id, title: Str, body: Str, tags, path: Str): i64 {
+    var docs = load64(e);
+    if (map_u64_get_or(docs, id, 0) != 0) { mneme_search_engine_remove_note(e, id); }
+    var tj = str_builder_new();
+    var ti = 0;
+    while (ti < vec_len(tags)) {
+        if (ti > 0) { str_builder_putc(tj, 32); }
+        str_builder_add(tj, vec_get(tags, ti));
+        ti = ti + 1;
+    }
+    var tags_joined = str_builder_build(tj);
+    var doc = alloc(40);
+    store64(doc, id);
+    store64(doc + 8, title);
+    store64(doc + 16, body);
+    store64(doc + 24, tags_joined);
+    store64(doc + 32, path);
+    map_u64_set(docs, id, doc);
+    vec_push(load64(e + 16), id);
+    var inverted = load64(e + 8);
+    var terms = _fte_unique_terms(_fte_combined(title, body, tags));
+    var t = 0;
+    while (t < vec_len(terms)) {
+        var term = vec_get(terms, t);
+        var postings = map_get(inverted, term);
+        if (postings == 0) { postings = vec_new(); map_set(inverted, term, postings); }
+        vec_push(postings, id);
+        t = t + 1;
+    }
+    return 0;
+}
+
+# SearchResult (40): [note_id@0, title@8, path@16, snippet@24, score@32]
+fn mneme_search_result_note_id(r): i64 { return load64(r); }
+fn mneme_search_result_title(r): i64 { return load64(r + 8); }
+fn mneme_search_result_path(r): i64 { return load64(r + 16); }
+fn mneme_search_result_snippet(r): i64 { return load64(r + 24); }
+fn mneme_search_result_score(r): i64 { return load64(r + 32); }
+fn _fte_snippet(body: Str): i64 {
+    if (str_len(body) > 200) {
+        var sb = str_builder_new();
+        str_builder_add(sb, str_substr(body, 0, 200));
+        str_builder_add_cstr(sb, "...");
+        return str_builder_build(sb);
+    }
+    return body;
+}
+
+fn mneme_search_engine_search(e, query: Str, limit): i64 {
+    var inverted = load64(e + 8);
+    var docs = load64(e);
+    var qterms = _fte_unique_terms(query);
+    var scores = map_u64_new();
+    var qi = 0;
+    while (qi < vec_len(qterms)) {
+        var postings = map_get(inverted, vec_get(qterms, qi));
+        if (postings != 0) {
+            var p = 0;
+            while (p < vec_len(postings)) {
+                var did = vec_get(postings, p);
+                map_u64_set(scores, did, map_u64_get_or(scores, did, 0) + 1);
+                p = p + 1;
+            }
+        }
+        qi = qi + 1;
+    }
+    # candidates: engine doc_ids with score > 0
+    var cands = vec_new();
+    var dids = load64(e + 16);
+    var i = 0;
+    while (i < vec_len(dids)) {
+        var did = vec_get(dids, i);
+        var sc = map_u64_get_or(scores, did, 0);
+        if (sc > 0) {
+            var pair = alloc(16);
+            store64(pair, did);
+            store64(pair + 8, sc);
+            vec_push(cands, pair);
+        }
+        i = i + 1;
+    }
+    # sort by score desc (stable insertion via bubble)
+    var m = vec_len(cands);
+    var a = 0;
+    while (a < m) {
+        var b = 0;
+        while (b + 1 + a < m) {
+            if (load64(vec_get(cands, b + 1) + 8) > load64(vec_get(cands, b) + 8)) {
+                var tmp = vec_get(cands, b);
+                vec_set(cands, b, vec_get(cands, b + 1));
+                vec_set(cands, b + 1, tmp);
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    var results = vec_new();
+    var k = 0;
+    while (k < vec_len(cands) && k < limit) {
+        var did2 = load64(vec_get(cands, k));
+        var doc = map_u64_get_or(docs, did2, 0);
+        var r = alloc(40);
+        store64(r, did2);
+        store64(r + 8, load64(doc + 8));            # title
+        store64(r + 16, load64(doc + 32));          # path
+        store64(r + 24, _fte_snippet(load64(doc + 16)));  # snippet
+        store64(r + 32, load64(vec_get(cands, k) + 8));   # score
+        vec_push(results, r);
+        k = k + 1;
+    }
+    return results;
+}
