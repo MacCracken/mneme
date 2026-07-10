@@ -82,6 +82,10 @@ enum SysNrAgnos {
     SYS_READLINK   = 70;          # readlink(path, pathlen, buf, buflen) → target bytes / -1 (a4=r10).
     #   Symlink-INTROSPECTION peer of SYS_SYMLINK=63: reads the link's TEXT target NO-FOLLOW into
     #   buf (≤ buflen, NOT NUL-terminated); -1 if path absent / not a symlink / target > buflen / non-ext2.
+    SYS_SHM_CREATE = 71;          # shm_create(size) → id (>=1) / -1 — kernel-owned COPY-based shared buffer
+    SYS_SHM_WRITE  = 72;          # shm_write(id, user_src, size) → 0 / -1
+    SYS_SHM_READ   = 73;          # shm_read(id, user_dst, size)  → 0 / -1
+    SYS_SHM_FREE   = 74;          # shm_free(id) → 0 / -1
 }
 
 # ================================================================
@@ -485,6 +489,21 @@ fn sys_symlink(target, targetlen, linkpath, linkpathlen): i64 {
 fn sys_readlink(path, pathlen, buf, buflen): i64 {
     return syscall(SYS_READLINK, path, pathlen, buf, buflen);
 }
+
+# ---- agnos shm band (#71-74): COPY-based, kernel-owned shared buffer (agnos 1.53.9). A writer
+# sys_shm_write#72s a buffer, hands the 1-based id over its own IPC, a reader sys_shm_read#73s it —
+# no page mapping, no socket streaming (single-core present without the sock_send preemption deadlock
+# or the proc_free_address_space use-after-free). Backs the setu shared-buffer present
+# (setu/src/buf.cyr). ids are 1-based (0 = the setu "inline" sentinel); size ≤ 2 MB (one pmm page).
+# agnos-kernel-only — no host twin; a portable "shared buffer" keeps its own per-target split.
+# (issue 2026-07-09-agnos-sys-shm-peers.)
+fn sys_shm_create(size): i64         { return syscall(SYS_SHM_CREATE, size); }
+# shm_write(id, src, size) — copy user src → buffer id (is_user_range'd) → 0 / -1.
+fn sys_shm_write(id, src, size): i64 { return syscall(SYS_SHM_WRITE, id, src, size); }
+# shm_read(id, dst, size) — copy buffer id → user dst (is_user_range'd) → 0 / -1.
+fn sys_shm_read(id, dst, size): i64  { return syscall(SYS_SHM_READ, id, dst, size); }
+# shm_free(id) — release the buffer's page + slot → 0 / -1.
+fn sys_shm_free(id): i64             { return syscall(SYS_SHM_FREE, id); }
 
 # ---- agnos HDA audio band (#64-69) — the ring-3 half of the agnos 1.52.x Gate-2
 # freeze (kernel handlers land in parallel). Single frozen format: 48000 Hz / S16 /

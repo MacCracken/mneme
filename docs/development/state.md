@@ -10,7 +10,7 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
 
 ## Toolchain
 
-- **Cyrius pin**: `6.4.33` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.4.34` (in `cyrius.cyml [package].cyrius`)
 
 ## Source
 
