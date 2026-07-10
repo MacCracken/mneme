@@ -1,0 +1,67 @@
+# mneme benchmarks — the hot paths of the ported subsystems (uuid, tokenization,
+# vector distance, full-text BM25 search). Run: cyrius bench benches/mneme_bench.bcyr
+include "src/core_uuid.cyr"
+include "src/ai_concepts.cyr"
+include "src/ai_clustering.cyr"
+include "src/search_engine.cyr"
+
+fn _e3(a, b, c): i64 {
+    var v = vec_new();
+    vec_push(v, a);
+    vec_push(v, b);
+    vec_push(v, c);
+    return v;
+}
+
+fn main(): i64 {
+    alloc_init();
+
+    # uuid v4 generation (random)
+    var b1 = bench_new("core_uuid_v4");
+    bench_batch_start(b1);
+    var i = 0;
+    while (i < 200000) { mneme_core_uuid_v4(); i = i + 1; }
+    bench_batch_stop(b1, 200000);
+    bench_report(b1);
+
+    # concept tokenizer (lowercase + split + stopword filter)
+    var text = str_from("Rust is a systems programming language focused on safety and zero-cost abstractions and pattern matching");
+    var b2 = bench_new("ai_tokenize");
+    bench_batch_start(b2);
+    i = 0;
+    while (i < 100000) { mneme_ai_tokenize(text); i = i + 1; }
+    bench_batch_stop(b2, 100000);
+    bench_report(b2);
+
+    # squared distance over 3-d f64 vectors (k-means / cosine inner loop)
+    var va = _e3(f64_from(1), f64_parse("0.5"), f64_from(0));
+    var vb = _e3(f64_from(0), f64_parse("0.5"), f64_from(1));
+    var b3 = bench_new("squared_distance_3d");
+    bench_batch_start(b3);
+    i = 0;
+    while (i < 1000000) { mneme_ai_squared_distance(va, vb); i = i + 1; }
+    bench_batch_stop(b3, 1000000);
+    bench_report(b3);
+
+    # full-text BM25 search over a small index
+    var eng = mneme_search_engine_in_memory();
+    var j = 0;
+    while (j < 200) {
+        var tb = str_builder_new();
+        str_builder_add_cstr(tb, "note about rust programming ");
+        str_builder_add_int(tb, j);
+        mneme_search_engine_index_note(eng, mneme_core_uuid_v4(), str_builder_build(tb), str_from("systems language memory safety ownership borrow checker"), vec_new(), str_from("n.md"));
+        j = j + 1;
+    }
+    var b4 = bench_new("bm25_search_200docs");
+    bench_batch_start(b4);
+    i = 0;
+    while (i < 20000) { mneme_search_engine_search(eng, str_from("rust memory"), 10); i = i + 1; }
+    bench_batch_stop(b4, 20000);
+    bench_report(b4);
+
+    return 0;
+}
+
+var r = main();
+syscall(60, r);

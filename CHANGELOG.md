@@ -2,6 +2,51 @@
 
 All notable changes to Mneme will be documented in this file.
 
+## [1.0.0] — 2026-07-10
+
+**Full Rust → Cyrius port.** The entire 21,014-LOC Rust workspace (`rust-old/`, the
+frozen parity oracle) is reimplemented in pure Cyrius, targeting AgnosticOS. Every
+test-bearing Rust module is mirrored 1:1; **61 `.tcyr` files, all green**.
+
+### Ported subsystems
+- **mneme-core** — tag, frontmatter, note, link, graph, plugin, calendar, task,
+  config (+ a `core_uuid` v4/v5 helper). TOML/JSON via `bayan`.
+- **mneme-store** — `patra` (embedded SQL) DB, file store with real SHA-256 (`sigil`),
+  versioning, sharing, registry, vault, multi-vault manager.
+- **mneme-search** — built-from-scratch BM25 inverted index (no Tantivy analog),
+  brute-force cosine vector store (no usearch analog), query DSL, RRF hybrid merge,
+  Thompson-sampling retrieval optimizer, context buffer, cross-vault, semantic engine.
+- **mneme-ai** — concepts, tagger, temporal, templates, training-export, deterministic
+  K-means++ clustering, RAG-eval, consolidation, summarizer, linker, event bus, rag,
+  writer, flashcards (SM-2), translator, qa-bridge, multimodal, creative, daimon client.
+- **mneme-mcp** — MCP 2.0 protocol (JSON-RPC + 8 tool schemas) + full tool dispatch,
+  tested end-to-end against a real on-disk vault.
+- **mneme-api** — the complete HTTP surface as an in-process router (notes CRUD,
+  search, tags, AI endpoints, templates, tasks, calendar, flashcards, clip, plugins,
+  PDF export); all 30 integration cases pass via `tower::oneshot`-style dispatch.
+- **mneme-ui (TUI)** — app state, all 9 panel renderers (line-buffer; no ratatui
+  analog), key-event dispatch, and a real terminal adapter. `src/main.cyr` builds to
+  a working TUI binary.
+
+### Live bridges (over the sovereign stack)
+- **HTTP via `sandhi`** — daimon REST client (`/health`, `/v1/rag/*`) + remote
+  embeddings (`POST /v1/embeddings`), wired into the embedding backend via an fnptr
+  hook; runs on AGNOS over `sock_connect`/`send`/`recv`; graceful-degrades.
+- **Terminal** — ANSI console render + stdin key decode over `sys_write`/`sys_read`.
+
+### Hand-rolled (pending sovereign-library migration)
+- Markdown→HTML subset and a valid multi-page PDF writer (`io_export_pdf`,
+  catalog/pages/font + byte-accurate xref) — migrate to `bayan_markdown_*` /
+  `bayan_pdf_*` when they ship (both on bayan's roadmap).
+
+### Not yet ported (P2 backlog)
+- Local in-process ONNX inference — lands with the sovereign ML stack (akshara →
+  rosnet → rupantara → tula → anukulana). Remote embeddings cover the path meanwhile.
+
+### Notes
+- Toolchain pinned to Cyrius `6.4.42`. Benchmarks in `docs/benchmarks.md`; security
+  audit in `docs/audit/2026-07-10-audit.md`.
+
 ## [2026.3.18] — 2026-03-18
 
 ### Build & CI

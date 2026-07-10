@@ -5,7 +5,7 @@
 
 ## Version
 
-**0.1.0** — ported from Rust (2026-07-09) via `cyrius port`. **21,014 lines** of
+**1.0.0** — ported from Rust (2026-07-09) via `cyrius port`. **21,014 lines** of
 Rust preserved at `rust-old/` (the full original workspace) for parity reference.
 
 ## Toolchain
@@ -74,10 +74,10 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
       stdin key decoder (`sys_read` fd 0, arrow/ctrl escape sequences) + the event
       loop. `src/main.cyr` is now the real TUI entry (`cyrius build` → a working
       binary) that installs the embedding hook and runs the loop.
-  - **Still deferred:** local ONNX inference (`build_local` → the sovereign ML
-    stack akshara/rosnet/rupantara) — the only remaining external bridge. The AI
-    modules keep their local fallbacks (the daimon client is available for
-    higher-level dispatch when wired).
+  - **Port complete.** The only bridged-out path is **local ONNX inference**
+    (`build_local` → sovereign ML stack akshara/rosnet/rupantara), now a **P2
+    backlog** item that lands with the ML-AI stack as a whole. Remote embeddings
+    (daimon) cover the path meanwhile; the AI modules keep their local fallbacks.
 
 Note: `search_semantic_engine`'s functions were renamed to the
 `mneme_search_semantic_engine_*` namespace (they previously shared
@@ -112,6 +112,8 @@ tls, ws, async, atomic, sandhi, fdlopen, dynlib, mmap, freelist, process, sakshi
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Pure logic + network/terminal bridges are complete.
-Remaining: local ONNX inference (sovereign ML stack), and optional higher-level
-AI-module → daimon dispatch (modules currently prefer their local fallbacks).
+Port complete — pure logic, the full API surface, the TUI, and the network/terminal
+bridges are all done and green. Everything remaining is [`roadmap.md`](roadmap.md)
+P2 backlog: local ONNX inference (lands with the ML-AI stack), `bayan_markdown`/
+`bayan_pdf` migration, and minor polish (canonical uuid string, graph layout,
+RFC3339 datetime).

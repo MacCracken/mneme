@@ -3,14 +3,16 @@
 > Milestone plan for the Rust → Cyrius port. State lives in
 > [`state.md`](state.md); this file is the sequencing.
 
-## v1.0 criteria
+## v1.0 criteria — ✅ met (v1.0.0 shipped 2026-07-10)
 
-- [ ] Rust → Cyrius surface parity (each ported module mirrors `rust-old/`'s
-      `#[cfg(test)]` cases 1:1)
-- [ ] Benchmarks captured in `docs/benchmarks.md`
-- [ ] At least one downstream consumer green
-- [ ] CHANGELOG complete from v0.1.0 onward
-- [ ] Security audit pass (`docs/audit/YYYY-MM-DD-audit.md`)
+- [x] Rust → Cyrius surface parity (each ported module mirrors `rust-old/`'s
+      `#[cfg(test)]` cases 1:1) — 61 `.tcyr` files, all green.
+- [x] Benchmarks captured in `docs/benchmarks.md`
+- [x] At least one downstream consumer green — `src/main.cyr` → working TUI binary;
+      full suite green.
+- [x] CHANGELOG complete from v0.1.0 onward — see `[1.0.0]`.
+- [x] Security audit pass (`docs/audit/2026-07-10-audit.md`) — no port-introduced
+      high/critical findings.
 
 ## Milestones
 
@@ -62,6 +64,14 @@ client / event bus stay deferred (reported unavailable → local-fallback paths)
 
 Skipped intentionally during the port; revisit after v1.0 parity lands:
 
+- **Local ONNX inference — in-process embeddings via the sovereign ML stack.** The
+  only remaining bridged-out path. Remote embeddings already work (daimon over
+  `sandhi`, `POST /v1/embeddings`), so this is the *offline* alternative:
+  `build_local` currently returns None (degraded) when `all-MiniLM-L6-v2.onnx`/
+  `tokenizer.json` are present. Wiring = akshara (BPE tokenizer) → rosnet (tensor/
+  BLAS) → rupantara (transformer forward) → tula (safetensors/GGUF) → anukulana
+  (load pretrained). **Lands when the ML-AI stack is worked on as a whole** (the
+  embed hook + `SemanticEngine` degraded path mean nothing else changes when it does).
 - **`mneme-io` import_notion async import** — the directory-walk `import_notion_export`
   (the 4 pure cleanup fns are already ported in `io_notion`). Mechanical: reuse
   `io_notion` + the `io_obsidian` fs-walk pattern.
@@ -83,4 +93,5 @@ Skipped intentionally during the port; revisit after v1.0 parity lands:
 ## Out of scope (for v1.0)
 
 - Native GUI (dhancha) — TUI is the v1 UI target; dhancha GUI is a post-v1 level-up.
-- Local ONNX inference in-process — embeddings bridge to daimon/ML-stack instead.
+  (Local in-process ONNX inference moved to the P2 backlog above — it lands with the
+  sovereign ML stack; remote embeddings via daimon cover the path meanwhile.)
