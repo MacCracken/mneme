@@ -1,0 +1,261 @@
+# mneme-io — HTML export (ported from rust-old/crates/mneme-io/src/export_html.rs)
+# comrak markdown_to_html → a hand-rolled markdown SUBSET (per the markdown decision):
+# headings, paragraphs, lists, and inline **bold**/*italic*/`code`/[links]. Writes a
+# static site (index + per-note pages + css). Async #[tokio::test]s → sync.
+
+var _EH_CSS = "body{font-family:system-ui,sans-serif;max-width:960px;margin:0 auto;padding:2rem}";
+
+fn _eh_cstr(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(s), n);
+    store8(buf + n, 0);
+    return buf;
+}
+fn _eh_mkdir_p(dir: Str): i64 {
+    var n = str_len(dir);
+    var d = str_data(dir);
+    var i = 1;
+    while (i <= n) {
+        if (i == n || load8(d + i) == 47) { sys_mkdir(_eh_cstr(str_substr(dir, 0, i)), 493); }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _eh_write(dir: Str, name: Str, content: Str): i64 {
+    return file_write_all(_eh_cstr(path_join(dir, name)), str_data(content), str_len(content));
+}
+fn _md_find1(d, start, n, ch): i64 {
+    var i = start;
+    while (i < n) { if (load8(d + i) == ch) { return i; } i = i + 1; }
+    return 0 - 1;
+}
+fn _md_find2(d, start, n, a, b): i64 {
+    var i = start;
+    while (i + 1 < n) { if (load8(d + i) == a && load8(d + i + 1) == b) { return i; } i = i + 1; }
+    return 0 - 1;
+}
+
+# ExportOptions (24): [site_title@0, include_tags@8, include_backlinks@16]
+fn mneme_io_export_options_default(): i64 {
+    var o = alloc(24);
+    store64(o, str_from("Mneme"));
+    store64(o + 8, 1);
+    store64(o + 16, 1);
+    return o;
+}
+# ExportNote (40): [title@0, slug@8, content_md@16, tags@24, backlink_titles@32]
+fn mneme_io_export_note_new(title: Str, slug: Str, content_md: Str, tags, backlinks): i64 {
+    var e = alloc(40);
+    store64(e, title);
+    store64(e + 8, slug);
+    store64(e + 16, content_md);
+    store64(e + 24, tags);
+    store64(e + 32, backlinks);
+    return e;
+}
+fn mneme_io_export_note_title(e): i64 { return load64(e); }
+fn mneme_io_export_note_slug(e): i64 { return load64(e + 8); }
+fn mneme_io_export_note_content_md(e): i64 { return load64(e + 16); }
+fn mneme_io_export_note_tags(e): i64 { return load64(e + 24); }
+fn mneme_io_export_note_backlinks(e): i64 { return load64(e + 32); }
+
+# escape & < > " (single scan, order-correct — & first)
+fn mneme_io_html_escape(s: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c == 38) { str_builder_add_cstr(sb, "&amp;"); }
+        elif (c == 60) { str_builder_add_cstr(sb, "&lt;"); }
+        elif (c == 62) { str_builder_add_cstr(sb, "&gt;"); }
+        elif (c == 34) { str_builder_add_cstr(sb, "&quot;"); }
+        else { str_builder_putc(sb, c); }
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+
+# inline markdown -> HTML (**bold**, *italic*, `code`, [text](url))
+fn _md_inline(s: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c == 42 && i + 1 < n && load8(d + i + 1) == 42) {
+            var close = _md_find2(d, i + 2, n, 42, 42);
+            if (close >= 0) {
+                str_builder_add_cstr(sb, "<strong>");
+                str_builder_add(sb, str_substr(s, i + 2, close));
+                str_builder_add_cstr(sb, "</strong>");
+                i = close + 2;
+            } else { str_builder_putc(sb, c); i = i + 1; }
+        } elif (c == 42) {
+            var e1 = _md_find1(d, i + 1, n, 42);
+            if (e1 >= 0) {
+                str_builder_add_cstr(sb, "<em>");
+                str_builder_add(sb, str_substr(s, i + 1, e1));
+                str_builder_add_cstr(sb, "</em>");
+                i = e1 + 1;
+            } else { str_builder_putc(sb, c); i = i + 1; }
+        } elif (c == 96) {
+            var e2 = _md_find1(d, i + 1, n, 96);
+            if (e2 >= 0) {
+                str_builder_add_cstr(sb, "<code>");
+                str_builder_add(sb, str_substr(s, i + 1, e2));
+                str_builder_add_cstr(sb, "</code>");
+                i = e2 + 1;
+            } else { str_builder_putc(sb, c); i = i + 1; }
+        } elif (c == 91) {
+            var rb = _md_find1(d, i + 1, n, 93);
+            var done = 0;
+            if (rb >= 0 && rb + 1 < n && load8(d + rb + 1) == 40) {
+                var rp = _md_find1(d, rb + 2, n, 41);
+                if (rp >= 0) {
+                    str_builder_add_cstr(sb, "<a href=\"");
+                    str_builder_add(sb, str_substr(s, rb + 2, rp));
+                    str_builder_add_cstr(sb, "\">");
+                    str_builder_add(sb, str_substr(s, i + 1, rb));
+                    str_builder_add_cstr(sb, "</a>");
+                    i = rp + 1;
+                    done = 1;
+                }
+            }
+            if (done == 0) { str_builder_putc(sb, c); i = i + 1; }
+        } else { str_builder_putc(sb, c); i = i + 1; }
+    }
+    return str_builder_build(sb);
+}
+fn _md_render_block(sb, block: Str): i64 {
+    var n = str_len(block);
+    var d = str_data(block);
+    if (n >= 4 && load8(d) == 35 && load8(d + 1) == 35 && load8(d + 2) == 35 && load8(d + 3) == 32) {
+        str_builder_add_cstr(sb, "<h3>"); str_builder_add(sb, _md_inline(str_substr(block, 4, n))); str_builder_add_cstr(sb, "</h3>");
+    } elif (n >= 3 && load8(d) == 35 && load8(d + 1) == 35 && load8(d + 2) == 32) {
+        str_builder_add_cstr(sb, "<h2>"); str_builder_add(sb, _md_inline(str_substr(block, 3, n))); str_builder_add_cstr(sb, "</h2>");
+    } elif (n >= 2 && load8(d) == 35 && load8(d + 1) == 32) {
+        str_builder_add_cstr(sb, "<h1>"); str_builder_add(sb, _md_inline(str_substr(block, 2, n))); str_builder_add_cstr(sb, "</h1>");
+    } elif (n >= 2 && load8(d) == 45 && load8(d + 1) == 32) {
+        str_builder_add_cstr(sb, "<ul>");
+        var start = 0;
+        var i = 0;
+        while (i <= n) {
+            var isend = 0;
+            if (i == n) { isend = 1; } elif (load8(d + i) == 10) { isend = 1; }
+            if (isend == 1) {
+                var line = str_trim(str_substr(block, start, i));
+                if (str_len(line) >= 2 && load8(str_data(line)) == 45) {
+                    str_builder_add_cstr(sb, "<li>");
+                    str_builder_add(sb, _md_inline(str_substr(line, 2, str_len(line))));
+                    str_builder_add_cstr(sb, "</li>");
+                }
+                start = i + 1;
+            }
+            i = i + 1;
+        }
+        str_builder_add_cstr(sb, "</ul>");
+    } else {
+        str_builder_add_cstr(sb, "<p>"); str_builder_add(sb, _md_inline(block)); str_builder_add_cstr(sb, "</p>");
+    }
+    return 0;
+}
+# markdown -> HTML (blocks separated by blank lines)
+fn mneme_io_markdown_to_html(md: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(md);
+    var d = str_data(md);
+    var start = 0;
+    var i = 0;
+    while (i < n) {
+        if (i + 1 < n && load8(d + i) == 10 && load8(d + i + 1) == 10) {
+            var block = str_trim(str_substr(md, start, i));
+            if (str_len(block) > 0) { _md_render_block(sb, block); }
+            i = i + 2;
+            start = i;
+        } else { i = i + 1; }
+    }
+    var last = str_trim(str_substr(md, start, n));
+    if (str_len(last) > 0) { _md_render_block(sb, last); }
+    return str_builder_build(sb);
+}
+
+fn _eh_render_index(notes, opts): i64 {
+    var links = str_builder_new();
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var note = vec_get(notes, i);
+        str_builder_add_cstr(links, "    <li><a href=\"");
+        str_builder_add(links, mneme_io_export_note_slug(note));
+        str_builder_add_cstr(links, ".html\">");
+        str_builder_add(links, mneme_io_html_escape(mneme_io_export_note_title(note)));
+        str_builder_add_cstr(links, "</a></li>\n");
+        i = i + 1;
+    }
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>");
+    str_builder_add(sb, mneme_io_html_escape(load64(opts)));
+    str_builder_add_cstr(sb, "</title>\n<link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n<header><h1>");
+    str_builder_add(sb, mneme_io_html_escape(load64(opts)));
+    str_builder_add_cstr(sb, "</h1></header>\n<main>\n<h2>Notes (");
+    str_builder_add_int(sb, vec_len(notes));
+    str_builder_add_cstr(sb, ")</h2>\n<ul class=\"note-list\">\n");
+    str_builder_add(sb, str_builder_build(links));
+    str_builder_add_cstr(sb, "</ul>\n</main>\n</body>\n</html>");
+    return str_builder_build(sb);
+}
+fn _eh_render_note(note, opts): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>");
+    str_builder_add(sb, mneme_io_html_escape(mneme_io_export_note_title(note)));
+    str_builder_add_cstr(sb, "</title>\n<link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n<header><a href=\"index.html\">← Back</a><h1>");
+    str_builder_add(sb, mneme_io_html_escape(mneme_io_export_note_title(note)));
+    str_builder_add_cstr(sb, "</h1></header>\n<div class=\"layout\"><main>");
+    str_builder_add(sb, mneme_io_markdown_to_html(mneme_io_export_note_content_md(note)));
+    str_builder_add_cstr(sb, "</main><aside>");
+    var tags = mneme_io_export_note_tags(note);
+    if (load64(opts + 8) == 1 && vec_len(tags) > 0) {
+        str_builder_add_cstr(sb, "<div class=\"sidebar-section\"><h3>Tags</h3><ul>");
+        var t = 0;
+        while (t < vec_len(tags)) {
+            str_builder_add_cstr(sb, "<li class=\"tag\">#");
+            str_builder_add(sb, vec_get(tags, t));
+            str_builder_add_cstr(sb, "</li>");
+            t = t + 1;
+        }
+        str_builder_add_cstr(sb, "</ul></div>");
+    }
+    var bls = mneme_io_export_note_backlinks(note);
+    if (load64(opts + 16) == 1 && vec_len(bls) > 0) {
+        str_builder_add_cstr(sb, "<div class=\"sidebar-section\"><h3>Backlinks</h3><ul>");
+        var b = 0;
+        while (b < vec_len(bls)) {
+            str_builder_add_cstr(sb, "<li>← ");
+            str_builder_add(sb, mneme_io_html_escape(vec_get(bls, b)));
+            str_builder_add_cstr(sb, "</li>");
+            b = b + 1;
+        }
+        str_builder_add_cstr(sb, "</ul></div>");
+    }
+    str_builder_add_cstr(sb, "</aside></div>\n</body>\n</html>");
+    return str_builder_build(sb);
+}
+# export a static site; returns notes.len + 1 (notes + index)
+fn mneme_io_export_to_html(notes, output_dir: Str, opts): i64 {
+    _eh_mkdir_p(output_dir);
+    _eh_write(output_dir, str_from("index.html"), _eh_render_index(notes, opts));
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var note = vec_get(notes, i);
+        var fname = str_builder_new();
+        str_builder_add(fname, mneme_io_export_note_slug(note));
+        str_builder_add_cstr(fname, ".html");
+        _eh_write(output_dir, str_builder_build(fname), _eh_render_note(note, opts));
+        i = i + 1;
+    }
+    _eh_write(output_dir, str_from("style.css"), str_from(_EH_CSS));
+    return vec_len(notes) + 1;
+}

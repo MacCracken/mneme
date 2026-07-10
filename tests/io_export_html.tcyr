@@ -1,0 +1,57 @@
+# mneme-io HTML export tests — ported 1:1 from rust-old/crates/mneme-io/src/export_html.rs.
+include "src/io_export_html.cyr"
+
+var _ehn = 0;
+fn _fresh_dir(): i64 {
+    _ehn = _ehn + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_eh");
+    str_builder_add_int(pb, _ehn);
+    return str_builder_build(pb);
+}
+fn _read(path: Str): i64 {
+    var buf = alloc(262144);
+    var n = file_read_all(_eh_cstr(path), buf, 262144);
+    if (n < 0) { n = 0; }
+    return str_new(buf, n);
+}
+
+fn main() {
+    alloc_init();
+    test_group("io_export_html");
+
+    # html_escape_special_chars (pure)
+    assert(str_eq(mneme_io_html_escape(str_from("<script>alert('xss')")), str_from("&lt;script&gt;alert('xss')")), "escape < > keep '");
+    assert(str_eq(mneme_io_html_escape(str_from("A & B")), str_from("A &amp; B")), "escape &");
+
+    # export_basic_site
+    var d1 = _fresh_dir();
+    var notes = vec_new();
+    vec_push(notes, mneme_io_export_note_new(str_from("First Note"), str_from("first-note"), str_from("# Hello\n\nThis is **bold**."), _v1_tags(), vec_new()));
+    vec_push(notes, mneme_io_export_note_new(str_from("Second Note"), str_from("second-note"), str_from("Another note with [a link](first-note.html)."), vec_new(), _v1_back()));
+    var count = mneme_io_export_to_html(notes, d1, mneme_io_export_options_default());
+    assert_eq(count, 3, "count = notes + index");
+    assert_eq(file_exists(_eh_cstr(path_join(d1, str_from("index.html")))), 1, "index exists");
+    assert_eq(file_exists(_eh_cstr(path_join(d1, str_from("first-note.html")))), 1, "first-note exists");
+    assert_eq(file_exists(_eh_cstr(path_join(d1, str_from("second-note.html")))), 1, "second-note exists");
+    assert_eq(file_exists(_eh_cstr(path_join(d1, str_from("style.css")))), 1, "css exists");
+    var index = _read(path_join(d1, str_from("index.html")));
+    assert(str_contains(index, str_from("first-note.html")), "index has link");
+    assert(str_contains(index, str_from("First Note")), "index has title");
+
+    # export_renders_markdown
+    var d2 = _fresh_dir();
+    var notes2 = vec_new();
+    vec_push(notes2, mneme_io_export_note_new(str_from("MD Test"), str_from("md-test"), str_from("**bold** and *italic*"), vec_new(), vec_new()));
+    mneme_io_export_to_html(notes2, d2, mneme_io_export_options_default());
+    var html = _read(path_join(d2, str_from("md-test.html")));
+    assert(str_contains(html, str_from("<strong>bold</strong>")), "renders bold");
+    assert(str_contains(html, str_from("<em>italic</em>")), "renders italic");
+
+    return assert_summary();
+}
+fn _v1_tags(): i64 { var v = vec_new(); vec_push(v, str_from("test")); return v; }
+fn _v1_back(): i64 { var v = vec_new(); vec_push(v, str_from("First Note")); return v; }
+
+var exit_code = main();
+syscall(60, exit_code);
