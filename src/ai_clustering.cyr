@@ -1,0 +1,292 @@
+# mneme-ai — schema clustering (ported from rust-old/crates/mneme-ai/src/clustering.rs)
+# Deterministic (RNG-free) K-means++ + Lloyd's iteration. Rust stores embeddings
+# as Vec<f32> and casts to f64 for distances/centroids; we use f64 throughout
+# (Cyrius has no f32) — the tested behavior (cluster sizes, inertia ordering) is
+# invariant to that. Embeddings are vec<f64 bits>.
+
+# NoteEmbedding (24): [id@0, title@8, embedding@16(vec<f64>)]
+fn mneme_ai_note_embedding_new(id, title, embedding): i64 {
+    var e = alloc(24);
+    store64(e, id);
+    store64(e + 8, title);
+    store64(e + 16, embedding);
+    return e;
+}
+fn _clu_nid(ne): i64 { return load64(ne); }
+fn _clu_ntitle(ne): i64 { return load64(ne + 8); }
+fn _clu_emb(ne): i64 { return load64(ne + 16); }
+
+# Cluster (48): [id@0, label@8, summary@16, note_ids@24(vec), note_titles@32(vec), inertia@40(f64)]
+fn _clu_cluster_new(id, label, summary, note_ids, note_titles, inertia): i64 {
+    var c = alloc(48);
+    store64(c, id);
+    store64(c + 8, label);
+    store64(c + 16, summary);
+    store64(c + 24, note_ids);
+    store64(c + 32, note_titles);
+    store64(c + 40, inertia);
+    return c;
+}
+fn mneme_ai_cluster_id(c): i64 { return load64(c); }
+fn mneme_ai_cluster_label(c): i64 { return load64(c + 8); }
+fn mneme_ai_cluster_summary(c): i64 { return load64(c + 16); }
+fn mneme_ai_cluster_note_ids(c): i64 { return load64(c + 24); }
+fn mneme_ai_cluster_note_titles(c): i64 { return load64(c + 32); }
+fn mneme_ai_cluster_inertia(c): i64 { return load64(c + 40); }
+
+# ClusteringResult (32): [k@0, total_notes@8, total_inertia@16(f64), clusters@24(vec)]
+fn _clu_result_new(k, total_notes, total_inertia, clusters): i64 {
+    var r = alloc(32);
+    store64(r, k);
+    store64(r + 8, total_notes);
+    store64(r + 16, total_inertia);
+    store64(r + 24, clusters);
+    return r;
+}
+fn mneme_ai_clustering_result_k(r): i64 { return load64(r); }
+fn mneme_ai_clustering_result_total_notes(r): i64 { return load64(r + 8); }
+fn mneme_ai_clustering_result_total_inertia(r): i64 { return load64(r + 16); }
+fn mneme_ai_clustering_result_clusters(r): i64 { return load64(r + 24); }
+
+fn _clu_lt(a, b): i64 {
+    if (f64_le(a, b) == 1 && a != b) { return 1; }
+    return 0;
+}
+fn _clu_copy(v): i64 {
+    var out = vec_new();
+    var i = 0;
+    while (i < vec_len(v)) { vec_push(out, vec_get(v, i)); i = i + 1; }
+    return out;
+}
+fn _clu_zeros(dim): i64 {
+    var v = vec_new();
+    var i = 0;
+    while (i < dim) { vec_push(v, f64_from(0)); i = i + 1; }
+    return v;
+}
+fn mneme_ai_squared_distance(a, b): i64 {
+    var sum = f64_from(0);
+    var i = 0;
+    var m = vec_len(a);
+    while (i < m) {
+        var d = f64_sub(vec_get(a, i), vec_get(b, i));
+        sum = f64_add(sum, f64_mul(d, d));
+        i = i + 1;
+    }
+    return sum;
+}
+fn _clu_mean_all(notes, dim): i64 {
+    var mean = _clu_zeros(dim);
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var emb = _clu_emb(vec_get(notes, i));
+        var d = 0;
+        while (d < dim) { vec_set(mean, d, f64_add(vec_get(mean, d), vec_get(emb, d))); d = d + 1; }
+        i = i + 1;
+    }
+    var nn = vec_len(notes);
+    var d2 = 0;
+    while (d2 < dim) { vec_set(mean, d2, f64_div(vec_get(mean, d2), f64_from(nn))); d2 = d2 + 1; }
+    return mean;
+}
+
+# fresh centroids from assignments (empty cluster → zero vector)
+fn _clu_centroids(notes, assignments, k, dim): i64 {
+    var sums = vec_new();
+    var counts = vec_new();
+    var c = 0;
+    while (c < k) { vec_push(sums, _clu_zeros(dim)); vec_push(counts, 0); c = c + 1; }
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var cc = vec_get(assignments, i);
+        vec_set(counts, cc, vec_get(counts, cc) + 1);
+        var emb = _clu_emb(vec_get(notes, i));
+        var row = vec_get(sums, cc);
+        var d = 0;
+        while (d < dim) { vec_set(row, d, f64_add(vec_get(row, d), vec_get(emb, d))); d = d + 1; }
+        i = i + 1;
+    }
+    var cents = vec_new();
+    c = 0;
+    while (c < k) {
+        if (vec_get(counts, c) == 0) { vec_push(cents, _clu_zeros(dim)); }
+        else {
+            var row = vec_get(sums, c);
+            var cnt = vec_get(counts, c);
+            var cent = vec_new();
+            var d = 0;
+            while (d < dim) { vec_push(cent, f64_div(vec_get(row, d), f64_from(cnt))); d = d + 1; }
+            vec_push(cents, cent);
+        }
+        c = c + 1;
+    }
+    return cents;
+}
+
+fn _clu_kmeans_pp(notes, k, max_iters): i64 {
+    var dim = vec_len(_clu_emb(vec_get(notes, 0)));
+    var n = vec_len(notes);
+    var centroids = vec_new();
+    # first centroid: note closest to the global mean (min_by → first min)
+    var mean = _clu_mean_all(notes, dim);
+    var first = 0;
+    var best = mneme_ai_squared_distance(_clu_emb(vec_get(notes, 0)), mean);
+    var i = 1;
+    while (i < n) {
+        var da = mneme_ai_squared_distance(_clu_emb(vec_get(notes, i)), mean);
+        if (_clu_lt(da, best) == 1) { best = da; first = i; }
+        i = i + 1;
+    }
+    vec_push(centroids, _clu_copy(_clu_emb(vec_get(notes, first))));
+    # subsequent: point with max min-distance to existing centroids (first max)
+    var kk = 1;
+    while (kk < k) {
+        var best_idx = 0;
+        var best_dist = f64_neg(f64_from(1));
+        var i2 = 0;
+        while (i2 < n) {
+            var emb = _clu_emb(vec_get(notes, i2));
+            var min_dist = mneme_ai_squared_distance(emb, vec_get(centroids, 0));
+            var ci = 1;
+            while (ci < vec_len(centroids)) {
+                var dd = mneme_ai_squared_distance(emb, vec_get(centroids, ci));
+                if (_clu_lt(dd, min_dist) == 1) { min_dist = dd; }
+                ci = ci + 1;
+            }
+            if (_clu_lt(best_dist, min_dist) == 1) { best_dist = min_dist; best_idx = i2; }
+            i2 = i2 + 1;
+        }
+        vec_push(centroids, _clu_copy(_clu_emb(vec_get(notes, best_idx))));
+        kk = kk + 1;
+    }
+    # Lloyd's iteration
+    var assignments = vec_new();
+    var z = 0;
+    while (z < n) { vec_push(assignments, 0); z = z + 1; }
+    var iter = 0;
+    var done = 0;
+    while (iter < max_iters && done == 0) {
+        var changed = 0;
+        var i3 = 0;
+        while (i3 < n) {
+            var emb = _clu_emb(vec_get(notes, i3));
+            var nearest = 0;
+            var bestd = mneme_ai_squared_distance(emb, vec_get(centroids, 0));
+            var a = 1;
+            while (a < k) {
+                var dd = mneme_ai_squared_distance(emb, vec_get(centroids, a));
+                if (_clu_lt(dd, bestd) == 1) { bestd = dd; nearest = a; }
+                a = a + 1;
+            }
+            if (vec_get(assignments, i3) != nearest) { vec_set(assignments, i3, nearest); changed = 1; }
+            i3 = i3 + 1;
+        }
+        if (changed == 0) { done = 1; }
+        else {
+            var cents = _clu_centroids(notes, assignments, k, dim);
+            var c = 0;
+            while (c < k) { vec_set(centroids, c, vec_get(cents, c)); c = c + 1; }
+        }
+        iter = iter + 1;
+    }
+    return assignments;
+}
+
+fn _clu_compute_inertia(notes, assignments, k): i64 {
+    var dim = vec_len(_clu_emb(vec_get(notes, 0)));
+    var cents = _clu_centroids(notes, assignments, k, dim);
+    var total = f64_from(0);
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var cc = vec_get(assignments, i);
+        total = f64_add(total, mneme_ai_squared_distance(_clu_emb(vec_get(notes, i)), vec_get(cents, cc)));
+        i = i + 1;
+    }
+    return total;
+}
+
+fn _clu_find_elbow(notes, max_k): i64 {
+    var mk = max_k;
+    if (mk < 2) { mk = 2; }
+    if (mk > 10) { mk = 10; }
+    if (vec_len(notes) <= 3) { return 2; }
+    var inertias = vec_new();
+    var k = 2;
+    while (k <= mk) {
+        vec_push(inertias, _clu_compute_inertia(notes, _clu_kmeans_pp(notes, k, 30), k));
+        k = k + 1;
+    }
+    if (vec_len(inertias) < 3) { return 2; }
+    var best_k = 2;
+    var best_diff = 0;
+    var have = 0;
+    var i = 1;
+    while (i < vec_len(inertias) - 1) {
+        var second_deriv = f64_sub(f64_sub(vec_get(inertias, i - 1), vec_get(inertias, i)), f64_sub(vec_get(inertias, i), vec_get(inertias, i + 1)));
+        if (have == 0 || _clu_lt(best_diff, second_deriv) == 1) { best_diff = second_deriv; best_k = i + 2; have = 1; }
+        i = i + 1;
+    }
+    return best_k;
+}
+
+fn _clu_build_result(notes, assignments, k): i64 {
+    var dim = vec_len(_clu_emb(vec_get(notes, 0)));
+    var cents = _clu_centroids(notes, assignments, k, dim);
+    var clusters = vec_new();
+    var c = 0;
+    while (c < k) {
+        var lb = str_builder_new();
+        str_builder_add_cstr(lb, "Cluster ");
+        str_builder_add_int(lb, c + 1);
+        vec_push(clusters, _clu_cluster_new(c, str_builder_build(lb), str_from(""), vec_new(), vec_new(), f64_from(0)));
+        c = c + 1;
+    }
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var cc = vec_get(assignments, i);
+        var cl = vec_get(clusters, cc);
+        vec_push(load64(cl + 24), _clu_nid(vec_get(notes, i)));
+        vec_push(load64(cl + 32), _clu_ntitle(vec_get(notes, i)));
+        store64(cl + 40, f64_add(load64(cl + 40), mneme_ai_squared_distance(_clu_emb(vec_get(notes, i)), vec_get(cents, cc))));
+        i = i + 1;
+    }
+    # remove empty clusters
+    var kept = vec_new();
+    c = 0;
+    while (c < vec_len(clusters)) {
+        if (vec_len(mneme_ai_cluster_note_ids(vec_get(clusters, c))) > 0) { vec_push(kept, vec_get(clusters, c)); }
+        c = c + 1;
+    }
+    var total = f64_from(0);
+    c = 0;
+    while (c < vec_len(kept)) { total = f64_add(total, mneme_ai_cluster_inertia(vec_get(kept, c))); c = c + 1; }
+    return _clu_result_new(vec_len(kept), vec_len(notes), total, kept);
+}
+
+# k_opt: -1 = None (elbow heuristic), else explicit k
+fn mneme_ai_cluster_notes(notes, k_opt, max_k): i64 {
+    if (vec_len(notes) < 2) {
+        var ids = vec_new();
+        var titles = vec_new();
+        var i = 0;
+        while (i < vec_len(notes)) {
+            vec_push(ids, _clu_nid(vec_get(notes, i)));
+            vec_push(titles, _clu_ntitle(vec_get(notes, i)));
+            i = i + 1;
+        }
+        var clusters = vec_new();
+        vec_push(clusters, _clu_cluster_new(0, str_from("All Notes"), str_from(""), ids, titles, f64_from(0)));
+        return _clu_result_new(1, vec_len(notes), f64_from(0), clusters);
+    }
+    var chosen_k = 0;
+    if (k_opt >= 0) {
+        chosen_k = k_opt;
+        if (chosen_k > vec_len(notes)) { chosen_k = vec_len(notes); }
+        if (chosen_k < 2) { chosen_k = 2; }
+    } else {
+        var mk = max_k;
+        if (mk > vec_len(notes)) { mk = vec_len(notes); }
+        chosen_k = _clu_find_elbow(notes, mk);
+    }
+    return _clu_build_result(notes, _clu_kmeans_pp(notes, chosen_k, 50), chosen_k);
+}

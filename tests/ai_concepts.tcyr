@@ -1,0 +1,55 @@
+# mneme-ai concept-extraction tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/concepts.rs (5 #[test] cases).
+include "src/ai_concepts.cyr"
+
+fn _terms_has(concepts, want): i64 {
+    var i = 0;
+    while (i < vec_len(concepts)) {
+        if (str_eq_cstr(mneme_ai_concept_term(vec_get(concepts, i)), want) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _vec_has(v, want): i64 {
+    var i = 0;
+    while (i < vec_len(v)) {
+        if (str_eq_cstr(vec_get(v, i), want) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("ai_concepts");
+
+    # extract_from_technical_content
+    var c = mneme_ai_extract_concepts(str_from("Rust is a systems programming language focused on safety. The borrow checker in Rust ensures memory safety. Rust programs compile to native code. The compiler catches many bugs at compile time. Rust has zero-cost abstractions and pattern matching."));
+    assert_eq(vec_len(c) > 0, 1, "concepts non-empty");
+    assert_eq(_terms_has(c, "rust"), 1, "terms contains rust");
+
+    # extract_empty_content
+    assert_eq(mneme_ai_extract_concepts(str_from("")), 0, "empty content err");
+    assert_eq(mneme_ai_extract_concepts(str_from("   ")), 0, "whitespace content err");
+
+    # stop_words_filtered
+    assert_eq(mneme_ai_is_stop_word(str_from("the")), 1, "the is stop");
+    assert_eq(mneme_ai_is_stop_word(str_from("and")), 1, "and is stop");
+    assert_eq(mneme_ai_is_stop_word(str_from("rust")), 0, "rust not stop");
+    assert_eq(mneme_ai_is_stop_word(str_from("programming")), 0, "programming not stop");
+
+    # tokenize_basic
+    var t = mneme_ai_tokenize(str_from("Hello, World! This is a test."));
+    assert_eq(_vec_has(t, "hello"), 1, "tokens have hello");
+    assert_eq(_vec_has(t, "world"), 1, "tokens have world");
+    assert_eq(_vec_has(t, "test"), 1, "tokens have test");
+
+    # concept_serialization
+    var cj = mneme_ai_concept_to_json(mneme_ai_concept_new(str_from("rust"), CONCEPT_KIND_KEY_TERM, f64_parse("0.5"), 3));
+    assert_eq(str_index_of_cstr(cj, "key_term") >= 0, 1, "json contains key_term");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

@@ -1,0 +1,74 @@
+# mneme-search semantic-engine tests — ported 1:1 from
+# rust-old/crates/mneme-search/src/semantic_engine.rs (10 #[test] cases, all
+# exercising graceful degradation when no embedding backend is available).
+include "src/core_uuid.cyr"
+include "src/search_vector_store.cyr"
+include "src/search_embedding_backend.cyr"
+include "src/search_semantic_engine.cyr"
+
+var _sen = 0;
+fn _sedir(): i64 {
+    _sen = _sen + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_se");
+    str_builder_add_int(pb, _sen);
+    return str_builder_build(pb);
+}
+
+fn main() {
+    alloc_init();
+    test_group("search_semantic_engine");
+
+    # disabled_engine_returns_empty
+    var e1 = mneme_search_semantic_engine_disabled();
+    assert_eq(mneme_search_semantic_engine_is_available(e1), 0, "disabled not available");
+    assert_eq(mneme_search_semantic_engine_vector_count(e1), 0, "disabled vector_count 0");
+    assert_eq(str_eq_cstr(mneme_search_semantic_engine_backend_name(e1), "none"), 1, "disabled backend none");
+    assert_eq(mneme_search_semantic_engine_embedding_dimension(e1), 0, "disabled dim 0");
+    assert_eq(vec_len(mneme_search_semantic_engine_search(e1, str_from("test"), 10)), 0, "disabled search empty");
+
+    # disabled_engine_index_is_noop
+    var e2 = mneme_search_semantic_engine_disabled();
+    assert_eq(mneme_search_semantic_engine_index_note(e2, mneme_core_uuid_v4(), str_from("Test"), str_from("Content")), 1, "index noop ok");
+    assert_eq(mneme_search_semantic_engine_remove_note(e2, mneme_core_uuid_v4()), 1, "remove noop ok");
+    assert_eq(mneme_search_semantic_engine_save(e2), 1, "save noop ok");
+
+    # open_with_missing_models_degrades
+    assert_eq(mneme_search_semantic_engine_is_available(mneme_search_semantic_engine_open(str_from("/nonexistent/models"), _sedir())), 0, "open missing models degrades");
+
+    # embed_returns_none_when_disabled
+    var e4 = mneme_search_semantic_engine_disabled();
+    assert_eq(mneme_search_semantic_engine_embed(e4, str_from("test")), 0, "embed none when disabled");
+    assert_eq(mneme_search_semantic_engine_embed_batch(e4, vec_new()), 0, "embed_batch none when disabled");
+
+    # open_with_config_degrades_gracefully (remote unreachable)
+    var cfg5 = mneme_search_embconfig_new(str_from("remote"), str_from("http://127.0.0.1:99999"), str_from("test"), 0, 0 - 1);
+    assert_eq(mneme_search_semantic_engine_is_available(mneme_search_semantic_engine_open_with_config(str_from("/nonexistent"), _sedir(), cfg5)), 0, "remote unreachable degrades");
+
+    # find_similar_to_empty_when_disabled
+    assert_eq(vec_len(mneme_search_semantic_engine_find_similar_to(mneme_search_semantic_engine_disabled(), str_from("test"), f64_parse("0.5"), 10)), 0, "find_similar empty");
+
+    # context_search_empty_when_disabled
+    var ctx = vec_new();
+    var ci = 0;
+    while (ci < 384) { vec_push(ctx, f64_from(0)); ci = ci + 1; }
+    assert_eq(vec_len(mneme_search_semantic_engine_context_search(mneme_search_semantic_engine_disabled(), str_from("test"), ctx, f64_parse("0.7"), 10)), 0, "context_search empty");
+
+    # indexed_note_ids_empty_when_disabled
+    assert_eq(vec_len(mneme_search_semantic_engine_indexed_note_ids(mneme_search_semantic_engine_disabled())), 0, "indexed_note_ids empty");
+
+    # open_with_local_config_nonexistent_models
+    var cfg9 = mneme_search_embconfig_new(str_from("local"), 0, 0, 0, 0 - 1);
+    var e9 = mneme_search_semantic_engine_open_with_config(str_from("/nonexistent/models"), _sedir(), cfg9);
+    assert_eq(mneme_search_semantic_engine_is_available(e9), 0, "local nonexistent degrades");
+    assert_eq(str_eq_cstr(mneme_search_semantic_engine_backend_name(e9), "none"), 1, "local backend none");
+    assert_eq(mneme_search_semantic_engine_embedding_dimension(e9), 0, "local dim 0");
+
+    # save_disabled_engine
+    assert_eq(mneme_search_semantic_engine_save(mneme_search_semantic_engine_disabled()), 1, "save disabled ok");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

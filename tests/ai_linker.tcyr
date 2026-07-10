@@ -1,0 +1,43 @@
+# mneme-ai linker tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/linker.rs (3 #[test] cases).
+include "src/core_uuid.cyr"
+include "src/ai_linker.cyr"
+
+fn _repeat(ch, n): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < n) { str_builder_putc(sb, ch); i = i + 1; }
+    return str_builder_build(sb);
+}
+fn _ends(s: Str, suf): i64 {
+    var n = str_len(s);
+    var sl = strlen(suf);
+    if (n < sl) { return 0; }
+    if (str_eq_cstr(str_substr(s, n - sl, n), suf) == 1) { return 1; }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("ai_linker");
+
+    # link_suggestion_serialization
+    var s = mneme_ai_link_suggestion_new(mneme_core_uuid_v4(), mneme_core_uuid_v4(), str_from("Related Note"), str_from("Similar content about Rust"), f64_parse("0.85"));
+    var json = mneme_ai_link_suggestion_to_json(s);
+    assert_eq(str_index_of_cstr(json, "Related Note") >= 0, 1, "json has title");
+    assert_eq(str_index_of_cstr(json, "0.85") >= 0, 1, "json has 0.85");
+
+    # truncate_content_short
+    assert_eq(str_eq_cstr(mneme_ai_linker_truncate_content(str_from("short"), 100), "short"), 1, "truncate short");
+
+    # truncate_content_long
+    var long = _repeat(97, 200);
+    var res = mneme_ai_linker_truncate_content(long, 50);
+    assert_eq(_ends(res, "..."), 1, "truncate long ends with ...");
+    assert_eq(str_len(res) < 60, 1, "truncate long len < 60");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

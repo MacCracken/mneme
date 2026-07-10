@@ -1,0 +1,303 @@
+# mneme-ai — note consolidation (ported from rust-old/crates/mneme-ai/src/consolidation.rs)
+# Detects near-duplicate notes (Jaccard token overlap, O(n²)) and stale notes
+# (age since update). Timestamps are epoch seconds; num_days() = diff/86400.
+# tokenize here has NO stopword filter (len>2 only). f64 = IEEE-754 bit pattern.
+
+# NoteContent (48): [id@0, title@8, path@16, content@24, updated_at@32(epoch), last_accessed@40(epoch)]
+fn mneme_ai_note_content_new(id, title, path, content, updated_at, last_accessed): i64 {
+    var n = alloc(48);
+    store64(n, id);
+    store64(n + 8, title);
+    store64(n + 16, path);
+    store64(n + 24, content);
+    store64(n + 32, updated_at);
+    store64(n + 40, last_accessed);
+    return n;
+}
+fn _cons_id(n): i64 { return load64(n); }
+fn _cons_title(n): i64 { return load64(n + 8); }
+fn _cons_path(n): i64 { return load64(n + 16); }
+fn _cons_content(n): i64 { return load64(n + 24); }
+fn _cons_updated(n): i64 { return load64(n + 32); }
+fn _cons_accessed(n): i64 { return load64(n + 40); }
+
+# DuplicatePair (56): [a_id@0, a_title@8, b_id@16, b_title@24, similarity@32(f64), suggestion@40, detection_method@48]
+fn _cons_dup_pair_new(a_id, a_title, b_id, b_title, similarity, suggestion, method): i64 {
+    var p = alloc(56);
+    store64(p, a_id);
+    store64(p + 8, a_title);
+    store64(p + 16, b_id);
+    store64(p + 24, b_title);
+    store64(p + 32, similarity);
+    store64(p + 40, suggestion);
+    store64(p + 48, method);
+    return p;
+}
+fn mneme_ai_dup_pair_note_a_id(p): i64 { return load64(p); }
+fn mneme_ai_dup_pair_note_a_title(p): i64 { return load64(p + 8); }
+fn mneme_ai_dup_pair_note_b_id(p): i64 { return load64(p + 16); }
+fn mneme_ai_dup_pair_note_b_title(p): i64 { return load64(p + 24); }
+fn mneme_ai_dup_pair_similarity(p): i64 { return load64(p + 32); }
+fn mneme_ai_dup_pair_suggestion(p): i64 { return load64(p + 40); }
+fn mneme_ai_dup_pair_detection_method(p): i64 { return load64(p + 48); }
+
+# StaleNote (64): [note_id@0, title@8, path@16, updated_at@24, days_since_update@32,
+#                  last_accessed@40, days_since_access@48, freshness_score@56(f64)]
+fn _cons_stale_note_new(note_id, title, path, updated_at, dsu, last_accessed, dsa, freshness): i64 {
+    var s = alloc(64);
+    store64(s, note_id);
+    store64(s + 8, title);
+    store64(s + 16, path);
+    store64(s + 24, updated_at);
+    store64(s + 32, dsu);
+    store64(s + 40, last_accessed);
+    store64(s + 48, dsa);
+    store64(s + 56, freshness);
+    return s;
+}
+fn mneme_ai_stale_note_note_id(s): i64 { return load64(s); }
+fn mneme_ai_stale_note_title(s): i64 { return load64(s + 8); }
+fn mneme_ai_stale_note_days_since_update(s): i64 { return load64(s + 32); }
+fn mneme_ai_stale_note_days_since_access(s): i64 { return load64(s + 48); }
+fn mneme_ai_stale_note_freshness_score(s): i64 { return load64(s + 56); }
+
+# ConsolidationReport (40): [total_notes@0, duplicates@8(vec), stale_notes@16(vec), duplicate_count@24, stale_count@32]
+fn mneme_ai_consolidation_report_total_notes(r): i64 { return load64(r); }
+fn mneme_ai_consolidation_report_duplicates(r): i64 { return load64(r + 8); }
+fn mneme_ai_consolidation_report_stale_notes(r): i64 { return load64(r + 16); }
+fn mneme_ai_consolidation_report_duplicate_count(r): i64 { return load64(r + 24); }
+fn mneme_ai_consolidation_report_stale_count(r): i64 { return load64(r + 32); }
+
+fn _cons_set_has(set, tok: Str): i64 {
+    var i = 0;
+    while (i < vec_len(set)) {
+        if (str_eq(vec_get(set, i), tok) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+# lowercase, split on non-alphanumeric, keep len>2, dedup (NO stopwords)
+fn mneme_ai_cons_tokenize(text: Str): i64 {
+    var out = vec_new();
+    var n = str_len(text);
+    var d = str_data(text);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var issep = 1;
+        if (i < n) {
+            var c = load8(d + i);
+            if ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)) { issep = 0; }
+        }
+        if (issep == 1) {
+            if (i > start) {
+                var sb = str_builder_new();
+                var j = start;
+                while (j < i) {
+                    var ch = load8(d + j);
+                    if (ch >= 65 && ch <= 90) { ch = ch + 32; }
+                    str_builder_putc(sb, ch);
+                    j = j + 1;
+                }
+                var tok = str_builder_build(sb);
+                if (str_len(tok) > 2 && _cons_set_has(out, tok) == 0) { vec_push(out, tok); }
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+fn _cons_intersection_count(a, b): i64 {
+    var count = 0;
+    var i = 0;
+    while (i < vec_len(a)) {
+        if (_cons_set_has(b, vec_get(a, i)) == 1) { count = count + 1; }
+        i = i + 1;
+    }
+    return count;
+}
+fn _cons_union_count(a, b): i64 {
+    var count = vec_len(a);
+    var i = 0;
+    while (i < vec_len(b)) {
+        if (_cons_set_has(a, vec_get(b, i)) == 0) { count = count + 1; }
+        i = i + 1;
+    }
+    return count;
+}
+fn mneme_ai_jaccard_similarity(a, b): i64 {
+    if (vec_len(a) == 0 && vec_len(b) == 0) { return f64_from(1); }
+    var uni = _cons_union_count(a, b);
+    if (uni == 0) { return f64_from(0); }
+    return f64_div(f64_from(_cons_intersection_count(a, b)), f64_from(uni));
+}
+fn _cons_suggestion(sim): i64 {
+    if (f64_le(sim, f64_parse("0.95")) == 0) { return str_from("merge"); }
+    if (f64_le(sim, f64_parse("0.85")) == 0) { return str_from("review"); }
+    return str_from("keep");
+}
+
+fn mneme_ai_detect_duplicates(notes, threshold): i64 {
+    # tokenize "title\ncontent" per note → [id, title, tokenset]
+    var tok = vec_new();
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var n = vec_get(notes, i);
+        var sb = str_builder_new();
+        str_builder_add(sb, _cons_title(n));
+        str_builder_putc(sb, 10);
+        str_builder_add(sb, _cons_content(n));
+        var t = alloc(24);
+        store64(t, _cons_id(n));
+        store64(t + 8, _cons_title(n));
+        store64(t + 16, mneme_ai_cons_tokenize(str_builder_build(sb)));
+        vec_push(tok, t);
+        i = i + 1;
+    }
+    var dups = vec_new();
+    i = 0;
+    while (i < vec_len(tok)) {
+        var j = i + 1;
+        while (j < vec_len(tok)) {
+            var sim = mneme_ai_jaccard_similarity(load64(vec_get(tok, i) + 16), load64(vec_get(tok, j) + 16));
+            if (f64_le(threshold, sim) == 1) {
+                vec_push(dups, _cons_dup_pair_new(load64(vec_get(tok, i)), load64(vec_get(tok, i) + 8), load64(vec_get(tok, j)), load64(vec_get(tok, j) + 8), sim, _cons_suggestion(sim), str_from("jaccard")));
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    # sort by similarity descending (bubble)
+    var m = vec_len(dups);
+    var a = 0;
+    while (a < m) {
+        var b = 0;
+        while (b + 1 + a < m) {
+            if (f64_le(mneme_ai_dup_pair_similarity(vec_get(dups, b + 1)), mneme_ai_dup_pair_similarity(vec_get(dups, b))) == 0) {
+                var tmp = vec_get(dups, b);
+                vec_set(dups, b, vec_get(dups, b + 1));
+                vec_set(dups, b + 1, tmp);
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    return dups;
+}
+
+# uuid byte comparison: 1 if a < b
+fn _cons_uuid_lt(a, b): i64 {
+    var i = 0;
+    while (i < 16) {
+        var ca = load8(a + i);
+        var cb = load8(b + i);
+        if (ca < cb) { return 1; }
+        if (ca > cb) { return 0; }
+        i = i + 1;
+    }
+    return 0;
+}
+# similarity_map: vec of [note_id, note_title, similars(vec of [other_id, other_title, score])]
+fn mneme_ai_detect_duplicates_semantic(similarity_map, threshold): i64 {
+    var seen = vec_new();   # vec of [lo_id, hi_id]
+    var dups = vec_new();
+    var i = 0;
+    while (i < vec_len(similarity_map)) {
+        var entry = vec_get(similarity_map, i);
+        var note_id = load64(entry);
+        var note_title = load64(entry + 8);
+        var similars = load64(entry + 16);
+        var s = 0;
+        while (s < vec_len(similars)) {
+            var sim = vec_get(similars, s);
+            var other_id = load64(sim);
+            var other_title = load64(sim + 8);
+            var score = load64(sim + 16);
+            var skip = 0;
+            if (mneme_core_uuid_eq(note_id, other_id) == 1 || f64_le(threshold, score) == 0) { skip = 1; }
+            if (skip == 0) {
+                var lo = note_id;
+                var hi = other_id;
+                if (_cons_uuid_lt(other_id, note_id) == 1) { lo = other_id; hi = note_id; }
+                # dedup canonical pair
+                var dup = 0;
+                var k = 0;
+                while (k < vec_len(seen)) {
+                    if (mneme_core_uuid_eq(load64(vec_get(seen, k)), lo) == 1 && mneme_core_uuid_eq(load64(vec_get(seen, k) + 8), hi) == 1) { dup = 1; }
+                    k = k + 1;
+                }
+                if (dup == 0) {
+                    var pr = alloc(16);
+                    store64(pr, lo);
+                    store64(pr + 8, hi);
+                    vec_push(seen, pr);
+                    vec_push(dups, _cons_dup_pair_new(note_id, note_title, other_id, other_title, score, _cons_suggestion(score), str_from("semantic")));
+                }
+            }
+            s = s + 1;
+        }
+        i = i + 1;
+    }
+    var m = vec_len(dups);
+    var a = 0;
+    while (a < m) {
+        var b = 0;
+        while (b + 1 + a < m) {
+            if (f64_le(mneme_ai_dup_pair_similarity(vec_get(dups, b + 1)), mneme_ai_dup_pair_similarity(vec_get(dups, b))) == 0) {
+                var tmp = vec_get(dups, b);
+                vec_set(dups, b, vec_get(dups, b + 1));
+                vec_set(dups, b + 1, tmp);
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    return dups;
+}
+
+fn mneme_ai_detect_stale(notes, days): i64 {
+    var now = clock_epoch_secs();
+    var stale = vec_new();
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var n = vec_get(notes, i);
+        var age = (now - _cons_updated(n)) / 86400;
+        if (age >= days) {
+            var dsa = (now - _cons_accessed(n)) / 86400;
+            var denom = dsa;
+            if (denom < 1) { denom = 1; }
+            var fresh = f64_div(f64_from(age), f64_from(denom));
+            vec_push(stale, _cons_stale_note_new(_cons_id(n), _cons_title(n), _cons_path(n), _cons_updated(n), age, _cons_accessed(n), dsa, fresh));
+        }
+        i = i + 1;
+    }
+    # sort by days_since_update descending (bubble)
+    var m = vec_len(stale);
+    var a = 0;
+    while (a < m) {
+        var b = 0;
+        while (b + 1 + a < m) {
+            if (mneme_ai_stale_note_days_since_update(vec_get(stale, b + 1)) > mneme_ai_stale_note_days_since_update(vec_get(stale, b))) {
+                var tmp = vec_get(stale, b);
+                vec_set(stale, b, vec_get(stale, b + 1));
+                vec_set(stale, b + 1, tmp);
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    return stale;
+}
+
+fn mneme_ai_consolidate(notes, duplicate_threshold, stale_days): i64 {
+    var duplicates = mneme_ai_detect_duplicates(notes, duplicate_threshold);
+    var stale = mneme_ai_detect_stale(notes, stale_days);
+    var r = alloc(40);
+    store64(r, vec_len(notes));
+    store64(r + 8, duplicates);
+    store64(r + 16, stale);
+    store64(r + 24, vec_len(duplicates));
+    store64(r + 32, vec_len(stale));
+    return r;
+}

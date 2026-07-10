@@ -86,6 +86,12 @@ enum SysNrAgnos {
     SYS_SHM_WRITE  = 72;          # shm_write(id, user_src, size) → 0 / -1
     SYS_SHM_READ   = 73;          # shm_read(id, user_dst, size)  → 0 / -1
     SYS_SHM_FREE   = 74;          # shm_free(id) → 0 / -1
+    SYS_BLK_ENUM   = 75;          # blk_enum(buf, cap) → registered-device count / -1
+    SYS_BLK_OPEN   = 76;          # blk_open(tag, mode) → handle / arm-ack(0) / -1 (mode 1=RW is capability-gated)
+    SYS_BLK_READ   = 77;          # blk_read(h, lba, buf, nsec) → nsec / -1 (nsec on a4=r10)
+    SYS_BLK_WRITE  = 78;          # blk_write(h, lba, buf, nsec) → nsec / -1 — GATED (arm via blk_open magic)
+    SYS_BLK_INFO   = 79;          # blk_info(h, out) → 0 / -1
+    SYS_BLK_CLOSE  = 80;          # blk_close(h) → 0 / -1
 }
 
 # ================================================================
@@ -504,6 +510,24 @@ fn sys_shm_write(id, src, size): i64 { return syscall(SYS_SHM_WRITE, id, src, si
 fn sys_shm_read(id, dst, size): i64  { return syscall(SYS_SHM_READ, id, dst, size); }
 # shm_free(id) — release the buffer's page + slot → 0 / -1.
 fn sys_shm_free(id): i64             { return syscall(SYS_SHM_FREE, id); }
+
+# ---- agnos raw block-device band (#75-80): the native-install primitive (agnos 1.53.10). Ring-3 raw
+# sector I/O so a sovereign installer/mkfs (agnova) can partition + format a disk with no Linux
+# parted/mkfs — the kernel exposes raw sectors, userland builds the GPT/mkfs structures. RW is
+# capability-gated kernel-side (armed by blk_open(_, BLK_RW_ARM_MAGIC)); these wrappers only marshal.
+# agnos-kernel-only — no host twin (host installers use /dev + parted). (issue 2026-07-09-agnos-sys-blk-peers.)
+# blk_enum(buf, cap) — list registered devices → count / -1 (writes {tag, capacity_lbas, lba_bytes}*count).
+fn sys_blk_enum(buf, cap): i64           { return syscall(SYS_BLK_ENUM, buf, cap); }
+# blk_open(tag, mode) — open a device → handle / arm-ack(0) / -1 (mode 0=RO, 1=RW gated; magic arms RW).
+fn sys_blk_open(tag, mode): i64          { return syscall(SYS_BLK_OPEN, tag, mode); }
+# blk_read(h, lba, buf, nsec) — raw sector read (bounds-checked) → nsec / -1 (nsec rides a4=r10).
+fn sys_blk_read(h, lba, buf, nsec): i64  { return syscall(SYS_BLK_READ, h, lba, buf, nsec); }
+# blk_write(h, lba, buf, nsec) — raw sector write + flush → nsec / -1 — GATED on the RW arm.
+fn sys_blk_write(h, lba, buf, nsec): i64 { return syscall(SYS_BLK_WRITE, h, lba, buf, nsec); }
+# blk_info(h, out) — device geometry → 0 / -1 (writes {capacity_lbas, lba_bytes}).
+fn sys_blk_info(h, out): i64             { return syscall(SYS_BLK_INFO, h, out); }
+# blk_close(h) — release the handle → 0 / -1.
+fn sys_blk_close(h): i64                 { return syscall(SYS_BLK_CLOSE, h); }
 
 # ---- agnos HDA audio band (#64-69) — the ring-3 half of the agnos 1.52.x Gate-2
 # freeze (kernel handlers land in parallel). Single frozen format: 48000 Hz / S16 /

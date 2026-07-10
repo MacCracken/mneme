@@ -1,0 +1,170 @@
+# mneme-ai — concept extraction (ported from rust-old/crates/mneme-ai/src/concepts.rs)
+# Statistical TF-scoring over tokenized content. Pure logic (the daimon
+# knowledge-base cross-reference mentioned in the Rust doc-comment is not wired
+# in the Rust source either — extraction is purely local). f64 score is an
+# IEEE-754 bit pattern (Cyrius convention).
+
+enum ConceptKind { CONCEPT_KIND_TOPIC; CONCEPT_KIND_ENTITY; CONCEPT_KIND_KEY_TERM; }
+
+# Concept (32): [term@0(Str), kind@8(int), score@16(f64), occurrences@24(int)]
+fn mneme_ai_concept_new(term, kind, score, occurrences): i64 {
+    var c = alloc(32);
+    store64(c, term);
+    store64(c + 8, kind);
+    store64(c + 16, score);
+    store64(c + 24, occurrences);
+    return c;
+}
+fn mneme_ai_concept_term(c): i64 { return load64(c); }
+fn mneme_ai_concept_kind(c): i64 { return load64(c + 8); }
+fn mneme_ai_concept_score(c): i64 { return load64(c + 16); }
+fn mneme_ai_concept_occurrences(c): i64 { return load64(c + 24); }
+
+fn _concepts_cstr(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(s), n);
+    store8(buf + n, 0);
+    return buf;
+}
+
+fn mneme_ai_concept_kind_str(kind): i64 {
+    if (kind == CONCEPT_KIND_TOPIC) { return str_from("topic"); }
+    if (kind == CONCEPT_KIND_ENTITY) { return str_from("entity"); }
+    return str_from("key_term");
+}
+# minimal serde (score omitted — f64 formatting deferred; tests only check the kind string)
+fn mneme_ai_concept_to_json(c): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"term\":\"");
+    str_builder_add(sb, load64(c));
+    str_builder_add_cstr(sb, "\",\"kind\":\"");
+    str_builder_add(sb, mneme_ai_concept_kind_str(load64(c + 8)));
+    str_builder_add_cstr(sb, "\",\"occurrences\":");
+    str_builder_add_int(sb, load64(c + 24));
+    str_builder_add_cstr(sb, "}");
+    return str_builder_build(sb);
+}
+
+# lowercase, split on non-alphanumeric (keeping '-' and '_')
+fn mneme_ai_tokenize(text: Str): i64 {
+    var out = vec_new();
+    var n = str_len(text);
+    var d = str_data(text);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var issep = 1;
+        if (i < n) {
+            var c = load8(d + i);
+            if ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 45 || c == 95) { issep = 0; }
+        }
+        if (issep == 1) {
+            if (i > start) {
+                var sb = str_builder_new();
+                var j = start;
+                while (j < i) {
+                    var ch = load8(d + j);
+                    if (ch >= 65 && ch <= 90) { ch = ch + 32; }
+                    str_builder_putc(sb, ch);
+                    j = j + 1;
+                }
+                vec_push(out, str_builder_build(sb));
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn _concepts_stopwords(): i64 {
+    return str_from(" the a an and or but in on at to for of with by from as is was are were be been being have has had do does did will would could should may might shall can this that these those it its not no nor so if then than too very just about above after again all also any because before between both each few more most other some such through under until when where which while who whom why how what there here into over ");
+}
+fn mneme_ai_is_stop_word(word: Str): i64 {
+    var needle = str_builder_new();
+    str_builder_putc(needle, 32);
+    str_builder_add(needle, word);
+    str_builder_putc(needle, 32);
+    if (str_index_of_cstr(_concepts_stopwords(), _concepts_cstr(str_builder_build(needle))) >= 0) { return 1; }
+    return 0;
+}
+
+fn _concepts_blank(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c != 32 && c != 9 && c != 10 && c != 13) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+fn _concepts_classify(term: Str): i64 {
+    var c = load8(str_data(term));
+    if (c >= 65 && c <= 90) { return CONCEPT_KIND_ENTITY; }
+    if (str_len(term) >= 6) { return CONCEPT_KIND_TOPIC; }
+    return CONCEPT_KIND_KEY_TERM;
+}
+fn _concepts_freq_find(freq, w): i64 {
+    var i = 0;
+    while (i < vec_len(freq)) {
+        if (str_eq(load64(vec_get(freq, i)), w) == 1) { return vec_get(freq, i); }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# extract concepts; returns vec<Concept> (Ok) or 0 (Err: EmptyContent)
+fn mneme_ai_extract_concepts(content: Str): i64 {
+    if (_concepts_blank(content) == 1) { return 0; }
+    var words = mneme_ai_tokenize(content);
+    var total = vec_len(words);
+    # frequency table: vec of [term@0, count@8], counting non-stop words of len >= 3
+    var freq = vec_new();
+    var i = 0;
+    while (i < vec_len(words)) {
+        var w = vec_get(words, i);
+        if (mneme_ai_is_stop_word(w) == 0 && str_len(w) >= 3) {
+            var p = _concepts_freq_find(freq, w);
+            if (p == 0) { p = alloc(16); store64(p, w); store64(p + 8, 0); vec_push(freq, p); }
+            store64(p + 8, load64(p + 8) + 1);
+        }
+        i = i + 1;
+    }
+    # concepts for terms occurring >= 2 times
+    var concepts = vec_new();
+    i = 0;
+    while (i < vec_len(freq)) {
+        var fp = vec_get(freq, i);
+        var count = load64(fp + 8);
+        if (count >= 2) {
+            var term = load64(fp);
+            var tf = f64_div(f64_from(count), f64_from(total));
+            var boost = f64_min(f64_div(f64_from(str_len(term)), f64_from(10)), f64_parse("1.5"));
+            vec_push(concepts, mneme_ai_concept_new(term, _concepts_classify(term), f64_mul(tf, boost), count));
+        }
+        i = i + 1;
+    }
+    # sort by score descending (bubble)
+    var m = vec_len(concepts);
+    var a = 0;
+    while (a < m) {
+        var b = 0;
+        while (b + 1 + a < m) {
+            if (f64_ge(mneme_ai_concept_score(vec_get(concepts, b)), mneme_ai_concept_score(vec_get(concepts, b + 1))) == 0) {
+                var tmp = vec_get(concepts, b);
+                vec_set(concepts, b, vec_get(concepts, b + 1));
+                vec_set(concepts, b + 1, tmp);
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    # truncate to 20
+    var out = vec_new();
+    var k = 0;
+    while (k < vec_len(concepts) && k < 20) { vec_push(out, vec_get(concepts, k)); k = k + 1; }
+    return out;
+}

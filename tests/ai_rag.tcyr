@@ -1,0 +1,43 @@
+# mneme-ai RAG-pipeline tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/rag.rs (4 #[test] cases).
+include "src/core_uuid.cyr"
+include "src/ai_rag_eval.cyr"
+include "src/ai_rag.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("ai_rag");
+
+    # source_chunk_serialization
+    var c = mneme_ai_source_chunk_new(str_from("test content"), f64_parse("0.95"), mneme_core_uuid_v4(), str_from("Test Note"));
+    assert_eq(str_index_of_cstr(mneme_ai_source_chunk_to_json(c), "test content") >= 0, 1, "chunk json has content");
+
+    # rag_answer_serialization (eval None → no "eval")
+    var sc1 = vec_new();
+    vec_push(sc1, mneme_ai_source_chunk_new(str_from("chunk"), f64_parse("0.9"), 0, 0));
+    var a1 = mneme_ai_rag_answer_new(str_from("test question"), str_from("some context"), sc1, 100, 0);
+    var j1 = mneme_ai_rag_answer_to_json(a1);
+    assert_eq(str_index_of_cstr(j1, "test question") >= 0, 1, "answer json has query");
+    assert_eq(str_index_of_cstr(j1, "token_estimate") >= 0, 1, "answer json has token_estimate");
+    assert_eq(str_index_of_cstr(j1, "eval") >= 0, 0, "answer json omits eval when None");
+
+    # rag_answer_with_eval_scores
+    var sc2 = vec_new();
+    vec_push(sc2, mneme_ai_source_chunk_new(str_from("Rust is a systems programming language"), f64_parse("0.95"), 0, 0));
+    var eval = mneme_ai_rag_eval_scores_new(f64_parse("0.9"), f64_parse("0.8"), f64_parse("0.7"), f64_parse("0.83"));
+    var a2 = mneme_ai_rag_answer_new(str_from("What is Rust?"), str_from("Rust is a systems programming language"), sc2, 50, eval);
+    var j2 = mneme_ai_rag_answer_to_json(a2);
+    assert_eq(str_index_of_cstr(j2, "faithfulness") >= 0, 1, "eval has faithfulness");
+    assert_eq(str_index_of_cstr(j2, "answer_relevance") >= 0, 1, "eval has answer_relevance");
+    assert_eq(str_index_of_cstr(j2, "chunk_utilization") >= 0, 1, "eval has chunk_utilization");
+    assert_eq(str_index_of_cstr(j2, "overall") >= 0, 1, "eval has overall");
+
+    # source_chunk_without_note (note_id/title None → "null")
+    var c3 = mneme_ai_source_chunk_new(str_from("data"), f64_parse("0.5"), 0, 0);
+    assert_eq(str_index_of_cstr(mneme_ai_source_chunk_to_json(c3), "null") >= 0, 1, "chunk json has null");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

@@ -1,0 +1,51 @@
+# mneme-ai translator tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/translator.rs (5 #[test] cases).
+include "src/ai_translator.cyr"
+
+fn _has(s: Str, w): i64 { if (str_index_of_cstr(s, w) >= 0) { return 1; } return 0; }
+fn _any_code(langs, code): i64 {
+    var i = 0;
+    while (i < vec_len(langs)) {
+        if (str_eq_cstr(mneme_ai_language_code(vec_get(langs, i)), code) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("ai_translator");
+
+    # supported_languages_nonempty
+    var langs = mneme_ai_supported_languages();
+    assert_eq(vec_len(langs) >= 10, 1, "at least 10 languages");
+    assert_eq(_any_code(langs, "en"), 1, "has en");
+    assert_eq(_any_code(langs, "ja"), 1, "has ja");
+
+    # preserve_structure_keeps_headings
+    var r1 = mneme_ai_preserve_markdown_structure(str_from("# Title\n\nSome text here.\n\n## Section\n\n- [ ] Todo item"), str_from("es"));
+    assert_eq(_has(r1, "# Title"), 1, "keeps # Title");
+    assert_eq(_has(r1, "## Section"), 1, "keeps ## Section");
+    assert_eq(_has(r1, "- [ ] Todo item"), 1, "keeps todo");
+    assert_eq(_has(r1, "/* es */"), 1, "marks es");
+
+    # preserve_structure_code_blocks
+    var r2 = mneme_ai_preserve_markdown_structure(str_from("Text line\n```\ncode here\n```\n---\nMore text"), str_from("fr"));
+    assert_eq(_has(r2, "```"), 1, "keeps code fence");
+    assert_eq(_has(r2, "---"), 1, "keeps hr");
+    assert_eq(_has(r2, "/* fr */"), 1, "marks fr");
+
+    # language_serialization
+    var lj = mneme_ai_language_to_json(mneme_ai_language_new(str_from("ja"), str_from("Japanese")));
+    assert_eq(_has(lj, "ja"), 1, "lang json has ja");
+    assert_eq(_has(lj, "Japanese"), 1, "lang json has Japanese");
+
+    # translate_result_serialization
+    var tj = mneme_ai_translate_result_to_json(mneme_ai_translate_result_new(str_from("hello"), str_from("hola"), str_from("en"), str_from("es"), 1, TRANSLATE_SOURCE_PLACEHOLDER));
+    assert_eq(_has(tj, "placeholder"), 1, "result json has placeholder");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

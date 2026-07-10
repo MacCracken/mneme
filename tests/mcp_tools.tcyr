@@ -1,0 +1,203 @@
+# mneme-mcp tools tests — ported 1:1 from
+# rust-old/crates/mneme-mcp/src/tools.rs (23 test cases; the tokio integration
+# tests run synchronously here against a real on-disk vault).
+include "lib/patra.cyr"
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/sigil.cyr"
+include "lib/bayan.cyr"
+include "src/core_uuid.cyr"
+include "src/core_note.cyr"
+include "src/core_link.cyr"
+include "src/core_config.cyr"
+include "src/core_frontmatter.cyr"
+include "src/store_db.cyr"
+include "src/store_files.cyr"
+include "src/store_registry.cyr"
+include "src/store_vault.cyr"
+include "src/store_manager.cyr"
+include "src/search_retrieval_optimizer.cyr"
+include "src/search_vector_store.cyr"
+include "src/search_embedding_backend.cyr"
+include "src/search_semantic_engine.cyr"
+include "src/search_engine.cyr"
+include "src/mcp_protocol.cyr"
+include "src/mcp_tools.cyr"
+
+var _envn = 0;
+# _env() → [mgr@0, engines@8] backed by a fresh on-disk vault + in-memory engines
+fn _env(): i64 {
+    _envn = _envn + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_mcp");
+    str_builder_add_int(pb, _envn);
+    var mgr = mneme_store_manager_single(str_builder_build(pb));
+    var engines = mcp_engines_new();
+    mcp_engines_insert(engines, mneme_store_manager_active_id(mgr), mneme_search_engine_in_memory(), mneme_search_semantic_engine_disabled(), mneme_search_retrieval_optimizer_new());
+    var e = alloc(16);
+    store64(e, mgr);
+    store64(e + 8, engines);
+    return e;
+}
+fn _tags(a): i64 { var v = vec_new(); vec_push(v, str_from(a)); return v; }
+fn _tags2(a, b): i64 { var v = vec_new(); vec_push(v, str_from(a)); vec_push(v, str_from(b)); return v; }
+fn _has(s: Str, w): i64 { if (str_index_of_cstr(s, w) >= 0) { return 1; } return 0; }
+fn _is_err(s: Str): i64 { return _has(s, "\"isError\":true"); }
+# create a note directly through the active vault, return its id string
+fn _mk_note(env, title, content, tags): i64 {
+    var vault = mneme_store_openvault_vault(mneme_store_manager_active(load64(env)));
+    var nwc = mneme_store_vault_create_note(vault, mneme_store_create_note_new(str_from(title), 0, str_from(content), tags, 0 - 1));
+    return mneme_store_uuid_to_string(mneme_core_note_id(mneme_store_nwc_note(nwc)));
+}
+
+fn main() {
+    alloc_init();
+    test_group("mcp_tools");
+
+    # create_note_tool
+    var env1 = _env();
+    var a1 = mcp_args_new();
+    mcp_args_put_str(a1, "title", str_from("Test Note"));
+    mcp_args_put_str(a1, "content", str_from("Hello from MCP"));
+    mcp_args_put_arr(a1, "tags", _tags2("mcp", "test"));
+    assert_eq(_has(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_create_note"), a1, load64(env1), load64(env1 + 8)), "Created note"), 1, "create_note ok");
+
+    # create_note_missing_title
+    var env2 = _env();
+    var a2 = mcp_args_new();
+    mcp_args_put_str(a2, "content", str_from("No title"));
+    assert_eq(_is_err(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_create_note"), a2, load64(env2), load64(env2 + 8))), 1, "missing title err");
+
+    # create_note_missing_content
+    var env2b = _env();
+    var a2b = mcp_args_new();
+    mcp_args_put_str(a2b, "title", str_from("No Content"));
+    assert_eq(_is_err(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_create_note"), a2b, load64(env2b), load64(env2b + 8))), 1, "missing content err");
+
+    # search_tool_no_results
+    var env3 = _env();
+    var a3 = mcp_args_new();
+    mcp_args_put_str(a3, "query", str_from("nonexistent"));
+    mcp_args_put_int(a3, "limit", 5);
+    assert_eq(_has(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_search"), a3, load64(env3), load64(env3 + 8)), "No notes found"), 1, "search no results");
+
+    # search_missing_query
+    var env3b = _env();
+    assert_eq(_is_err(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_search"), mcp_args_new(), load64(env3b), load64(env3b + 8))), 1, "search missing query err");
+
+    # search_tool_with_results
+    var env4 = _env();
+    var ca = mcp_args_new();
+    mcp_args_put_str(ca, "title", str_from("Rust Guide"));
+    mcp_args_put_str(ca, "content", str_from("Rust programming language guide"));
+    mcp_args_put_arr(ca, "tags", _tags("rust"));
+    mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_create_note"), ca, load64(env4), load64(env4 + 8));
+    var sa = mcp_args_new();
+    mcp_args_put_str(sa, "query", str_from("rust"));
+    mcp_args_put_int(sa, "limit", 5);
+    var sr = mneme_mcp_handle_tool_call(str_from("2"), str_from("mneme_search"), sa, load64(env4), load64(env4 + 8));
+    var sok = 0;
+    if (_has(sr, "result(s)") == 1 || _has(sr, "Rust Guide") == 1) { sok = 1; }
+    assert_eq(sok, 1, "search with results");
+
+    # get_note_tool
+    var env5 = _env();
+    var gid = _mk_note(env5, "Get Test", "Content here.", _tags("test"));
+    var ga = mcp_args_new();
+    mcp_args_put_str(ga, "id", gid);
+    assert_eq(_has(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_get_note"), ga, load64(env5), load64(env5 + 8)), "Get Test"), 1, "get_note ok");
+
+    # get_note_invalid_uuid
+    var env5b = _env();
+    var gb = mcp_args_new();
+    mcp_args_put_str(gb, "id", str_from("not-a-uuid"));
+    assert_eq(_is_err(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_get_note"), gb, load64(env5b), load64(env5b + 8))), 1, "get_note invalid uuid err");
+
+    # unknown_tool
+    var env6 = _env();
+    assert_eq(_is_err(mneme_mcp_handle_tool_call(str_from("1"), str_from("nonexistent_tool"), mcp_args_new(), load64(env6), load64(env6 + 8))), 1, "unknown tool err");
+
+    # list_vaults_tool
+    var env7 = _env();
+    assert_eq(_has(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_list_vaults"), mcp_args_new(), load64(env7), load64(env7 + 8)), "vault(s)"), 1, "list vaults");
+
+    # update_note_tool
+    var env8 = _env();
+    var uid = _mk_note(env8, "Original", "Original content", vec_new());
+    var ua = mcp_args_new();
+    mcp_args_put_str(ua, "id", uid);
+    mcp_args_put_str(ua, "title", str_from("Updated Title"));
+    mcp_args_put_str(ua, "content", str_from("Updated content"));
+    assert_eq(_has(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_update_note"), ua, load64(env8), load64(env8 + 8)), "Updated"), 1, "update_note ok");
+
+    # update_note_no_fields
+    var env9 = _env();
+    var una = mcp_args_new();
+    mcp_args_put_str(una, "id", mneme_store_uuid_to_string(mneme_core_uuid_v4()));
+    assert_eq(_is_err(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_update_note"), una, load64(env9), load64(env9 + 8))), 1, "update no fields err");
+
+    # search_feedback_tool
+    var env10 = _env();
+    var fa = mcp_args_new();
+    mcp_args_put_str(fa, "search_id", str_from("s:0"));
+    mcp_args_put_str(fa, "note_id", mneme_store_uuid_to_string(mneme_core_uuid_v4()));
+    assert_eq(_has(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_search_feedback"), fa, load64(env10), load64(env10 + 8)), "Feedback recorded"), 1, "feedback ok");
+
+    # search_feedback_missing_fields
+    var env11 = _env();
+    assert_eq(_is_err(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_search_feedback"), mcp_args_new(), load64(env11), load64(env11 + 8))), 1, "feedback missing err");
+
+    # switch_vault_missing_param
+    var env12 = _env();
+    assert_eq(_is_err(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_switch_vault"), mcp_args_new(), load64(env12), load64(env12 + 8))), 1, "switch missing err");
+
+    # switch_vault_not_found
+    var env13 = _env();
+    var sva = mcp_args_new();
+    mcp_args_put_str(sva, "vault", str_from("nonexistent"));
+    assert_eq(_is_err(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_switch_vault"), sva, load64(env13), load64(env13 + 8))), 1, "switch not found err");
+
+    # query_graph_no_params
+    var env14 = _env();
+    assert_eq(_is_err(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_query_graph"), mcp_args_new(), load64(env14), load64(env14 + 8))), 1, "graph no params err");
+
+    # query_graph_with_note
+    var env15 = _env();
+    var qid = _mk_note(env15, "Graph Test", "Graph content", _tags("test-tag"));
+    var qa = mcp_args_new();
+    mcp_args_put_str(qa, "note_id", qid);
+    assert_eq(_has(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_query_graph"), qa, load64(env15), load64(env15 + 8)), "Graph"), 1, "graph with note");
+
+    # query_graph_tag_not_found
+    var env16 = _env();
+    var ta = mcp_args_new();
+    mcp_args_put_str(ta, "tag", str_from("nonexistent"));
+    var tr = mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_query_graph"), ta, load64(env16), load64(env16 + 8));
+    var tok = 0;
+    if (_has(tr, "not found") == 1 || _is_err(tr) == 1) { tok = 1; }
+    assert_eq(tok, 1, "graph tag not found");
+
+    # parse_uuid_valid
+    var pu = mneme_core_uuid_v4();
+    var pa = mcp_args_new();
+    mcp_args_put_str(pa, "id", mneme_store_uuid_to_string(pu));
+    assert_eq(mneme_core_uuid_eq(mcp_parse_uuid(pa, "id"), pu), 1, "parse_uuid valid");
+
+    # parse_uuid_missing
+    assert_eq(mcp_parse_uuid(mcp_args_new(), "id"), 0, "parse_uuid missing");
+
+    # parse_uuid_invalid
+    var pia = mcp_args_new();
+    mcp_args_put_str(pia, "id", str_from("not-a-uuid"));
+    assert_eq(mcp_parse_uuid(pia, "id"), 0, "parse_uuid invalid");
+
+    # mcp_engines_new
+    var eng = mcp_engines_new();
+    assert_eq(mcp_engines_is_empty(eng), 1, "engines empty");
+    assert_eq(mcp_engines_get(eng, mneme_core_uuid_v4()), 0, "engines get none");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

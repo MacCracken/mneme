@@ -1,0 +1,18 @@
+# mneme-search embedder tests — ported 1:1 from rust-old/crates/mneme-search/src/embedder.rs
+include "src/search_embedder.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("search_embedder");
+
+    # embedding_dim_constant
+    assert_eq(mneme_search_embedding_dim(), 384, "EMBEDDING_DIM == 384");
+
+    # model_not_found_returns_error (open a missing model dir → 0/None)
+    assert_eq(mneme_search_embedder_open(str_from("/nonexistent/path")), 0, "model not found → error");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

@@ -1,0 +1,22 @@
+# mneme-search — local ONNX embedder (ported from rust-old/crates/mneme-search/src/embedder.rs)
+# The actual ONNX inference (embed/embed_batch) is DEFERRED — it bridges to daimon over
+# sandhi HTTP or the sovereign ML stack (akshara→rosnet→rupantara). The Rust tests only
+# check EMBEDDING_DIM and that open() reports ModelNotFound for a missing model dir.
+
+var EMBEDDING_DIM = 384;
+fn mneme_search_embedding_dim(): i64 { return EMBEDDING_DIM; }
+
+fn _emb_cstr(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(s), n);
+    store8(buf + n, 0);
+    return buf;
+}
+
+# open a local embedder; 0 = ModelNotFound (or ONNX load — deferred, so 0 for now).
+fn mneme_search_embedder_open(models_dir: Str): i64 {
+    if (file_exists(_emb_cstr(path_join(models_dir, str_from("all-MiniLM-L6-v2.onnx")))) == 0) { return 0; }
+    if (file_exists(_emb_cstr(path_join(models_dir, str_from("tokenizer.json")))) == 0) { return 0; }
+    return 0;   # TODO: real ONNX session load — deferred (daimon/ML-stack bridge)
+}

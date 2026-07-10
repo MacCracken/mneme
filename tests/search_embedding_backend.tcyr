@@ -1,0 +1,61 @@
+# mneme-search embedding-backend tests — ported 1:1 from
+# rust-old/crates/mneme-search/src/embedding_backend.rs
+include "src/search_embedding_backend.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("search_embedding_backend");
+
+    # default_config
+    var d = mneme_search_embconfig_default();
+    assert_eq(str_eq_cstr(mneme_search_embconfig_backend(d), "auto"), 1, "default backend auto");
+    assert_eq(mneme_search_embconfig_remote_url(d), 0, "default remote_url none");
+    assert_eq(mneme_search_embconfig_model(d), 0, "default model none");
+
+    # config_serde_roundtrip
+    var c = mneme_search_embconfig_new(str_from("remote"), str_from("http://localhost:8420"), str_from("all-MiniLM-L6-v2"), 0, 384);
+    var p = mneme_search_embconfig_from_json(mneme_search_embconfig_to_json(c));
+    assert_eq(str_eq_cstr(mneme_search_embconfig_backend(p), "remote"), 1, "roundtrip backend remote");
+    assert_eq(str_eq_cstr(mneme_search_embconfig_remote_url(p), "http://localhost:8420"), 1, "roundtrip remote_url");
+    assert_eq(mneme_search_embconfig_dimensions(p), 384, "roundtrip dimensions 384");
+
+    # local_backend_unavailable_returns_none
+    assert_eq(mneme_search_build_backend(mneme_search_embconfig_new(str_from("local"), 0, 0, 0, 0 - 1), str_from("/nonexistent")), 0, "local backend unavailable none");
+
+    # remote_backend_no_url_returns_none
+    assert_eq(mneme_search_build_remote(mneme_search_embconfig_new(str_from("remote"), 0, 0, 0, 0 - 1)), 0, "remote no url none");
+
+    # auto_backend_without_remote_tries_local (must not panic; None)
+    assert_eq(mneme_search_build_backend(mneme_search_embconfig_default(), str_from("/nonexistent")), 0, "auto without remote none");
+
+    # config_deserialize_defaults
+    var dd = mneme_search_embconfig_from_json(str_from("{\"backend\": \"local\"}"));
+    assert_eq(str_eq_cstr(mneme_search_embconfig_backend(dd), "local"), 1, "deser backend local");
+    assert_eq(mneme_search_embconfig_remote_url(dd), 0, "deser remote_url none");
+    assert_eq(mneme_search_embconfig_model(dd), 0, "deser model none");
+    assert_eq(mneme_search_embconfig_api_key(dd), 0, "deser api_key none");
+    assert_eq(mneme_search_embconfig_dimensions(dd), 0 - 1, "deser dimensions none");
+
+    # config_deserialize_empty_uses_auto
+    assert_eq(str_eq_cstr(mneme_search_embconfig_backend(mneme_search_embconfig_from_json(str_from("{}"))), "auto"), 1, "empty json backend auto");
+
+    # config_with_all_fields
+    var ca = mneme_search_embconfig_new(str_from("remote"), str_from("http://localhost:8420"), str_from("text-embedding-3-small"), str_from("sk-test"), 1536);
+    var pa = mneme_search_embconfig_from_json(mneme_search_embconfig_to_json(ca));
+    assert_eq(str_eq_cstr(mneme_search_embconfig_api_key(pa), "sk-test"), 1, "all fields api_key");
+    assert_eq(mneme_search_embconfig_dimensions(pa), 1536, "all fields dimensions 1536");
+
+    # build_remote_missing_url_returns_none
+    assert_eq(mneme_search_build_remote(mneme_search_embconfig_new(str_from("remote"), 0, 0, 0, 0 - 1)), 0, "build_remote missing url none");
+
+    # build_local_nonexistent_path_returns_none
+    assert_eq(mneme_search_build_local(mneme_search_embconfig_new(str_from("local"), 0, 0, 0, 0 - 1), str_from("/nonexistent/path")), 0, "build_local nonexistent none");
+
+    # default_backend_fn
+    assert_eq(str_eq_cstr(mneme_search_default_backend(), "auto"), 1, "default_backend() == auto");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

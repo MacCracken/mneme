@@ -1,0 +1,132 @@
+# mneme-ui — TUI application state (ported from rust-old/crates/mneme-ui/src/app.rs)
+# The ratatui/crossterm rendering (views/main) is a separate concern; this is the
+# testable state layer: vault/engine wiring, note-list loading, panel navigation,
+# and the empty-query search guard. Graph/cluster/stale/split flows exist in the
+# Rust struct but their heavy paths need live embeddings (deferred); the tested
+# subset is faithful. Engines: vec of [vault_id, search, semantic].
+
+enum Panel { PANEL_NOTE_LIST; PANEL_NOTE_VIEW; PANEL_SEARCH; PANEL_TAGS; PANEL_GRAPH; PANEL_SPLIT_VIEW; PANEL_VAULT_PICKER; PANEL_STALE; PANEL_CLUSTERS; }
+
+# App (128): [manager@0, engines@8, models_dir@16, panel@24, notes@32, selected_index@40,
+#   search_query@48, search_results@56, tag_list@64, vault_list@72, stale_notes@80,
+#   clusters@88, should_quit@96, status_message@104, context_buffer@112, cluster_expanded@120]
+fn _ui_engines_get(engines, vault_id): i64 {
+    var i = 0;
+    while (i < vec_len(engines)) {
+        if (mneme_core_uuid_eq(load64(vec_get(engines, i)), vault_id) == 1) { return vec_get(engines, i); }
+        i = i + 1;
+    }
+    return 0;
+}
+fn mneme_ui_app_new(manager, models_dir): i64 {
+    var app = alloc(128);
+    store64(app, manager);
+    var engines = vec_new();
+    var ov = mneme_store_manager_active(manager);
+    if (ov != 0) {
+        var e = alloc(24);
+        store64(e, load64(mneme_store_openvault_info(ov)));
+        store64(e + 8, mneme_search_engine_in_memory());
+        store64(e + 16, mneme_search_semantic_engine_disabled());
+        vec_push(engines, e);
+    }
+    store64(app + 8, engines);
+    store64(app + 16, models_dir);
+    store64(app + 24, PANEL_NOTE_LIST);
+    store64(app + 32, vec_new());
+    store64(app + 40, 0);
+    store64(app + 48, str_from(""));
+    store64(app + 56, vec_new());
+    store64(app + 64, vec_new());
+    store64(app + 72, vec_new());
+    store64(app + 80, vec_new());
+    store64(app + 88, vec_new());
+    store64(app + 96, 0);
+    store64(app + 104, str_from("Press ? for help, v for vault picker"));
+    store64(app + 112, 0);
+    store64(app + 120, 0);
+    return app;
+}
+fn mneme_ui_app_panel(app): i64 { return load64(app + 24); }
+fn mneme_ui_app_set_panel(app, p): i64 { store64(app + 24, p); return 0; }
+fn mneme_ui_app_notes(app): i64 { return load64(app + 32); }
+fn mneme_ui_app_selected_index(app): i64 { return load64(app + 40); }
+fn mneme_ui_app_search_query(app): i64 { return load64(app + 48); }
+fn mneme_ui_app_set_search_query(app, s): i64 { store64(app + 48, s); return 0; }
+fn mneme_ui_app_search_results(app): i64 { return load64(app + 56); }
+fn mneme_ui_app_vault_list(app): i64 { return load64(app + 72); }
+fn mneme_ui_app_should_quit(app): i64 { return load64(app + 96); }
+fn mneme_ui_app_status_message(app): i64 { return load64(app + 104); }
+
+fn mneme_ui_app_active_vault_name(app): i64 {
+    var ov = mneme_store_manager_active(load64(app));
+    if (ov == 0) { return str_from("(none)"); }
+    return mneme_core_vault_info_name(mneme_store_openvault_info(ov));
+}
+fn _ui_active_search(app): i64 {
+    var aid = mneme_store_manager_active_id(load64(app));
+    if (aid == 0) { return 0; }
+    var eng = _ui_engines_get(load64(app + 8), aid);
+    if (eng == 0) { return 0; }
+    return load64(eng + 8);
+}
+fn mneme_ui_app_load_notes(app): i64 {
+    var ov = mneme_store_manager_active(load64(app));
+    if (ov == 0) { store64(app + 104, str_from("No active vault")); return 0; }
+    var notes = mneme_store_vault_list_notes(mneme_store_openvault_vault(ov), 100, 0);
+    store64(app + 32, notes);
+    if (load64(app + 40) >= vec_len(notes) && vec_len(notes) > 0) { store64(app + 40, vec_len(notes) - 1); }
+    return 0;
+}
+fn mneme_ui_app_load_vault_list(app): i64 {
+    store64(app + 72, mneme_store_registry_list(mneme_store_manager_registry(load64(app))));
+    store64(app + 40, 0);
+    return 0;
+}
+fn mneme_ui_app_run_search(app): i64 {
+    if (str_len(load64(app + 48)) == 0) { store64(app + 56, vec_new()); return 0; }
+    var search = _ui_active_search(app);
+    if (search == 0) { return 0; }
+    var results = mneme_search_engine_search(search, load64(app + 48), 20);
+    var out = vec_new();
+    var i = 0;
+    while (i < vec_len(results)) {
+        var r = vec_get(results, i);
+        var t = alloc(24);
+        store64(t, mneme_search_result_note_id(r));
+        store64(t + 8, mneme_search_result_title(r));
+        store64(t + 16, mneme_search_result_score(r));
+        vec_push(out, t);
+        i = i + 1;
+    }
+    store64(app + 56, out);
+    var sb = str_builder_new();
+    str_builder_add_int(sb, vec_len(out));
+    str_builder_add_cstr(sb, " result(s)");
+    store64(app + 104, str_builder_build(sb));
+    return 0;
+}
+# panel-specific list length for navigation clamping
+fn _ui_nav_max(app): i64 {
+    var panel = load64(app + 24);
+    if (panel == PANEL_NOTE_LIST) { return vec_len(load64(app + 32)); }
+    if (panel == PANEL_SEARCH) { return vec_len(load64(app + 56)); }
+    if (panel == PANEL_TAGS) { return vec_len(load64(app + 64)); }
+    if (panel == PANEL_VAULT_PICKER) { return vec_len(load64(app + 72)); }
+    if (panel == PANEL_STALE) { return vec_len(load64(app + 80)); }
+    if (panel == PANEL_CLUSTERS) { return vec_len(load64(app + 88)); }
+    return 0;
+}
+fn mneme_ui_app_select_next(app): i64 {
+    var panel = load64(app + 24);
+    if (panel == PANEL_GRAPH || panel == PANEL_SPLIT_VIEW) { return 0; }
+    var max = _ui_nav_max(app);
+    if (load64(app + 40) + 1 < max) { store64(app + 40, load64(app + 40) + 1); }
+    return 0;
+}
+fn mneme_ui_app_select_prev(app): i64 {
+    var panel = load64(app + 24);
+    if (panel == PANEL_GRAPH || panel == PANEL_SPLIT_VIEW) { return 0; }
+    if (load64(app + 40) > 0) { store64(app + 40, load64(app + 40) - 1); }
+    return 0;
+}

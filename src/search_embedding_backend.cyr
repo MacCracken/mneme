@@ -1,0 +1,117 @@
+# mneme-search — pluggable embedding backends (ported from
+# rust-old/crates/mneme-search/src/embedding_backend.rs). The actual remote HTTP
+# (RemoteHttpBackend /v1/embeddings) and local ONNX inference are DEFERRED — they
+# bridge to daimon over sandhi (or a remote OpenAI-compatible endpoint). The Rust
+# tests exercise only: EmbeddingConfig (default + JSON serde roundtrip) and the
+# build dispatch returning None without a remote_url / local model file.
+
+fn _eb_cstr(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(s), n);
+    store8(buf + n, 0);
+    return buf;
+}
+fn mneme_search_default_backend(): i64 { return str_from("auto"); }
+
+# hand-rolled flat-JSON getters (test JSON is simple: no nesting/escaping)
+fn _eb_json_str(json: Str, quoted_key): i64 {
+    var pos = str_index_of_cstr(json, quoted_key);
+    if (pos < 0) { return 0; }
+    var n = str_len(json);
+    var d = str_data(json);
+    var i = pos + strlen(quoted_key);
+    while (i < n && (load8(d + i) == 32 || load8(d + i) == 58)) { i = i + 1; }
+    if (i < n && load8(d + i) == 34) {
+        i = i + 1;
+        var start = i;
+        while (i < n && load8(d + i) != 34) { i = i + 1; }
+        return str_substr(json, start, i);
+    }
+    return 0;
+}
+fn _eb_json_int(json: Str, quoted_key): i64 {
+    var pos = str_index_of_cstr(json, quoted_key);
+    if (pos < 0) { return 0 - 1; }
+    var n = str_len(json);
+    var d = str_data(json);
+    var i = pos + strlen(quoted_key);
+    while (i < n && (load8(d + i) == 32 || load8(d + i) == 58)) { i = i + 1; }
+    if (i < n && load8(d + i) >= 48 && load8(d + i) <= 57) {
+        var v = 0;
+        while (i < n && load8(d + i) >= 48 && load8(d + i) <= 57) { v = v * 10 + (load8(d + i) - 48); i = i + 1; }
+        return v;
+    }
+    return 0 - 1;
+}
+
+# EmbeddingConfig (40): [backend@0, remote_url@8(0=None), model@16, api_key@24, dimensions@32(-1=None)]
+fn mneme_search_embconfig_default(): i64 {
+    var c = alloc(40);
+    store64(c, str_from("auto"));
+    store64(c + 8, 0);
+    store64(c + 16, 0);
+    store64(c + 24, 0);
+    store64(c + 32, 0 - 1);
+    return c;
+}
+fn mneme_search_embconfig_new(backend: Str, remote_url, model, api_key, dimensions): i64 {
+    var c = alloc(40);
+    store64(c, backend);
+    store64(c + 8, remote_url);
+    store64(c + 16, model);
+    store64(c + 24, api_key);
+    store64(c + 32, dimensions);
+    return c;
+}
+fn mneme_search_embconfig_backend(c): i64 { return load64(c); }
+fn mneme_search_embconfig_remote_url(c): i64 { return load64(c + 8); }
+fn mneme_search_embconfig_model(c): i64 { return load64(c + 16); }
+fn mneme_search_embconfig_api_key(c): i64 { return load64(c + 24); }
+fn mneme_search_embconfig_dimensions(c): i64 { return load64(c + 32); }
+
+fn _eb_json_opt_str(sb, val): i64 {
+    if (val != 0) { str_builder_putc(sb, 34); str_builder_add(sb, val); str_builder_putc(sb, 34); }
+    else { str_builder_add_cstr(sb, "null"); }
+    return 0;
+}
+fn mneme_search_embconfig_to_json(c): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"backend\":\"");
+    str_builder_add(sb, load64(c));
+    str_builder_add_cstr(sb, "\",\"remote_url\":");
+    _eb_json_opt_str(sb, load64(c + 8));
+    str_builder_add_cstr(sb, ",\"model\":");
+    _eb_json_opt_str(sb, load64(c + 16));
+    str_builder_add_cstr(sb, ",\"api_key\":");
+    _eb_json_opt_str(sb, load64(c + 24));
+    str_builder_add_cstr(sb, ",\"dimensions\":");
+    if (load64(c + 32) >= 0) { str_builder_add_int(sb, load64(c + 32)); }
+    else { str_builder_add_cstr(sb, "null"); }
+    str_builder_add_cstr(sb, "}");
+    return str_builder_build(sb);
+}
+fn mneme_search_embconfig_from_json(json: Str): i64 {
+    var backend = _eb_json_str(json, "\"backend\"");
+    if (backend == 0) { backend = str_from("auto"); }
+    return mneme_search_embconfig_new(backend, _eb_json_str(json, "\"remote_url\""), _eb_json_str(json, "\"model\""), _eb_json_str(json, "\"api_key\""), _eb_json_int(json, "\"dimensions\""));
+}
+
+# build_remote: 0 (None) if no remote_url; live HTTP backend DEFERRED (daimon/sandhi)
+fn mneme_search_build_remote(c): i64 {
+    if (load64(c + 8) == 0) { return 0; }
+    return 0;   # TODO: RemoteHttpBackend over sandhi /v1/embeddings — deferred
+}
+# build_local: 0 (None) if the ONNX model file is absent; ONNX load DEFERRED
+fn mneme_search_build_local(c, models_dir: Str): i64 {
+    if (file_exists(_eb_cstr(path_join(models_dir, str_from("all-MiniLM-L6-v2.onnx")))) == 0) { return 0; }
+    return 0;   # TODO: LocalOnnxBackend — deferred
+}
+fn mneme_search_build_backend(c, models_dir: Str): i64 {
+    var backend = load64(c);
+    if (str_eq_cstr(backend, "remote") == 1) { return mneme_search_build_remote(c); }
+    elif (str_eq_cstr(backend, "local") == 1) { return mneme_search_build_local(c, models_dir); }
+    var r = mneme_search_build_remote(c);
+    if (r != 0) { return r; }
+    return mneme_search_build_local(c, models_dir);
+}

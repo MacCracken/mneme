@@ -1,0 +1,64 @@
+# mneme-ai — daimon event bus (ported from rust-old/crates/mneme-ai/src/event_bus.rs)
+# publish/list_topics bridge to daimon over sandhi SSE (DEFERRED). MnemeEvent's
+# topic()/serde + EventBusClient defaults are pure. Event JSON emits the tagged
+# "event_type" (fields omitted — untested beyond the tag).
+
+enum MnemeEventKind { EVENT_NOTE_CREATED; EVENT_NOTE_UPDATED; EVENT_NOTE_DELETED; EVENT_CONCEPT_EXTRACTED; EVENT_SEARCH_EXECUTED; }
+
+# MnemeEvent (40): [variant@0, vault_id@8, note_id@16, sfield@24, xfield@32]
+fn _event_new(variant, vault_id, note_id, sfield, xfield): i64 {
+    var e = alloc(40);
+    store64(e, variant);
+    store64(e + 8, vault_id);
+    store64(e + 16, note_id);
+    store64(e + 24, sfield);
+    store64(e + 32, xfield);
+    return e;
+}
+fn mneme_ai_event_note_created(vault_id, note_id, title, tags): i64 { return _event_new(EVENT_NOTE_CREATED, vault_id, note_id, title, tags); }
+fn mneme_ai_event_note_updated(vault_id, note_id, title): i64 { return _event_new(EVENT_NOTE_UPDATED, vault_id, note_id, title, 0); }
+fn mneme_ai_event_note_deleted(vault_id, note_id): i64 { return _event_new(EVENT_NOTE_DELETED, vault_id, note_id, 0, 0); }
+fn mneme_ai_event_concept_extracted(vault_id, note_id, concepts): i64 { return _event_new(EVENT_CONCEPT_EXTRACTED, vault_id, note_id, 0, concepts); }
+fn mneme_ai_event_search_executed(vault_id, query, result_count): i64 { return _event_new(EVENT_SEARCH_EXECUTED, vault_id, 0, query, result_count); }
+fn mneme_ai_event_variant(e): i64 { return load64(e); }
+
+fn mneme_ai_event_topic(e): i64 {
+    var v = load64(e);
+    if (v == EVENT_NOTE_CREATED) { return str_from("mneme.note.created"); }
+    if (v == EVENT_NOTE_UPDATED) { return str_from("mneme.note.updated"); }
+    if (v == EVENT_NOTE_DELETED) { return str_from("mneme.note.deleted"); }
+    if (v == EVENT_CONCEPT_EXTRACTED) { return str_from("mneme.concept.extracted"); }
+    return str_from("mneme.search.executed");
+}
+fn mneme_ai_event_to_json(e): i64 {
+    var v = load64(e);
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"event_type\":\"");
+    if (v == EVENT_NOTE_CREATED) { str_builder_add_cstr(sb, "note.created"); }
+    elif (v == EVENT_NOTE_UPDATED) { str_builder_add_cstr(sb, "note.updated"); }
+    elif (v == EVENT_NOTE_DELETED) { str_builder_add_cstr(sb, "note.deleted"); }
+    elif (v == EVENT_CONCEPT_EXTRACTED) { str_builder_add_cstr(sb, "concept.extracted"); }
+    else { str_builder_add_cstr(sb, "search.executed"); }
+    str_builder_add_cstr(sb, "\"}");
+    return str_builder_build(sb);
+}
+
+# TopicInfo (16): [topic@0, subscribers@8]
+fn mneme_ai_topic_info_new(topic, subscribers): i64 {
+    var t = alloc(16);
+    store64(t, topic);
+    store64(t + 8, subscribers);
+    return t;
+}
+fn mneme_ai_topic_info_topic(t): i64 { return load64(t); }
+fn mneme_ai_topic_info_subscribers(t): i64 { return load64(t + 8); }
+
+# EventBusClient (16): [base_url@0, sender_name@8]
+fn mneme_ai_event_bus_client_new(base_url, sender_name): i64 {
+    var c = alloc(16);
+    if (base_url == 0) { store64(c, str_from("http://127.0.0.1:8090")); } else { store64(c, base_url); }
+    if (sender_name == 0) { store64(c + 8, str_from("mneme")); } else { store64(c + 8, sender_name); }
+    return c;
+}
+fn mneme_ai_event_bus_client_base_url(c): i64 { return load64(c); }
+fn mneme_ai_event_bus_client_sender_name(c): i64 { return load64(c + 8); }

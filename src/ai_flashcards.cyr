@@ -1,0 +1,210 @@
+# mneme-ai — spaced-repetition flashcards (ported from
+# rust-old/crates/mneme-ai/src/flashcards.rs). extract_flashcards (definition +
+# concept patterns) and the SM-2 CardSchedule are pure; the daimon AI-generation
+# path is DEFERRED. Timestamps are epoch seconds. Depends on core_uuid (v5).
+
+enum CardType { CARD_DEFINITION; CARD_CONCEPT; CARD_AI_GENERATED; }
+enum RecallQuality { RECALL_AGAIN; RECALL_HARD; RECALL_GOOD; RECALL_EASY; }
+
+# Flashcard (48): [id@0, note_id@8, front@16, back@24, card_type@32, created_at@40(epoch)]
+fn mneme_ai_flashcard_new(id, note_id, front, back, card_type, created_at): i64 {
+    var c = alloc(48);
+    store64(c, id);
+    store64(c + 8, note_id);
+    store64(c + 16, front);
+    store64(c + 24, back);
+    store64(c + 32, card_type);
+    store64(c + 40, created_at);
+    return c;
+}
+fn mneme_ai_flashcard_id(c): i64 { return load64(c); }
+fn mneme_ai_flashcard_note_id(c): i64 { return load64(c + 8); }
+fn mneme_ai_flashcard_front(c): i64 { return load64(c + 16); }
+fn mneme_ai_flashcard_back(c): i64 { return load64(c + 24); }
+fn mneme_ai_flashcard_card_type(c): i64 { return load64(c + 32); }
+fn _fc_card_type_str(t): i64 {
+    if (t == CARD_DEFINITION) { return str_from("definition"); }
+    if (t == CARD_CONCEPT) { return str_from("concept"); }
+    return str_from("ai_generated");
+}
+fn mneme_ai_flashcard_to_json(c): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"front\":\"");
+    str_builder_add(sb, load64(c + 16));
+    str_builder_add_cstr(sb, "\",\"back\":\"");
+    str_builder_add(sb, load64(c + 24));
+    str_builder_add_cstr(sb, "\",\"card_type\":\"");
+    str_builder_add(sb, _fc_card_type_str(load64(c + 32)));
+    str_builder_add_cstr(sb, "\"}");
+    return str_builder_build(sb);
+}
+
+fn _fc_ws(ch): i64 { if (ch == 32 || ch == 9 || ch == 10 || ch == 13) { return 1; } return 0; }
+fn _fc_trim(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var a = 0;
+    while (a < n && _fc_ws(load8(d + a)) == 1) { a = a + 1; }
+    var b = n;
+    while (b > a && _fc_ws(load8(d + b - 1)) == 1) { b = b - 1; }
+    return str_substr(s, a, b);
+}
+fn _fc_lines(content: Str): i64 {
+    var out = vec_new();
+    var n = str_len(content);
+    var d = str_data(content);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; } elif (load8(d + i) == 10) { isend = 1; }
+        if (isend == 1) { vec_push(out, str_substr(content, start, i)); start = i + 1; }
+        i = i + 1;
+    }
+    return out;
+}
+fn _fc_starts_cstr(s: Str, pfx): i64 {
+    var pl = strlen(pfx);
+    if (str_len(s) < pl) { return 0; }
+    if (memeq(str_data(s), pfx, pl) == 1) { return 1; }
+    return 0;
+}
+fn _fc_uuid_hex(u): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < 16) {
+        var b = load8(u + i);
+        var hi = (b >> 4) & 15;
+        var lo = b & 15;
+        if (hi < 10) { str_builder_putc(sb, 48 + hi); } else { str_builder_putc(sb, 87 + hi); }
+        if (lo < 10) { str_builder_putc(sb, 48 + lo); } else { str_builder_putc(sb, 87 + lo); }
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+fn _fc_v5(note_id, kind_cstr, key: Str): i64 {
+    var sb = str_builder_new();
+    str_builder_add(sb, _fc_uuid_hex(note_id));
+    str_builder_putc(sb, 58);
+    str_builder_add_cstr(sb, kind_cstr);
+    str_builder_putc(sb, 58);
+    str_builder_add(sb, key);
+    return mneme_core_uuid_v5_str(str_builder_build(sb));
+}
+
+fn mneme_ai_extract_flashcards(note_id, content: Str): i64 {
+    var cards = vec_new();
+    var now = clock_epoch_secs();
+    var lines = _fc_lines(content);
+
+    # Pattern 1: **Term**: definition  (or — / -)
+    var li = 0;
+    while (li < vec_len(lines)) {
+        var trimmed = _fc_trim(vec_get(lines, li));
+        if (_fc_starts_cstr(trimmed, "**") == 1) {
+            var rest = str_substr(trimmed, 2, str_len(trimmed));
+            var idx = str_index_of_cstr(rest, "**");
+            if (idx >= 0) {
+                var term = str_substr(rest, 0, idx);
+                var after = _fc_trim(str_substr(rest, idx + 2, str_len(rest)));
+                var def = 0;
+                var ad = str_data(after);
+                var an = str_len(after);
+                if (an > 0 && load8(ad) == 58) { def = str_substr(after, 1, an); }
+                elif (an >= 3 && load8(ad) == 226 && load8(ad + 1) == 128 && load8(ad + 2) == 148) { def = str_substr(after, 3, an); }
+                elif (an > 0 && load8(ad) == 45) { def = str_substr(after, 1, an); }
+                if (def != 0) {
+                    def = _fc_trim(def);
+                    if (str_len(def) > 0) {
+                        var front = str_builder_new();
+                        str_builder_add_cstr(front, "What is ");
+                        str_builder_add(front, term);
+                        str_builder_putc(front, 63);
+                        vec_push(cards, mneme_ai_flashcard_new(_fc_v5(note_id, "def", term), note_id, str_builder_build(front), def, CARD_DEFINITION, now));
+                    }
+                }
+            }
+        }
+        li = li + 1;
+    }
+
+    # Pattern 2: ## heading -> first paragraph
+    var heading = 0;
+    var paragraph = str_from("");
+    li = 0;
+    while (li < vec_len(lines)) {
+        var trimmed2 = _fc_trim(vec_get(lines, li));
+        var h = 0;
+        if (_fc_starts_cstr(trimmed2, "## ") == 1) { h = str_substr(trimmed2, 3, str_len(trimmed2)); }
+        elif (_fc_starts_cstr(trimmed2, "### ") == 1) { h = str_substr(trimmed2, 4, str_len(trimmed2)); }
+        if (h != 0) {
+            if (heading != 0 && str_len(_fc_trim(paragraph)) > 0) {
+                var fr = str_builder_new();
+                str_builder_add_cstr(fr, "Explain: ");
+                str_builder_add(fr, heading);
+                vec_push(cards, mneme_ai_flashcard_new(_fc_v5(note_id, "concept", heading), note_id, str_builder_build(fr), _fc_trim(paragraph), CARD_CONCEPT, now));
+            }
+            heading = h;
+            paragraph = str_from("");
+        } elif (heading != 0 && str_len(trimmed2) > 0 && _fc_starts_cstr(trimmed2, "#") == 0) {
+            var pb = str_builder_new();
+            if (str_len(paragraph) > 0) { str_builder_add(pb, paragraph); str_builder_putc(pb, 32); }
+            str_builder_add(pb, trimmed2);
+            paragraph = str_builder_build(pb);
+        }
+        li = li + 1;
+    }
+    if (heading != 0 && str_len(_fc_trim(paragraph)) > 0) {
+        var fr2 = str_builder_new();
+        str_builder_add_cstr(fr2, "Explain: ");
+        str_builder_add(fr2, heading);
+        vec_push(cards, mneme_ai_flashcard_new(_fc_v5(note_id, "concept", heading), note_id, str_builder_build(fr2), _fc_trim(paragraph), CARD_CONCEPT, now));
+    }
+    return cards;
+}
+
+# CardSchedule (48): [card_id@0, ease_factor@8(f64), interval_days@16, repetitions@24, next_review@32(epoch), last_review@40(0=None)]
+fn mneme_ai_card_schedule_new(card_id): i64 {
+    var s = alloc(48);
+    store64(s, card_id);
+    store64(s + 8, f64_parse("2.5"));
+    store64(s + 16, 1);
+    store64(s + 24, 0);
+    store64(s + 32, clock_epoch_secs());
+    store64(s + 40, 0);
+    return s;
+}
+fn mneme_ai_card_schedule_ease_factor(s): i64 { return load64(s + 8); }
+fn mneme_ai_card_schedule_interval_days(s): i64 { return load64(s + 16); }
+fn mneme_ai_card_schedule_repetitions(s): i64 { return load64(s + 24); }
+fn mneme_ai_card_schedule_is_due(s): i64 {
+    if (clock_epoch_secs() >= load64(s + 32)) { return 1; }
+    return 0;
+}
+fn mneme_ai_card_schedule_review(s, quality): i64 {
+    var q = 0;
+    if (quality == RECALL_AGAIN) { q = 0; }
+    elif (quality == RECALL_HARD) { q = 1; }
+    elif (quality == RECALL_GOOD) { q = 3; }
+    else { q = 5; }
+    if (q < 2) {
+        store64(s + 24, 0);
+        store64(s + 16, 1);
+    } else {
+        store64(s + 24, load64(s + 24) + 1);
+        var reps = load64(s + 24);
+        if (reps == 1) { store64(s + 16, 1); }
+        elif (reps == 2) { store64(s + 16, 6); }
+        else { store64(s + 16, f64_to(f64_trunc(f64_mul(f64_from(load64(s + 16)), load64(s + 8))))); }
+    }
+    # update ease factor (SM-2)
+    var qf = f64_from(q);
+    var fmq = f64_sub(f64_from(5), qf);
+    var delta = f64_sub(f64_parse("0.1"), f64_mul(fmq, f64_add(f64_parse("0.08"), f64_mul(fmq, f64_parse("0.02")))));
+    var ease = f64_add(load64(s + 8), delta);
+    if (f64_le(ease, f64_parse("1.3")) == 1) { ease = f64_parse("1.3"); }
+    store64(s + 8, ease);
+    store64(s + 40, clock_epoch_secs());
+    store64(s + 32, clock_epoch_secs() + load64(s + 16) * 86400);
+    return 0;
+}

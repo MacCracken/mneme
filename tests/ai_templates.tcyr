@@ -1,0 +1,67 @@
+# mneme-ai template tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/templates.rs (7 #[test] cases).
+include "src/ai_templates.cyr"
+
+fn _kv(k, v): i64 {
+    var p = alloc(16);
+    store64(p, str_from(k));
+    store64(p + 8, str_from(v));
+    return p;
+}
+fn _ends_md(s: Str): i64 {
+    var n = str_len(s);
+    if (n < 3) { return 0; }
+    if (str_eq_cstr(str_substr(s, n - 3, n), ".md") == 1) { return 1; }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("ai_templates");
+
+    # render_daily_note
+    var rd = mneme_ai_render_template(mneme_ai_daily_note_template(), vec_new());
+    assert_eq(str_contains(mneme_ai_rendered_title(rd), str_from("Daily Note")), 1, "daily title has Daily Note");
+    assert_eq(str_contains(mneme_ai_rendered_content(rd), str_from("## Tasks")), 1, "daily content has Tasks");
+    assert_eq(vec_len(mneme_ai_rendered_tags(rd)), 1, "daily one tag");
+    assert_eq(str_eq_cstr(vec_get(mneme_ai_rendered_tags(rd), 0), "daily"), 1, "daily tag value");
+    assert_eq(mneme_ai_rendered_path(rd) != 0, 1, "daily path some");
+
+    # render_meeting_with_vars
+    var mv = vec_new();
+    vec_push(mv, _kv("topic", "Sprint Planning"));
+    vec_push(mv, _kv("attendees", "Alice, Bob"));
+    var rm = mneme_ai_render_template(mneme_ai_meeting_note_template(), mv);
+    assert_eq(str_contains(mneme_ai_rendered_title(rm), str_from("Sprint Planning")), 1, "meeting title topic");
+    assert_eq(str_contains(mneme_ai_rendered_content(rm), str_from("Alice, Bob")), 1, "meeting content attendees");
+
+    # render_project_note
+    var pv = vec_new();
+    vec_push(pv, _kv("name", "Mneme"));
+    var rp = mneme_ai_render_template(mneme_ai_project_note_template(), pv);
+    assert_eq(str_eq_cstr(mneme_ai_rendered_title(rp), "Project: Mneme"), 1, "project title exact");
+    assert_eq(str_contains(mneme_ai_rendered_content(rp), str_from("# Mneme")), 1, "project content heading");
+
+    # builtin_template_count
+    assert_eq(vec_len(mneme_ai_builtin_templates()), 3, "3 builtin templates");
+
+    # substitute_replaces_vars
+    var c1 = vec_new();
+    vec_push(c1, _kv("name", "World"));
+    assert_eq(str_eq_cstr(mneme_ai_substitute(str_from("Hello {{name}}!"), c1), "Hello World!"), 1, "substitute single");
+
+    # substitute_multiple_occurrences
+    var c2 = vec_new();
+    vec_push(c2, _kv("x", "A"));
+    assert_eq(str_eq_cstr(mneme_ai_substitute(str_from("{{x}} and {{x}}"), c2), "A and A"), 1, "substitute multiple");
+
+    # daily_note_path_structure
+    var rd2 = mneme_ai_render_template(mneme_ai_daily_note_template(), vec_new());
+    assert_eq(_ends_md(mneme_ai_rendered_path(rd2)), 1, "path ends with .md");
+    assert_eq(str_index_of(mneme_ai_rendered_path(rd2), 47) >= 0, 1, "path contains slash");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

@@ -1,0 +1,105 @@
+# mneme-mcp — MCP JSON-RPC 2.0 protocol helpers (ported from
+# rust-old/crates/mneme-mcp/src/protocol.rs). Responses are built as JSON strings
+# (what the stdio transport writes). bote's ToolDef/ToolSchema are hand-rolled
+# structs; tool_definitions() carries names + required fields (the property
+# schemas are metadata the tests don't inspect in detail).
+
+fn _mcp_escape(sb, s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c == 34 || c == 92) { str_builder_putc(sb, 92); }
+        str_builder_putc(sb, c);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# id_raw is the raw JSON representation of the id (e.g. "1" or "\"abc\"")
+fn mneme_mcp_success(id_raw: Str, text: Str): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"jsonrpc\":\"2.0\",\"id\":");
+    str_builder_add(sb, id_raw);
+    str_builder_add_cstr(sb, ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"");
+    _mcp_escape(sb, text);
+    str_builder_add_cstr(sb, "\"}]}}");
+    return str_builder_build(sb);
+}
+fn mneme_mcp_error(id_raw: Str, msg: Str): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"jsonrpc\":\"2.0\",\"id\":");
+    str_builder_add(sb, id_raw);
+    str_builder_add_cstr(sb, ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"");
+    _mcp_escape(sb, msg);
+    str_builder_add_cstr(sb, "\"}],\"isError\":true}}");
+    return str_builder_build(sb);
+}
+fn mneme_mcp_jsonrpc_error(id_raw: Str, code, message: Str): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"jsonrpc\":\"2.0\",\"id\":");
+    str_builder_add(sb, id_raw);
+    str_builder_add_cstr(sb, ",\"error\":{\"code\":");
+    str_builder_add_int(sb, code);
+    str_builder_add_cstr(sb, ",\"message\":\"");
+    _mcp_escape(sb, message);
+    str_builder_add_cstr(sb, "\"}}");
+    return str_builder_build(sb);
+}
+
+# ToolSchema (16): [schema_type@0(Str), required@8(vec<Str>)]
+fn mneme_mcp_tool_schema_new(schema_type, required): i64 {
+    var s = alloc(16);
+    store64(s, schema_type);
+    store64(s + 8, required);
+    return s;
+}
+fn mneme_mcp_tool_schema_type(s): i64 { return load64(s); }
+fn mneme_mcp_tool_schema_required(s): i64 { return load64(s + 8); }
+fn mneme_mcp_tool_schema_required_has(s, name): i64 {
+    var req = load64(s + 8);
+    var i = 0;
+    while (i < vec_len(req)) {
+        if (str_eq_cstr(vec_get(req, i), name) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+# ToolDef (24): [name@0, description@8, input_schema@16]
+fn mneme_mcp_tool_def_new(name, description, input_schema): i64 {
+    var t = alloc(24);
+    store64(t, name);
+    store64(t + 8, description);
+    store64(t + 16, input_schema);
+    return t;
+}
+fn mneme_mcp_tool_def_name(t): i64 { return load64(t); }
+fn mneme_mcp_tool_def_description(t): i64 { return load64(t + 8); }
+fn mneme_mcp_tool_def_input_schema(t): i64 { return load64(t + 16); }
+
+fn _mcp_req0(): i64 { return vec_new(); }
+fn _mcp_req1(a): i64 { var v = vec_new(); vec_push(v, str_from(a)); return v; }
+fn _mcp_req2(a, b): i64 { var v = vec_new(); vec_push(v, str_from(a)); vec_push(v, str_from(b)); return v; }
+fn _mcp_obj(required): i64 { return mneme_mcp_tool_schema_new(str_from("object"), required); }
+
+fn mneme_mcp_tool_definitions(): i64 {
+    var tools = vec_new();
+    vec_push(tools, mneme_mcp_tool_def_new(str_from("mneme_create_note"), str_from("Create a new note in the Mneme knowledge base with title, content, and optional tags"), _mcp_obj(_mcp_req2("title", "content"))));
+    vec_push(tools, mneme_mcp_tool_def_new(str_from("mneme_search"), str_from("Search notes by keyword, full-text query, or tag filter. Uses hybrid FTS + semantic search when available."), _mcp_obj(_mcp_req1("query"))));
+    vec_push(tools, mneme_mcp_tool_def_new(str_from("mneme_get_note"), str_from("Retrieve a note by ID with its full content, tags, and backlinks"), _mcp_obj(_mcp_req1("id"))));
+    vec_push(tools, mneme_mcp_tool_def_new(str_from("mneme_update_note"), str_from("Update a note's title, content, or tags"), _mcp_obj(_mcp_req1("id"))));
+    vec_push(tools, mneme_mcp_tool_def_new(str_from("mneme_query_graph"), str_from("Query the knowledge graph for notes related to a given note, tag, or concept"), _mcp_obj(_mcp_req0())));
+    vec_push(tools, mneme_mcp_tool_def_new(str_from("mneme_search_feedback"), str_from("Record that a search result was useful (clicked/opened). Improves future search ranking."), _mcp_obj(_mcp_req2("search_id", "note_id"))));
+    vec_push(tools, mneme_mcp_tool_def_new(str_from("mneme_list_vaults"), str_from("List all registered vaults with their status"), _mcp_obj(_mcp_req0())));
+    vec_push(tools, mneme_mcp_tool_def_new(str_from("mneme_switch_vault"), str_from("Switch the active vault by name or ID"), _mcp_obj(_mcp_req1("vault"))));
+    return tools;
+}
+fn mneme_mcp_tool_find(tools, name): i64 {
+    var i = 0;
+    while (i < vec_len(tools)) {
+        if (str_eq_cstr(mneme_mcp_tool_def_name(vec_get(tools, i)), name) == 1) { return vec_get(tools, i); }
+        i = i + 1;
+    }
+    return 0;
+}

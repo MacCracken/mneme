@@ -1,0 +1,102 @@
+# mneme-ai — automatic tag suggestions (ported from
+# rust-old/crates/mneme-ai/src/tagger.rs). Pure logic over concept extraction
+# (ai_concepts) + the vault's existing tag vocabulary. Confidence is an f64
+# IEEE-754 bit pattern (Cyrius convention).
+
+enum TagReason { TAG_REASON_CONCEPT_MATCH; TAG_REASON_VOCABULARY_MATCH; }
+
+# TagSuggestion (24): [tag@0(Str), confidence@8(f64), reason@16(int)]
+fn mneme_ai_tag_suggestion_new(tag, confidence, reason): i64 {
+    var s = alloc(24);
+    store64(s, tag);
+    store64(s + 8, confidence);
+    store64(s + 16, reason);
+    return s;
+}
+fn mneme_ai_tag_suggestion_tag(s): i64 { return load64(s); }
+fn mneme_ai_tag_suggestion_confidence(s): i64 { return load64(s + 8); }
+fn mneme_ai_tag_suggestion_reason(s): i64 { return load64(s + 16); }
+
+fn _tagger_str_in(v, s): i64 {
+    var i = 0;
+    while (i < vec_len(v)) {
+        if (str_eq(vec_get(v, i), s) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _tagger_sugg_has(suggestions, tag): i64 {
+    var i = 0;
+    while (i < vec_len(suggestions)) {
+        if (str_eq(mneme_ai_tag_suggestion_tag(vec_get(suggestions, i)), tag) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# suggest tags; returns vec<TagSuggestion> (Ok) or 0 (Err, propagated from extract)
+fn mneme_ai_suggest_tags(content: Str, existing, max_suggestions): i64 {
+    var concepts = mneme_ai_extract_concepts(content);
+    if (concepts == 0) { return 0; }
+    var suggestions = vec_new();
+
+    # match extracted concepts against existing tags (exact + partial substring)
+    var i = 0;
+    while (i < vec_len(concepts)) {
+        var concept = vec_get(concepts, i);
+        var term = mneme_ai_concept_term(concept);
+        if (_tagger_str_in(existing, term) == 1) {
+            vec_push(suggestions, mneme_ai_tag_suggestion_new(term, f64_min(mneme_ai_concept_score(concept), f64_from(1)), TAG_REASON_VOCABULARY_MATCH));
+        }
+        var j = 0;
+        while (j < vec_len(existing)) {
+            var tag = vec_get(existing, j);
+            if (str_contains(tag, term) == 1 && str_eq(tag, term) == 0) {
+                vec_push(suggestions, mneme_ai_tag_suggestion_new(tag, f64_mul(mneme_ai_concept_score(concept), f64_parse("0.7")), TAG_REASON_VOCABULARY_MATCH));
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    # suggest new tags from high-scoring topic concepts
+    i = 0;
+    while (i < vec_len(concepts)) {
+        var concept2 = vec_get(concepts, i);
+        var term2 = mneme_ai_concept_term(concept2);
+        if (mneme_ai_concept_kind(concept2) == CONCEPT_KIND_TOPIC && f64_le(mneme_ai_concept_score(concept2), f64_parse("0.01")) == 0 && _tagger_str_in(existing, term2) == 0 && _tagger_sugg_has(suggestions, term2) == 0) {
+            vec_push(suggestions, mneme_ai_tag_suggestion_new(term2, f64_mul(mneme_ai_concept_score(concept2), f64_parse("0.5")), TAG_REASON_CONCEPT_MATCH));
+        }
+        i = i + 1;
+    }
+
+    # sort by confidence descending (bubble)
+    var m = vec_len(suggestions);
+    var a = 0;
+    while (a < m) {
+        var b = 0;
+        while (b + 1 + a < m) {
+            if (f64_ge(mneme_ai_tag_suggestion_confidence(vec_get(suggestions, b)), mneme_ai_tag_suggestion_confidence(vec_get(suggestions, b + 1))) == 0) {
+                var tmp = vec_get(suggestions, b);
+                vec_set(suggestions, b, vec_get(suggestions, b + 1));
+                vec_set(suggestions, b + 1, tmp);
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+
+    # deduplicate by tag (keep first in sorted order), then truncate
+    var seen = vec_new();
+    var out = vec_new();
+    i = 0;
+    while (i < vec_len(suggestions) && vec_len(out) < max_suggestions) {
+        var s = vec_get(suggestions, i);
+        if (_tagger_str_in(seen, mneme_ai_tag_suggestion_tag(s)) == 0) {
+            vec_push(seen, mneme_ai_tag_suggestion_tag(s));
+            vec_push(out, s);
+        }
+        i = i + 1;
+    }
+    return out;
+}

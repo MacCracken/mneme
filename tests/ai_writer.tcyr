@@ -1,0 +1,46 @@
+# mneme-ai writer tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/writer.rs (6 #[test] cases).
+include "src/ai_writer.cyr"
+
+fn _has(s: Str, w): i64 { if (str_index_of_cstr(s, w) >= 0) { return 1; } return 0; }
+
+fn main() {
+    alloc_init();
+    test_group("ai_writer");
+
+    # local_complete
+    var r1 = mneme_ai_writer_local_assist(mneme_ai_write_request_new(WRITE_COMPLETE, str_from("Rust is a systems programming language."), 0));
+    assert_eq(str_len(r1) > 0, 1, "complete non-empty");
+    assert_eq(_has(r1, "exploration"), 1, "complete has exploration");
+
+    # local_reword
+    var r2 = mneme_ai_writer_local_assist(mneme_ai_write_request_new(WRITE_REWORD, str_from("This is also important because it helps show the big picture."), 0));
+    var ok2 = 0;
+    if (_has(r2, "additionally") == 1 || _has(r2, "significant") == 1 || _has(r2, "demonstrate") == 1) { ok2 = 1; }
+    assert_eq(ok2, 1, "reword swapped a word");
+
+    # local_expand
+    var txt3 = str_from("Rust ensures memory safety. The borrow checker prevents data races.");
+    var r3 = mneme_ai_writer_local_assist(mneme_ai_write_request_new(WRITE_EXPAND, txt3, 0));
+    assert_eq(str_len(r3) > str_len(txt3), 1, "expand longer");
+    assert_eq(_has(r3, "elaborate"), 1, "expand has elaborate");
+
+    # local_complete_empty_sentences
+    var r4 = mneme_ai_writer_local_assist(mneme_ai_write_request_new(WRITE_COMPLETE, str_from("no periods here"), 0));
+    assert_eq(_has(r4, "Furthermore"), 1, "complete no-period has Furthermore");
+
+    # local_expand_single_sentence
+    var txt5 = str_from("Rust is fast.");
+    var r5 = mneme_ai_writer_local_assist(mneme_ai_write_request_new(WRITE_EXPAND, txt5, 0));
+    assert_eq(str_len(r5) > str_len(txt5), 1, "expand single longer");
+
+    # write_result_serialization
+    var json = mneme_ai_write_result_to_json(mneme_ai_write_result_new(str_from("test"), str_from("tested"), WRITE_REWORD, WRITE_SOURCE_LOCAL));
+    assert_eq(_has(json, "reword"), 1, "json has reword");
+    assert_eq(_has(json, "local"), 1, "json has local");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

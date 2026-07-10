@@ -1,0 +1,102 @@
+# mneme-search semantic hybrid-merge tests — ported 1:1 from
+# rust-old/crates/mneme-search/src/semantic.rs (8 #[test] cases).
+include "src/core_uuid.cyr"
+include "src/search_vector_store.cyr"
+include "src/search_retrieval_optimizer.cyr"
+include "src/search_semantic.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("search_semantic");
+
+    # hybrid_merge_fulltext_only
+    var id = mneme_core_uuid_v4();
+    var ft1 = vec_new();
+    vec_push(ft1, mneme_search_ft_result_new(id, str_from("Note"), str_from("note.md"), str_from("content"), f64_from(1)));
+    var r1 = mneme_search_hybrid_merge(ft1, vec_new(), 10);
+    assert_eq(vec_len(r1), 1, "fulltext-only len 1");
+    assert_eq(mneme_search_hybridresult_source(vec_get(r1, 0)), RESULT_SOURCE_FULLTEXT, "fulltext-only source");
+
+    # hybrid_merge_semantic_only
+    var id2 = mneme_core_uuid_v4();
+    var sem2 = vec_new();
+    vec_push(sem2, mneme_search_semresult_new(id2, str_from("Note"), str_from("semantic content"), f64_parse("0.9")));
+    var r2 = mneme_search_hybrid_merge(vec_new(), sem2, 10);
+    assert_eq(vec_len(r2), 1, "semantic-only len 1");
+    assert_eq(mneme_search_hybridresult_source(vec_get(r2, 0)), RESULT_SOURCE_SEMANTIC, "semantic-only source");
+
+    # hybrid_merge_both_sources
+    var id3 = mneme_core_uuid_v4();
+    var ft3 = vec_new();
+    vec_push(ft3, mneme_search_ft_result_new(id3, str_from("Note"), str_from("note.md"), str_from("content"), f64_from(1)));
+    var sem3 = vec_new();
+    vec_push(sem3, mneme_search_semresult_new(id3, str_from("Note"), str_from("semantic content"), f64_parse("0.9")));
+    var r3 = mneme_search_hybrid_merge(ft3, sem3, 10);
+    assert_eq(vec_len(r3), 1, "both len 1");
+    assert_eq(mneme_search_hybridresult_source(vec_get(r3, 0)), RESULT_SOURCE_BOTH, "both source");
+    var okscore = 0;
+    if (f64_le(mneme_search_hybridresult_score(vec_get(r3, 0)), f64_div(f64_from(1), f64_from(61))) == 0) { okscore = 1; }
+    assert_eq(okscore, 1, "both score > 1/61");
+
+    # hybrid_merge_deduplicates
+    var d1 = mneme_core_uuid_v4();
+    var d2 = mneme_core_uuid_v4();
+    var ft4 = vec_new();
+    vec_push(ft4, mneme_search_ft_result_new(d1, str_from("A"), str_from("a.md"), str_from("a"), f64_from(2)));
+    vec_push(ft4, mneme_search_ft_result_new(d2, str_from("B"), str_from("b.md"), str_from("b"), f64_from(1)));
+    var sem4 = vec_new();
+    vec_push(sem4, mneme_search_semresult_new(d1, str_from("A"), str_from("a semantic"), f64_parse("0.9")));
+    var r4 = mneme_search_hybrid_merge(ft4, sem4, 10);
+    assert_eq(vec_len(r4), 2, "dedup len 2");
+    assert_eq(mneme_core_uuid_eq(mneme_search_hybridresult_note_id(vec_get(r4, 0)), d1), 1, "dedup id1 first");
+
+    # hybrid_merge_respects_limit
+    var ftl = vec_new();
+    var i = 0;
+    while (i < 20) {
+        vec_push(ftl, mneme_search_ft_result_new(mneme_core_uuid_v4(), str_from("Note"), str_from("note.md"), str_from("content"), f64_from(1)));
+        i = i + 1;
+    }
+    assert_eq(vec_len(mneme_search_hybrid_merge(ftl, vec_new(), 5)), 5, "respects limit 5");
+
+    # weighted_merge_fulltext_heavy
+    var idf = mneme_core_uuid_v4();
+    var ids = mneme_core_uuid_v4();
+    var ftw = vec_new();
+    vec_push(ftw, mneme_search_ft_result_new(idf, str_from("FT"), str_from("ft.md"), str_from("ft"), f64_from(1)));
+    var semw = vec_new();
+    vec_push(semw, mneme_search_semresult_new(ids, str_from("Sem"), str_from("semantic"), f64_parse("0.9")));
+    var wheavy = mneme_search_blend_weights_new(f64_from(2), f64_parse("0.5"), f64_from(0));
+    var r6 = mneme_search_weighted_hybrid_merge(ftw, semw, 10, wheavy);
+    assert_eq(vec_len(r6), 2, "ft-heavy len 2");
+    assert_eq(mneme_core_uuid_eq(mneme_search_hybridresult_note_id(vec_get(r6, 0)), idf), 1, "ft-heavy ft first");
+
+    # weighted_merge_semantic_heavy
+    var idf2 = mneme_core_uuid_v4();
+    var ids2 = mneme_core_uuid_v4();
+    var ftw2 = vec_new();
+    vec_push(ftw2, mneme_search_ft_result_new(idf2, str_from("FT"), str_from("ft.md"), str_from("ft"), f64_from(1)));
+    var semw2 = vec_new();
+    vec_push(semw2, mneme_search_semresult_new(ids2, str_from("Sem"), str_from("semantic"), f64_parse("0.9")));
+    var sheavy = mneme_search_blend_weights_new(f64_parse("0.5"), f64_from(2), f64_from(0));
+    var r7 = mneme_search_weighted_hybrid_merge(ftw2, semw2, 10, sheavy);
+    assert_eq(vec_len(r7), 2, "sem-heavy len 2");
+    assert_eq(mneme_core_uuid_eq(mneme_search_hybridresult_note_id(vec_get(r7, 0)), ids2), 1, "sem-heavy sem first");
+
+    # recency_boost_adds_to_score
+    var idr = mneme_core_uuid_v4();
+    var ftr = vec_new();
+    vec_push(ftr, mneme_search_ft_result_new(idr, str_from("Note"), str_from("n.md"), str_from("c"), f64_from(1)));
+    var noboost = mneme_search_weighted_hybrid_merge(ftr, vec_new(), 10, mneme_search_blend_weights_new(f64_from(1), f64_from(1), f64_from(0)));
+    var ftr2 = vec_new();
+    vec_push(ftr2, mneme_search_ft_result_new(idr, str_from("Note"), str_from("n.md"), str_from("c"), f64_from(1)));
+    var withboost = mneme_search_weighted_hybrid_merge(ftr2, vec_new(), 10, mneme_search_blend_weights_new(f64_from(1), f64_from(1), f64_parse("0.01")));
+    var okrec = 0;
+    if (f64_ge(mneme_search_hybridresult_score(vec_get(withboost, 0)), mneme_search_hybridresult_score(vec_get(noboost, 0))) == 1) { okrec = 1; }
+    assert_eq(okrec, 1, "recency boosts score");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

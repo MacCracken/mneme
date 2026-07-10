@@ -1,0 +1,76 @@
+# mneme-ai training-export tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/training_export.rs (6 #[test] cases).
+include "src/core_uuid.cyr"
+include "src/ai_training_export.cyr"
+
+var _ten = 0;
+fn _tpath(name): i64 {
+    _ten = _ten + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_te");
+    str_builder_add_int(pb, _ten);
+    str_builder_putc(pb, 95);
+    str_builder_add_cstr(pb, name);
+    return str_builder_build(pb);
+}
+fn _lines_count(s: Str): i64 {
+    return vec_len(_te_lines(s));
+}
+
+fn main() {
+    alloc_init();
+    test_group("ai_training_export");
+
+    # training_record_serde_roundtrip
+    var rec = mneme_ai_training_search_click(clock_epoch_secs(), str_from("rust ownership"), mneme_core_uuid_v4(), str_from("Rust Guide"), str_from("balanced"), 0);
+    var parsed = mneme_ai_training_record_from_json(mneme_ai_training_record_to_json(rec));
+    assert_eq(mneme_ai_training_record_variant(parsed), RECORD_SEARCH_CLICK, "roundtrip variant");
+    assert_eq(str_eq_cstr(mneme_ai_training_record_query(parsed), "rust ownership"), 1, "roundtrip query");
+
+    # training_log_append_and_read
+    var log = mneme_ai_training_log_open(_tpath("train.jsonl"));
+    mneme_ai_training_log_clear(log);
+    mneme_ai_training_log_append(log, mneme_ai_training_search_click(clock_epoch_secs(), str_from("test"), mneme_core_uuid_v4(), str_from("Note"), str_from("balanced"), 0));
+    mneme_ai_training_log_append(log, mneme_ai_training_trust_override(clock_epoch_secs(), mneme_core_uuid_v4(), str_from("generated"), 0));
+    assert_eq(vec_len(mneme_ai_training_log_read_all(log)), 2, "read_all len 2");
+    assert_eq(mneme_ai_training_log_count(log), 2, "count 2");
+
+    # training_log_empty
+    var log2 = mneme_ai_training_log_open(_tpath("nonexistent.jsonl"));
+    mneme_ai_training_log_clear(log2);
+    assert_eq(mneme_ai_training_log_count(log2), 0, "empty count 0");
+    assert_eq(vec_len(mneme_ai_training_log_read_all(log2)), 0, "empty read_all");
+    assert_eq(str_len(mneme_ai_training_log_export_jsonl(log2)), 0, "empty export");
+
+    # training_log_filter_by_type
+    var log3 = mneme_ai_training_log_open(_tpath("train.jsonl"));
+    mneme_ai_training_log_clear(log3);
+    mneme_ai_training_log_append(log3, mneme_ai_training_search_click(clock_epoch_secs(), str_from("q1"), mneme_core_uuid_v4(), str_from("N1"), str_from("balanced"), 0));
+    mneme_ai_training_log_append(log3, mneme_ai_training_trust_override(clock_epoch_secs(), mneme_core_uuid_v4(), str_from("manual"), 0));
+    assert_eq(vec_len(mneme_ai_training_log_read_filtered(log3, "search_click", 0)), 1, "filter search_click 1");
+    assert_eq(vec_len(mneme_ai_training_log_read_filtered(log3, "trust_override", 0)), 1, "filter trust_override 1");
+
+    # training_log_clear
+    var log4 = mneme_ai_training_log_open(_tpath("train.jsonl"));
+    mneme_ai_training_log_clear(log4);
+    mneme_ai_training_log_append(log4, mneme_ai_training_search_click(clock_epoch_secs(), str_from("q"), mneme_core_uuid_v4(), str_from("N"), str_from("balanced"), 0));
+    assert_eq(mneme_ai_training_log_count(log4), 1, "before clear 1");
+    mneme_ai_training_log_clear(log4);
+    assert_eq(mneme_ai_training_log_count(log4), 0, "after clear 0");
+
+    # export_jsonl_format
+    var log5 = mneme_ai_training_log_open(_tpath("train.jsonl"));
+    mneme_ai_training_log_clear(log5);
+    var tags = vec_new();
+    vec_push(tags, str_from("tag1"));
+    mneme_ai_training_log_append(log5, mneme_ai_training_note_content(clock_epoch_secs(), mneme_core_uuid_v4(), str_from("Test"), str_from("Content here"), tags));
+    var jsonl = mneme_ai_training_log_export_jsonl(log5);
+    assert_eq(str_index_of_cstr(jsonl, "\"type\":\"note_content\"") >= 0, 1, "export has type note_content");
+    assert_eq(str_index_of_cstr(jsonl, "\"title\":\"Test\"") >= 0, 1, "export has title Test");
+    assert_eq(_lines_count(jsonl), 1, "export single line");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

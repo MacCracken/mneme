@@ -1,0 +1,85 @@
+# mneme-ai creative-suite tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/creative.rs (13 #[test] cases).
+include "src/core_uuid.cyr"
+include "src/ai_creative.cyr"
+
+fn _has(s: Str, w): i64 { if (str_index_of_cstr(s, w) >= 0) { return 1; } return 0; }
+fn _any_ticker(entries, t): i64 {
+    var i = 0;
+    while (i < vec_len(entries)) {
+        if (str_eq_cstr(mneme_ai_trade_journal_entry_ticker(vec_get(entries, i)), t) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("ai_creative");
+
+    # extract_scenes
+    var scenes = mneme_ai_extract_scenes_locally(str_from("# Opening\n\nThe camera pans across the city.\n\n# Interview\n\nHost introduces the guest."));
+    assert_eq(vec_len(scenes), 4, "4 scenes");
+    assert_eq(str_eq_cstr(mneme_ai_shot_list_entry_scene(vec_get(scenes, 0)), "Scene 1"), 1, "scene 1 label");
+    assert_eq(_has(mneme_ai_shot_list_entry_description(vec_get(scenes, 0)), "Opening"), 1, "scene 0 desc Opening");
+
+    # local_show_notes_basic
+    var notes = mneme_ai_local_show_notes(str_from("Welcome to the podcast.\n\nToday we discuss Rust.\n\nRust is a systems language."), str_from("Rust Podcast"));
+    assert_eq(str_eq_cstr(mneme_ai_show_notes_title(notes), "Rust Podcast"), 1, "notes title");
+    assert_eq(str_len(mneme_ai_show_notes_summary(notes)) > 0, 1, "notes summary non-empty");
+    assert_eq(vec_len(mneme_ai_show_notes_key_topics(notes)) > 0, 1, "notes topics non-empty");
+
+    # extract_tickers
+    var e3 = mneme_ai_extract_trade_info(mneme_core_uuid_v4(), str_from("Looking to buy $AAPL after earnings. Also researching $TSLA for potential entry. The $AAPL thesis is strong fundamentals."));
+    assert_eq(vec_len(e3), 2, "2 tickers deduped");
+    assert_eq(_any_ticker(e3, "AAPL"), 1, "has AAPL");
+    assert_eq(_any_ticker(e3, "TSLA"), 1, "has TSLA");
+
+    # trade_action_detection
+    var e4 = mneme_ai_extract_trade_info(mneme_core_uuid_v4(), str_from("Planning to buy $GOOG based on strong earnings."));
+    assert_eq(mneme_ai_trade_journal_entry_action(vec_get(e4, 0)), TRADE_BUY, "buy action");
+    var e4b = mneme_ai_extract_trade_info(mneme_core_uuid_v4(), str_from("Considering selling $META position."));
+    assert_eq(mneme_ai_trade_journal_entry_action(vec_get(e4b, 0)), TRADE_SELL, "sell action");
+
+    # video_role_serialization
+    assert_eq(_has(mneme_ai_video_project_link_to_json(mneme_ai_video_project_link_new(mneme_core_uuid_v4(), str_from("Test"), VIDEO_SHOT_LIST)), "shot_list"), 1, "role shot_list");
+
+    # design_asset_serialization
+    assert_eq(_has(mneme_ai_design_asset_link_to_json(mneme_ai_design_asset_link_new(mneme_core_uuid_v4(), str_from("design.fig"), DESIGN_MOCKUP, str_from("Main screen"))), "mockup"), 1, "asset mockup");
+
+    # extract_no_tickers
+    assert_eq(vec_len(mneme_ai_extract_trade_info(mneme_core_uuid_v4(), str_from("No stock tickers here."))), 0, "no tickers");
+
+    # show_notes_empty_transcript
+    assert_eq(str_eq_cstr(mneme_ai_show_notes_title(mneme_ai_local_show_notes(str_from(""), str_from("Empty"))), "Empty"), 1, "empty transcript title");
+
+    # trade_hold_action
+    var e9 = mneme_ai_extract_trade_info(mneme_core_uuid_v4(), str_from("Decided to hold $MSFT position for now."));
+    assert_eq(mneme_ai_trade_journal_entry_action(vec_get(e9, 0)), TRADE_HOLD, "hold action");
+
+    # trade_research_default
+    var e10 = mneme_ai_extract_trade_info(mneme_core_uuid_v4(), str_from("Analyzing $NVDA for potential opportunities."));
+    assert_eq(mneme_ai_trade_journal_entry_action(vec_get(e10, 0)), TRADE_RESEARCH, "research action");
+
+    # image_annotation_serialization
+    var ann = mneme_ai_image_annotation_to_json(mneme_ai_image_annotation_new(str_from("test.png"), mneme_core_uuid_v4(), str_from("Diagram"), mneme_ai_annotation_region_new(f64_from(10), f64_from(20), f64_from(100), f64_from(50))));
+    assert_eq(_has(ann, "Diagram"), 1, "annotation label");
+    assert_eq(_has(ann, "100"), 1, "annotation width 100");
+
+    # show_notes_serialization
+    var ts = vec_new();
+    vec_push(ts, mneme_ai_timestamp_entry_new(str_from("00:05"), str_from("Intro")));
+    var kt = vec_new();
+    vec_push(kt, str_from("topic1"));
+    assert_eq(_has(mneme_ai_show_notes_to_json(mneme_ai_show_notes_new(str_from("Test"), str_from("Summary"), ts, kt)), "00:05"), 1, "timestamp 00:05");
+
+    # trade_journal_serialization
+    var tj = mneme_ai_trade_journal_entry_to_json(mneme_ai_trade_journal_entry_new(mneme_core_uuid_v4(), str_from("AAPL"), TRADE_BUY, str_from("Strong earnings"), str_from("Profitable")));
+    assert_eq(_has(tj, "buy"), 1, "journal buy");
+    assert_eq(_has(tj, "Profitable"), 1, "journal outcome");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

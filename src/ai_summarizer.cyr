@@ -1,0 +1,82 @@
+# mneme-ai — summarization (ported from rust-old/crates/mneme-ai/src/summarizer.rs)
+# The abstractive path (daimon RAG query) is DEFERRED; the extractive fallback +
+# truncate are pure and are what the Rust tests exercise.
+
+# NoteSummary (24): [summary@0, key_points@8(vec), word_count@16]
+fn mneme_ai_note_summary_new(summary, key_points, word_count): i64 {
+    var s = alloc(24);
+    store64(s, summary);
+    store64(s + 8, key_points);
+    store64(s + 16, word_count);
+    return s;
+}
+fn mneme_ai_note_summary_summary(s): i64 { return load64(s); }
+fn mneme_ai_note_summary_key_points(s): i64 { return load64(s + 8); }
+fn mneme_ai_note_summary_word_count(s): i64 { return load64(s + 16); }
+
+fn _summ_ws(c): i64 { if (c == 32 || c == 9 || c == 10 || c == 13) { return 1; } return 0; }
+fn _summ_trim(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var a = 0;
+    while (a < n && _summ_ws(load8(d + a)) == 1) { a = a + 1; }
+    var b = n;
+    while (b > a && _summ_ws(load8(d + b - 1)) == 1) { b = b - 1; }
+    return str_substr(s, a, b);
+}
+fn _summ_word_count(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var count = 0;
+    var in_word = 0;
+    var i = 0;
+    while (i < n) {
+        if (_summ_ws(load8(d + i)) == 0 && in_word == 0) { count = count + 1; in_word = 1; }
+        if (_summ_ws(load8(d + i)) == 1) { in_word = 0; }
+        i = i + 1;
+    }
+    return count;
+}
+# split on . ! ?, trim, keep segments with len > 10
+fn _summ_split_sentences(content: Str): i64 {
+    var out = vec_new();
+    var n = str_len(content);
+    var d = str_data(content);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var issep = 0;
+        if (i == n) { issep = 1; }
+        elif (load8(d + i) == 46 || load8(d + i) == 33 || load8(d + i) == 63) { issep = 1; }
+        if (issep == 1) {
+            var seg = _summ_trim(str_substr(content, start, i));
+            if (str_len(seg) > 10) { vec_push(out, seg); }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn mneme_ai_extractive_summary(content: Str): i64 {
+    var sentences = _summ_split_sentences(content);
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < vec_len(sentences) && i < 3) {
+        if (i > 0) { str_builder_putc(sb, 32); }
+        str_builder_add(sb, vec_get(sentences, i));
+        str_builder_putc(sb, 46);
+        i = i + 1;
+    }
+    var kp = vec_new();
+    i = 0;
+    while (i < vec_len(sentences) && i < 5) { vec_push(kp, vec_get(sentences, i)); i = i + 1; }
+    return mneme_ai_note_summary_new(str_builder_build(sb), kp, _summ_word_count(content));
+}
+fn mneme_ai_summary_truncate(s: Str, max): i64 {
+    if (str_len(s) <= max) { return s; }
+    var sb = str_builder_new();
+    str_builder_add(sb, str_substr(s, 0, max));
+    str_builder_add_cstr(sb, "...");
+    return str_builder_build(sb);
+}

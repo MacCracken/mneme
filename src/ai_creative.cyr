@@ -1,0 +1,402 @@
+# mneme-ai — creative suite integration (ported from
+# rust-old/crates/mneme-ai/src/creative.rs). The daimon generation paths are
+# DEFERRED; the local extractors (scenes, show notes, trade tickers) and serde
+# are pure. The Rust ticker regex \$([A-Z]{1,5}) is hand-scanned.
+
+enum VideoRole { VIDEO_SCRIPT; VIDEO_SHOT_LIST; VIDEO_STORYBOARD; VIDEO_REFERENCE; }
+enum DesignAssetType { DESIGN_SKETCH; DESIGN_MOCKUP; DESIGN_WIREFRAME; DESIGN_FINAL_DESIGN; DESIGN_ICON; DESIGN_PHOTO; }
+enum TradeAction { TRADE_BUY; TRADE_SELL; TRADE_HOLD; TRADE_RESEARCH; }
+
+fn _cr_hexc(nib): i64 { if (nib < 10) { return 48 + nib; } return 87 + nib; }
+fn _cr_uuid_hex(u): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < 16) {
+        var b = load8(u + i);
+        str_builder_putc(sb, _cr_hexc((b >> 4) & 15));
+        str_builder_putc(sb, _cr_hexc(b & 15));
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+fn _cr_add_escaped(sb, s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c == 34 || c == 92) { str_builder_putc(sb, 92); }
+        str_builder_putc(sb, c);
+        i = i + 1;
+    }
+    return 0;
+}
+fn _cr_f64_str(x): i64 {
+    var sb = str_builder_new();
+    if (f64_le(x, f64_from(0)) == 1 && x != f64_from(0)) { str_builder_putc(sb, 45); x = f64_neg(x); }
+    var ip = f64_to(f64_trunc(x));
+    var scaled = f64_to(f64_round(f64_mul(f64_sub(x, f64_from(ip)), f64_from(1000000))));
+    if (scaled >= 1000000) { ip = ip + 1; scaled = scaled - 1000000; }
+    str_builder_add_int(sb, ip);
+    if (scaled > 0) {
+        var digits = alloc(6);
+        var i = 5;
+        var v = scaled;
+        while (i >= 0) { store8(digits + i, 48 + v % 10); v = v / 10; i = i - 1; }
+        var last = 5;
+        while (last >= 0 && load8(digits + last) == 48) { last = last - 1; }
+        str_builder_putc(sb, 46);
+        var k = 0;
+        while (k <= last) { str_builder_putc(sb, load8(digits + k)); k = k + 1; }
+    }
+    return str_builder_build(sb);
+}
+fn _cr_ws(c): i64 { if (c == 32 || c == 9 || c == 10 || c == 13) { return 1; } return 0; }
+fn _cr_trim(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var a = 0;
+    while (a < n && _cr_ws(load8(d + a)) == 1) { a = a + 1; }
+    var b = n;
+    while (b > a && _cr_ws(load8(d + b - 1)) == 1) { b = b - 1; }
+    return str_substr(s, a, b);
+}
+fn _cr_take(s: Str, n): i64 {
+    if (str_len(s) <= n) { return s; }
+    return str_substr(s, 0, n);
+}
+fn _cr_first_line(s: Str): i64 {
+    var idx = str_index_of(s, 10);
+    if (idx < 0) { return s; }
+    return str_substr(s, 0, idx);
+}
+fn _cr_strip_hashes_trim(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var a = 0;
+    while (a < n && load8(d + a) == 35) { a = a + 1; }
+    return _cr_trim(str_substr(s, a, n));
+}
+fn _cr_lower(s: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c >= 65 && c <= 90) { c = c + 32; }
+        str_builder_putc(sb, c);
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+# split on "\n\n", keep paragraphs whose trim is non-empty (raw kept)
+fn _cr_split_paras(content: Str): i64 {
+    var raw = vec_new();
+    var n = str_len(content);
+    var d = str_data(content);
+    var start = 0;
+    var i = 0;
+    while (i < n) {
+        if (i + 1 < n && load8(d + i) == 10 && load8(d + i + 1) == 10) {
+            vec_push(raw, str_substr(content, start, i));
+            i = i + 2;
+            start = i;
+        } else { i = i + 1; }
+    }
+    vec_push(raw, str_substr(content, start, n));
+    var out = vec_new();
+    i = 0;
+    while (i < vec_len(raw)) {
+        if (str_len(_cr_trim(vec_get(raw, i))) > 0) { vec_push(out, vec_get(raw, i)); }
+        i = i + 1;
+    }
+    return out;
+}
+
+# --- Tazama (video): ShotListEntry (32): [scene@0, description@8, duration_hint@16, notes@24] ---
+fn mneme_ai_shot_list_entry_scene(e): i64 { return load64(e); }
+fn mneme_ai_shot_list_entry_description(e): i64 { return load64(e + 8); }
+fn mneme_ai_shot_list_entry_notes(e): i64 { return load64(e + 24); }
+fn mneme_ai_extract_scenes_locally(content: Str): i64 {
+    var paras = _cr_split_paras(content);
+    var out = vec_new();
+    var i = 0;
+    while (i < vec_len(paras)) {
+        var para = vec_get(paras, i);
+        var first_line = _cr_trim(_cr_first_line(para));
+        var description = 0;
+        if (str_len(first_line) > 0 && load8(str_data(first_line)) == 35) { description = _cr_strip_hashes_trim(first_line); }
+        else { description = _cr_take(first_line, 80); }
+        var scene = str_builder_new();
+        str_builder_add_cstr(scene, "Scene ");
+        str_builder_add_int(scene, i + 1);
+        var e = alloc(32);
+        store64(e, str_builder_build(scene));
+        store64(e + 8, description);
+        store64(e + 16, 0);
+        store64(e + 24, _cr_trim(para));
+        vec_push(out, e);
+        i = i + 1;
+    }
+    return out;
+}
+
+# VideoProjectLink (24): [note_id@0, project_name@8, role@16]
+fn mneme_ai_video_project_link_new(note_id, project_name, role): i64 {
+    var l = alloc(24);
+    store64(l, note_id);
+    store64(l + 8, project_name);
+    store64(l + 16, role);
+    return l;
+}
+fn _cr_video_role_str(r): i64 {
+    if (r == VIDEO_SCRIPT) { return str_from("script"); }
+    if (r == VIDEO_SHOT_LIST) { return str_from("shot_list"); }
+    if (r == VIDEO_STORYBOARD) { return str_from("storyboard"); }
+    return str_from("reference");
+}
+fn mneme_ai_video_project_link_to_json(l): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"note_id\":\"");
+    str_builder_add(sb, _cr_uuid_hex(load64(l)));
+    str_builder_add_cstr(sb, "\",\"project_name\":\"");
+    _cr_add_escaped(sb, load64(l + 8));
+    str_builder_add_cstr(sb, "\",\"role\":\"");
+    str_builder_add(sb, _cr_video_role_str(load64(l + 16)));
+    str_builder_add_cstr(sb, "\"}");
+    return str_builder_build(sb);
+}
+
+# --- Rasa (design): AnnotationRegion (32): [x@0, y@8, width@16, height@24] (f64) ---
+fn mneme_ai_annotation_region_new(x, y, width, height): i64 {
+    var r = alloc(32);
+    store64(r, x);
+    store64(r + 8, y);
+    store64(r + 16, width);
+    store64(r + 24, height);
+    return r;
+}
+# ImageAnnotation (32): [image_path@0, note_id@8, label@16, region@24(0=None)]
+fn mneme_ai_image_annotation_new(image_path, note_id, label, region): i64 {
+    var a = alloc(32);
+    store64(a, image_path);
+    store64(a + 8, note_id);
+    store64(a + 16, label);
+    store64(a + 24, region);
+    return a;
+}
+fn mneme_ai_image_annotation_to_json(a): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"image_path\":\"");
+    _cr_add_escaped(sb, load64(a));
+    str_builder_add_cstr(sb, "\",\"note_id\":\"");
+    str_builder_add(sb, _cr_uuid_hex(load64(a + 8)));
+    str_builder_add_cstr(sb, "\",\"label\":\"");
+    _cr_add_escaped(sb, load64(a + 16));
+    str_builder_add_cstr(sb, "\",\"region\":");
+    var region = load64(a + 24);
+    if (region != 0) {
+        str_builder_add_cstr(sb, "{\"x\":");
+        str_builder_add(sb, _cr_f64_str(load64(region)));
+        str_builder_add_cstr(sb, ",\"y\":");
+        str_builder_add(sb, _cr_f64_str(load64(region + 8)));
+        str_builder_add_cstr(sb, ",\"width\":");
+        str_builder_add(sb, _cr_f64_str(load64(region + 16)));
+        str_builder_add_cstr(sb, ",\"height\":");
+        str_builder_add(sb, _cr_f64_str(load64(region + 24)));
+        str_builder_add_cstr(sb, "}");
+    } else { str_builder_add_cstr(sb, "null"); }
+    str_builder_add_cstr(sb, "}");
+    return str_builder_build(sb);
+}
+# DesignAssetLink (32): [note_id@0, asset_path@8, asset_type@16, description@24]
+fn mneme_ai_design_asset_link_new(note_id, asset_path, asset_type, description): i64 {
+    var l = alloc(32);
+    store64(l, note_id);
+    store64(l + 8, asset_path);
+    store64(l + 16, asset_type);
+    store64(l + 24, description);
+    return l;
+}
+fn _cr_design_type_str(t): i64 {
+    if (t == DESIGN_SKETCH) { return str_from("sketch"); }
+    if (t == DESIGN_MOCKUP) { return str_from("mockup"); }
+    if (t == DESIGN_WIREFRAME) { return str_from("wireframe"); }
+    if (t == DESIGN_FINAL_DESIGN) { return str_from("final_design"); }
+    if (t == DESIGN_ICON) { return str_from("icon"); }
+    return str_from("photo");
+}
+fn mneme_ai_design_asset_link_to_json(l): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"note_id\":\"");
+    str_builder_add(sb, _cr_uuid_hex(load64(l)));
+    str_builder_add_cstr(sb, "\",\"asset_path\":\"");
+    _cr_add_escaped(sb, load64(l + 8));
+    str_builder_add_cstr(sb, "\",\"asset_type\":\"");
+    str_builder_add(sb, _cr_design_type_str(load64(l + 16)));
+    str_builder_add_cstr(sb, "\",\"description\":\"");
+    _cr_add_escaped(sb, load64(l + 24));
+    str_builder_add_cstr(sb, "\"}");
+    return str_builder_build(sb);
+}
+
+# --- Shruti (audio): ShowNotes (32): [title@0, summary@8, timestamps@16(vec), key_topics@24(vec)] ---
+fn mneme_ai_timestamp_entry_new(time, label): i64 {
+    var t = alloc(16);
+    store64(t, time);
+    store64(t + 8, label);
+    return t;
+}
+fn mneme_ai_show_notes_new(title, summary, timestamps, key_topics): i64 {
+    var s = alloc(32);
+    store64(s, title);
+    store64(s + 8, summary);
+    store64(s + 16, timestamps);
+    store64(s + 24, key_topics);
+    return s;
+}
+fn mneme_ai_show_notes_title(s): i64 { return load64(s); }
+fn mneme_ai_show_notes_summary(s): i64 { return load64(s + 8); }
+fn mneme_ai_show_notes_key_topics(s): i64 { return load64(s + 24); }
+fn mneme_ai_local_show_notes(transcript: Str, title: Str): i64 {
+    var paras = _cr_split_paras(transcript);
+    var summary = str_from("");
+    if (vec_len(paras) > 0) { summary = _cr_take(vec_get(paras, 0), 200); }
+    var key_topics = vec_new();
+    var i = 0;
+    while (i < vec_len(paras) && i < 5) {
+        vec_push(key_topics, _cr_take(_cr_first_line(vec_get(paras, i)), 60));
+        i = i + 1;
+    }
+    return mneme_ai_show_notes_new(title, summary, vec_new(), key_topics);
+}
+fn mneme_ai_show_notes_to_json(s): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"title\":\"");
+    _cr_add_escaped(sb, load64(s));
+    str_builder_add_cstr(sb, "\",\"summary\":\"");
+    _cr_add_escaped(sb, load64(s + 8));
+    str_builder_add_cstr(sb, "\",\"timestamps\":[");
+    var ts = load64(s + 16);
+    var i = 0;
+    while (i < vec_len(ts)) {
+        if (i > 0) { str_builder_putc(sb, 44); }
+        str_builder_add_cstr(sb, "{\"time\":\"");
+        _cr_add_escaped(sb, load64(vec_get(ts, i)));
+        str_builder_add_cstr(sb, "\",\"label\":\"");
+        _cr_add_escaped(sb, load64(vec_get(ts, i) + 8));
+        str_builder_add_cstr(sb, "\"}");
+        i = i + 1;
+    }
+    str_builder_add_cstr(sb, "],\"key_topics\":[");
+    var kt = load64(s + 24);
+    i = 0;
+    while (i < vec_len(kt)) {
+        if (i > 0) { str_builder_putc(sb, 44); }
+        str_builder_putc(sb, 34);
+        _cr_add_escaped(sb, vec_get(kt, i));
+        str_builder_putc(sb, 34);
+        i = i + 1;
+    }
+    str_builder_add_cstr(sb, "]}");
+    return str_builder_build(sb);
+}
+
+# --- BullShift (trading): TradeJournalEntry (40): [note_id@0, ticker@8, action@16, thesis@24, outcome@32(0=None)] ---
+fn mneme_ai_trade_journal_entry_new(note_id, ticker, action, thesis, outcome): i64 {
+    var e = alloc(40);
+    store64(e, note_id);
+    store64(e + 8, ticker);
+    store64(e + 16, action);
+    store64(e + 24, thesis);
+    store64(e + 32, outcome);
+    return e;
+}
+fn mneme_ai_trade_journal_entry_ticker(e): i64 { return load64(e + 8); }
+fn mneme_ai_trade_journal_entry_action(e): i64 { return load64(e + 16); }
+fn _cr_trade_action_str(a): i64 {
+    if (a == TRADE_BUY) { return str_from("buy"); }
+    if (a == TRADE_SELL) { return str_from("sell"); }
+    if (a == TRADE_HOLD) { return str_from("hold"); }
+    return str_from("research");
+}
+fn mneme_ai_trade_journal_entry_to_json(e): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"note_id\":\"");
+    str_builder_add(sb, _cr_uuid_hex(load64(e)));
+    str_builder_add_cstr(sb, "\",\"ticker\":\"");
+    _cr_add_escaped(sb, load64(e + 8));
+    str_builder_add_cstr(sb, "\",\"action\":\"");
+    str_builder_add(sb, _cr_trade_action_str(load64(e + 16)));
+    str_builder_add_cstr(sb, "\",\"thesis\":\"");
+    _cr_add_escaped(sb, load64(e + 24));
+    str_builder_add_cstr(sb, "\",\"outcome\":");
+    if (load64(e + 32) != 0) { str_builder_putc(sb, 34); _cr_add_escaped(sb, load64(e + 32)); str_builder_putc(sb, 34); }
+    else { str_builder_add_cstr(sb, "null"); }
+    str_builder_add_cstr(sb, "}");
+    return str_builder_build(sb);
+}
+# hand-scan the \$([A-Z]{1,5}) ticker regex
+fn _cr_find_tickers(content: Str): i64 {
+    var out = vec_new();
+    var n = str_len(content);
+    var d = str_data(content);
+    var i = 0;
+    while (i < n) {
+        if (load8(d + i) == 36) {
+            var j = i + 1;
+            var cnt = 0;
+            while (j < n && cnt < 5 && load8(d + j) >= 65 && load8(d + j) <= 90) { j = j + 1; cnt = cnt + 1; }
+            if (cnt >= 1) { vec_push(out, str_substr(content, i + 1, i + 1 + cnt)); }
+            i = j;
+        } else { i = i + 1; }
+    }
+    return out;
+}
+fn mneme_ai_extract_trade_info(note_id, content: Str): i64 {
+    var entries = vec_new();
+    var tickers = _cr_find_tickers(content);
+    var lower = _cr_lower(content);
+    var action = TRADE_RESEARCH;
+    if (str_contains(lower, str_from("buy")) == 1 || str_contains(lower, str_from("long")) == 1) { action = TRADE_BUY; }
+    elif (str_contains(lower, str_from("sell")) == 1 || str_contains(lower, str_from("short")) == 1) { action = TRADE_SELL; }
+    elif (str_contains(lower, str_from("hold")) == 1) { action = TRADE_HOLD; }
+    var ti = 0;
+    while (ti < vec_len(tickers)) {
+        var ticker = vec_get(tickers, ti);
+        # dedup by ticker
+        var dup = 0;
+        var k = 0;
+        while (k < vec_len(entries)) {
+            if (str_eq(mneme_ai_trade_journal_entry_ticker(vec_get(entries, k)), ticker) == 1) { dup = 1; }
+            k = k + 1;
+        }
+        if (dup == 0) {
+            # thesis = first line containing "$ticker"
+            var needle = str_builder_new();
+            str_builder_putc(needle, 36);
+            str_builder_add(needle, ticker);
+            var needle_s = str_builder_build(needle);
+            var thesis = str_from("");
+            var nn = str_len(content);
+            var dd = str_data(content);
+            var ls = 0;
+            var li = 0;
+            var found = 0;
+            while (li <= nn && found == 0) {
+                var isend = 0;
+                if (li == nn) { isend = 1; } elif (load8(dd + li) == 10) { isend = 1; }
+                if (isend == 1) {
+                    var line = str_substr(content, ls, li);
+                    if (str_contains(line, needle_s) == 1) { thesis = _cr_trim(line); found = 1; }
+                    ls = li + 1;
+                }
+                li = li + 1;
+            }
+            vec_push(entries, mneme_ai_trade_journal_entry_new(note_id, ticker, action, thesis, 0));
+        }
+        ti = ti + 1;
+    }
+    return entries;
+}

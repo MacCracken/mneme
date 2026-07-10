@@ -1,0 +1,29 @@
+# mneme-ai summarizer tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/summarizer.rs (4 #[test] cases).
+include "src/ai_summarizer.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("ai_summarizer");
+
+    # extractive_summary_basic
+    var s = mneme_ai_extractive_summary(str_from("Rust is a systems programming language. It focuses on safety and performance. The borrow checker prevents data races. Memory safety without garbage collection. Zero-cost abstractions are a key feature."));
+    assert_eq(str_len(mneme_ai_note_summary_summary(s)) > 0, 1, "summary non-empty");
+    assert_eq(vec_len(mneme_ai_note_summary_key_points(s)) > 0, 1, "key_points non-empty");
+    assert_eq(mneme_ai_note_summary_word_count(s) > 0, 1, "word_count > 0");
+
+    # extractive_summary_short_content
+    var s2 = mneme_ai_extractive_summary(str_from("A single sentence about Rust programming."));
+    assert_eq(vec_len(mneme_ai_note_summary_key_points(s2)), 1, "short content 1 key point");
+
+    # truncate_long
+    assert_eq(str_eq_cstr(mneme_ai_summary_truncate(str_from("hello world"), 5), "hello..."), 1, "truncate long");
+
+    # truncate_short
+    assert_eq(str_eq_cstr(mneme_ai_summary_truncate(str_from("hi"), 10), "hi"), 1, "truncate short");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

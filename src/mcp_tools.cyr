@@ -1,0 +1,405 @@
+# mneme-mcp — MCP tool handlers (ported from rust-old/crates/mneme-mcp/src/tools.rs)
+# Business logic for each tool: composes VaultManager + SearchEngine +
+# SemanticEngine + RetrievalOptimizer. Tool arguments (serde_json::Value in Rust)
+# are modelled as a tagged key→value "object" (ARG_STR/ARG_INT/ARG_ARR). The
+# semantic hybrid-merge branch is unreachable while SemanticEngine is disabled
+# (its search returns empty), so search uses the full-text-only path.
+
+enum McpArgKind { ARG_STR; ARG_INT; ARG_ARR; }
+
+# --- JSON-args object: vec of [key@0, tag@8, value@16] ---
+fn mcp_args_new(): i64 { return vec_new(); }
+fn mcp_args_put_str(args, key, val): i64 {
+    var e = alloc(24);
+    store64(e, str_from(key));
+    store64(e + 8, ARG_STR);
+    store64(e + 16, val);
+    vec_push(args, e);
+    return args;
+}
+fn mcp_args_put_int(args, key, val): i64 {
+    var e = alloc(24);
+    store64(e, str_from(key));
+    store64(e + 8, ARG_INT);
+    store64(e + 16, val);
+    vec_push(args, e);
+    return args;
+}
+fn mcp_args_put_arr(args, key, val): i64 {
+    var e = alloc(24);
+    store64(e, str_from(key));
+    store64(e + 8, ARG_ARR);
+    store64(e + 16, val);
+    vec_push(args, e);
+    return args;
+}
+fn _mcp_args_find(args, key): i64 {
+    var i = 0;
+    while (i < vec_len(args)) {
+        if (str_eq_cstr(load64(vec_get(args, i)), key) == 1) { return vec_get(args, i); }
+        i = i + 1;
+    }
+    return 0;
+}
+fn mcp_args_get_str(args, key): i64 {
+    var e = _mcp_args_find(args, key);
+    if (e != 0 && load64(e + 8) == ARG_STR) { return load64(e + 16); }
+    return 0;
+}
+fn mcp_args_get_int(args, key, dflt): i64 {
+    var e = _mcp_args_find(args, key);
+    if (e != 0 && load64(e + 8) == ARG_INT) { return load64(e + 16); }
+    return dflt;
+}
+fn mcp_args_get_arr(args, key): i64 {
+    var e = _mcp_args_find(args, key);
+    if (e != 0 && load64(e + 8) == ARG_ARR) { return load64(e + 16); }
+    return 0;
+}
+
+# --- McpEngines: vec of [vault_id@0, search@8, semantic@16, optimizer@24] ---
+fn mcp_engines_new(): i64 { return vec_new(); }
+fn mcp_engines_is_empty(engines): i64 { if (vec_len(engines) == 0) { return 1; } return 0; }
+fn mcp_engines_insert(engines, vault_id, search, semantic, optimizer): i64 {
+    var e = alloc(32);
+    store64(e, vault_id);
+    store64(e + 8, search);
+    store64(e + 16, semantic);
+    store64(e + 24, optimizer);
+    vec_push(engines, e);
+    return 0;
+}
+fn mcp_engines_get(engines, vault_id): i64 {
+    var i = 0;
+    while (i < vec_len(engines)) {
+        if (mneme_core_uuid_eq(load64(vec_get(engines, i)), vault_id) == 1) { return vec_get(engines, i); }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# compact f64 → decimal (up to 3 places) for score display (untested value)
+fn _mt_score_str(x): i64 {
+    var sb = str_builder_new();
+    if (f64_le(x, f64_from(0)) == 1 && x != f64_from(0)) { str_builder_putc(sb, 45); x = f64_neg(x); }
+    var ip = f64_to(f64_trunc(x));
+    var scaled = f64_to(f64_round(f64_mul(f64_sub(x, f64_from(ip)), f64_from(1000))));
+    if (scaled >= 1000) { ip = ip + 1; scaled = scaled - 1000; }
+    str_builder_add_int(sb, ip);
+    if (scaled > 0) {
+        str_builder_putc(sb, 46);
+        str_builder_add_int(sb, scaled / 100);
+        str_builder_add_int(sb, (scaled / 10) % 10);
+        str_builder_add_int(sb, scaled % 10);
+    }
+    return str_builder_build(sb);
+}
+fn _mt_count_hex(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var c = 0;
+    var i = 0;
+    while (i < n) {
+        var ch = load8(d + i);
+        if ((ch >= 48 && ch <= 57) || (ch >= 97 && ch <= 102) || (ch >= 65 && ch <= 70)) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+# parse_uuid: 0 on missing/invalid, else the 16-byte uuid
+fn mcp_parse_uuid(args, field): i64 {
+    var s = mcp_args_get_str(args, field);
+    if (s == 0) { return 0; }
+    if (_mt_count_hex(s) != 32) { return 0; }
+    return mneme_store_uuid_parse(s);
+}
+
+# ResolvedVault (32): [openvault@0, search@8, semantic@16, optimizer@24]; 0 on error
+fn _mcp_resolve(args, manager, engines): i64 {
+    var ov = 0;
+    var vault_ref = mcp_args_get_str(args, "vault");
+    if (vault_ref != 0) {
+        var info = mneme_store_registry_resolve(mneme_store_manager_registry(manager), vault_ref);
+        if (info == 0) { return 0; }
+        ov = mneme_store_manager_get(manager, load64(info));
+    } else {
+        ov = mneme_store_manager_active(manager);
+    }
+    if (ov == 0) { return 0; }
+    var eng = mcp_engines_get(engines, load64(mneme_store_openvault_info(ov)));
+    if (eng == 0) { return 0; }
+    var rv = alloc(32);
+    store64(rv, ov);
+    store64(rv + 8, load64(eng + 8));
+    store64(rv + 16, load64(eng + 16));
+    store64(rv + 24, load64(eng + 24));
+    return rv;
+}
+
+fn _mcp_handle_create_note(id_raw, args, manager, engines): i64 {
+    var rv = _mcp_resolve(args, manager, engines);
+    if (rv == 0) { return mneme_mcp_error(id_raw, str_from("No active vault or engines")); }
+    var title = mcp_args_get_str(args, "title");
+    if (title == 0) { return mneme_mcp_error(id_raw, str_from("Missing required parameter: title")); }
+    var content = mcp_args_get_str(args, "content");
+    if (content == 0) { return mneme_mcp_error(id_raw, str_from("Missing required parameter: content")); }
+    var tags = mcp_args_get_arr(args, "tags");
+    if (tags == 0) { tags = vec_new(); }
+    var path = mcp_args_get_str(args, "path");
+    var vault = mneme_store_openvault_vault(load64(rv));
+    var nwc = mneme_store_vault_create_note(vault, mneme_store_create_note_new(title, path, content, tags, 0 - 1));
+    if (nwc == 0) { return mneme_mcp_error(id_raw, str_from("Failed to create note")); }
+    var note = mneme_store_nwc_note(nwc);
+    mneme_search_engine_index_note(load64(rv + 8), mneme_core_note_id(note), mneme_core_note_title(note), mneme_store_nwc_content(nwc), mneme_store_nwc_tags(nwc), mneme_core_note_path(note));
+    mneme_search_semantic_engine_index_note(load64(rv + 16), mneme_core_note_id(note), mneme_core_note_title(note), mneme_store_nwc_content(nwc));
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "Created note '");
+    str_builder_add(sb, mneme_core_note_title(note));
+    str_builder_add_cstr(sb, "' (ID: ");
+    str_builder_add(sb, mneme_store_uuid_to_string(mneme_core_note_id(note)));
+    str_builder_add_cstr(sb, ", path: ");
+    str_builder_add(sb, mneme_core_note_path(note));
+    str_builder_add_cstr(sb, ")");
+    return mneme_mcp_success(id_raw, str_builder_build(sb));
+}
+
+fn _mcp_handle_search(id_raw, args, manager, engines): i64 {
+    var rv = _mcp_resolve(args, manager, engines);
+    if (rv == 0) { return mneme_mcp_error(id_raw, str_from("No active vault or engines")); }
+    var query = mcp_args_get_str(args, "query");
+    if (query == 0) { return mneme_mcp_error(id_raw, str_from("Missing required parameter: query")); }
+    var limit = mcp_args_get_int(args, "limit", 10);
+    var opt = load64(rv + 24);
+    var arm = mneme_search_retrieval_optimizer_select_arm(opt);
+    var arm_idx = load64(arm);
+    var ft = mneme_search_engine_search(load64(rv + 8), query, limit);
+    var sem = mneme_search_semantic_engine_search(load64(rv + 16), query, limit);
+    if (vec_len(ft) == 0 && vec_len(sem) == 0) { return mneme_mcp_success(id_raw, str_from("No notes found matching your query.")); }
+    mneme_search_retrieval_optimizer_record_search(opt, arm_idx);
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "search_id: s:");
+    str_builder_add_int(sb, arm_idx);
+    str_builder_add_cstr(sb, "\n\nFound ");
+    str_builder_add_int(sb, vec_len(ft));
+    str_builder_add_cstr(sb, " result(s):\n\n");
+    var i = 0;
+    while (i < vec_len(ft)) {
+        var r = vec_get(ft, i);
+        str_builder_add_int(sb, i + 1);
+        str_builder_add_cstr(sb, ". **");
+        str_builder_add(sb, mneme_search_result_title(r));
+        str_builder_add_cstr(sb, "** (ID: ");
+        str_builder_add(sb, mneme_store_uuid_to_string(mneme_search_result_note_id(r)));
+        str_builder_add_cstr(sb, ", score: ");
+        str_builder_add(sb, _mt_score_str(mneme_search_result_score(r)));
+        str_builder_add_cstr(sb, ")\n   Path: ");
+        str_builder_add(sb, mneme_search_result_path(r));
+        str_builder_add_cstr(sb, "\n   ");
+        str_builder_add(sb, mneme_search_result_snippet(r));
+        str_builder_add_cstr(sb, "\n\n");
+        i = i + 1;
+    }
+    return mneme_mcp_success(id_raw, str_builder_build(sb));
+}
+
+fn _mcp_join_tags(tags): i64 {
+    if (vec_len(tags) == 0) { return str_from("(none)"); }
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < vec_len(tags)) {
+        if (i > 0) { str_builder_add_cstr(sb, ", "); }
+        str_builder_add(sb, vec_get(tags, i));
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+fn _mcp_handle_get_note(id_raw, args, manager, engines): i64 {
+    var rv = _mcp_resolve(args, manager, engines);
+    if (rv == 0) { return mneme_mcp_error(id_raw, str_from("No active vault or engines")); }
+    var note_id = mcp_parse_uuid(args, "id");
+    if (note_id == 0) { return mneme_mcp_error(id_raw, str_from("Invalid or missing UUID for id")); }
+    var nwc = mneme_store_vault_get_note(mneme_store_openvault_vault(load64(rv)), note_id);
+    if (nwc == 0) { return mneme_mcp_error(id_raw, str_from("Note not found")); }
+    var note = mneme_store_nwc_note(nwc);
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "# ");
+    str_builder_add(sb, mneme_core_note_title(note));
+    str_builder_add_cstr(sb, "\n\nID: ");
+    str_builder_add(sb, mneme_store_uuid_to_string(mneme_core_note_id(note)));
+    str_builder_add_cstr(sb, "\nPath: ");
+    str_builder_add(sb, mneme_core_note_path(note));
+    str_builder_add_cstr(sb, "\nTags: ");
+    str_builder_add(sb, _mcp_join_tags(mneme_store_nwc_tags(nwc)));
+    str_builder_add_cstr(sb, "\n\n---\n\n");
+    str_builder_add(sb, mneme_store_nwc_content(nwc));
+    return mneme_mcp_success(id_raw, str_builder_build(sb));
+}
+
+fn _mcp_handle_update_note(id_raw, args, manager, engines): i64 {
+    var rv = _mcp_resolve(args, manager, engines);
+    if (rv == 0) { return mneme_mcp_error(id_raw, str_from("No active vault or engines")); }
+    var note_id = mcp_parse_uuid(args, "id");
+    if (note_id == 0) { return mneme_mcp_error(id_raw, str_from("Invalid or missing UUID for id")); }
+    var title = mcp_args_get_str(args, "title");
+    var content = mcp_args_get_str(args, "content");
+    var tags = mcp_args_get_arr(args, "tags");
+    if (title == 0 && content == 0 && tags == 0) { return mneme_mcp_error(id_raw, str_from("At least one of title, content, or tags must be provided")); }
+    var nwc = mneme_store_vault_update_note(mneme_store_openvault_vault(load64(rv)), note_id, mneme_store_update_note_new(title, content, tags));
+    if (nwc == 0) { return mneme_mcp_error(id_raw, str_from("Failed to update note")); }
+    var note = mneme_store_nwc_note(nwc);
+    mneme_search_engine_index_note(load64(rv + 8), mneme_core_note_id(note), mneme_core_note_title(note), mneme_store_nwc_content(nwc), mneme_store_nwc_tags(nwc), mneme_core_note_path(note));
+    mneme_search_semantic_engine_index_note(load64(rv + 16), mneme_core_note_id(note), mneme_core_note_title(note), mneme_store_nwc_content(nwc));
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "Updated note '");
+    str_builder_add(sb, mneme_core_note_title(note));
+    str_builder_add_cstr(sb, "' (ID: ");
+    str_builder_add(sb, mneme_store_uuid_to_string(mneme_core_note_id(note)));
+    str_builder_add_cstr(sb, ")");
+    return mneme_mcp_success(id_raw, str_builder_build(sb));
+}
+
+fn _mcp_vec_has_str(v, s: Str): i64 {
+    var i = 0;
+    while (i < vec_len(v)) {
+        if (str_eq(vec_get(v, i), s) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _mcp_handle_query_graph(id_raw, args, manager, engines): i64 {
+    var rv = _mcp_resolve(args, manager, engines);
+    if (rv == 0) { return mneme_mcp_error(id_raw, str_from("No active vault or engines")); }
+    var vault = mneme_store_openvault_vault(load64(rv));
+    var db = mneme_store_vault_db(vault);
+    var nodes = 0;
+    var edges = 0;
+    var note_id_str = mcp_args_get_str(args, "note_id");
+    var tag_filter = mcp_args_get_str(args, "tag");
+    if (note_id_str != 0 && _mt_count_hex(note_id_str) == 32) {
+        var nid = mneme_store_uuid_parse(note_id_str);
+        var nwc = mneme_store_vault_get_note(vault, nid);
+        if (nwc == 0) { return mneme_mcp_error(id_raw, str_from("Note not found")); }
+        nodes = 1;
+        var tags = mneme_store_nwc_tags(nwc);
+        nodes = nodes + vec_len(tags);
+        edges = edges + vec_len(tags);
+        var bls = mneme_store_nwc_backlinks(nwc);
+        nodes = nodes + vec_len(bls);
+        edges = edges + vec_len(bls);
+        var outs = mneme_store_db_get_outgoing_links(db, nid);
+        nodes = nodes + vec_len(outs);
+        edges = edges + vec_len(outs);
+    } elif (tag_filter != 0) {
+        var all_tags = mneme_store_db_list_tags(db);
+        var found = 0;
+        var ti = 0;
+        while (ti < vec_len(all_tags)) {
+            if (str_eq(mneme_store_tag_name(vec_get(all_tags, ti)), tag_filter) == 1) { found = 1; }
+            ti = ti + 1;
+        }
+        if (found == 0) {
+            var eb = str_builder_new();
+            str_builder_add_cstr(eb, "Tag not found: ");
+            str_builder_add(eb, tag_filter);
+            return mneme_mcp_error(id_raw, str_builder_build(eb));
+        }
+        nodes = 1;
+        var all_notes = mneme_store_vault_list_notes(vault, 100, 0);
+        var ni = 0;
+        while (ni < vec_len(all_notes)) {
+            var note = vec_get(all_notes, ni);
+            if (_mcp_vec_has_str(mneme_store_db_get_note_tags(db, mneme_core_note_id(note)), tag_filter) == 1) {
+                nodes = nodes + 1;
+                edges = edges + 1;
+            }
+            ni = ni + 1;
+        }
+    } else {
+        return mneme_mcp_error(id_raw, str_from("Provide either note_id or tag to query the graph"));
+    }
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "Graph: ");
+    str_builder_add_int(sb, nodes);
+    str_builder_add_cstr(sb, " nodes, ");
+    str_builder_add_int(sb, edges);
+    str_builder_add_cstr(sb, " edges\n\n{}");
+    return mneme_mcp_success(id_raw, str_builder_build(sb));
+}
+
+fn _mcp_handle_search_feedback(id_raw, args, engines): i64 {
+    var search_id = mcp_args_get_str(args, "search_id");
+    if (search_id == 0) { return mneme_mcp_error(id_raw, str_from("Missing required parameter: search_id")); }
+    var note_id = mcp_args_get_str(args, "note_id");
+    if (note_id == 0) { return mneme_mcp_error(id_raw, str_from("Missing required parameter: note_id")); }
+    # parse arm index from "s:<n>[:...]"
+    var arm_idx = 0;
+    if (str_len(search_id) > 2 && load8(str_data(search_id)) == 115 && load8(str_data(search_id) + 1) == 58) {
+        var d = str_data(search_id);
+        var n = str_len(search_id);
+        var i = 2;
+        var v = 0;
+        while (i < n && load8(d + i) >= 48 && load8(d + i) <= 57) { v = v * 10 + (load8(d + i) - 48); i = i + 1; }
+        arm_idx = v;
+    }
+    if (vec_len(engines) > 0) { mneme_search_retrieval_optimizer_record_feedback(load64(vec_get(engines, 0) + 24), arm_idx); }
+    return mneme_mcp_success(id_raw, str_from("Feedback recorded. Thank you!"));
+}
+
+fn _mcp_handle_list_vaults(id_raw, manager): i64 {
+    var vaults = mneme_store_registry_list(mneme_store_manager_registry(manager));
+    var active_id = mneme_store_manager_active_id(manager);
+    if (vec_len(vaults) == 0) { return mneme_mcp_success(id_raw, str_from("No vaults registered.")); }
+    var sb = str_builder_new();
+    str_builder_add_int(sb, vec_len(vaults));
+    str_builder_add_cstr(sb, " vault(s):\n\n");
+    var i = 0;
+    while (i < vec_len(vaults)) {
+        var v = vec_get(vaults, i);
+        str_builder_add_cstr(sb, "- **");
+        str_builder_add(sb, load64(v + 8));
+        str_builder_add_cstr(sb, "**");
+        if (active_id != 0 && mneme_core_uuid_eq(active_id, load64(v)) == 1) { str_builder_add_cstr(sb, " (active)"); }
+        if (load64(v + 48) != 0) { str_builder_add_cstr(sb, " [default]"); }
+        str_builder_add_cstr(sb, "\n  ID: ");
+        str_builder_add(sb, mneme_store_uuid_to_string(load64(v)));
+        str_builder_add_cstr(sb, "\n  Path: ");
+        str_builder_add(sb, load64(v + 16));
+        str_builder_add_cstr(sb, "\n\n");
+        i = i + 1;
+    }
+    return mneme_mcp_success(id_raw, str_builder_build(sb));
+}
+
+fn _mcp_handle_switch_vault(id_raw, args, manager): i64 {
+    var vault_ref = mcp_args_get_str(args, "vault");
+    if (vault_ref == 0) { return mneme_mcp_error(id_raw, str_from("Missing required parameter: vault")); }
+    var info = mneme_store_registry_resolve(mneme_store_manager_registry(manager), vault_ref);
+    if (info == 0) {
+        var eb = str_builder_new();
+        str_builder_add_cstr(eb, "Vault not found: ");
+        str_builder_add(eb, vault_ref);
+        return mneme_mcp_error(id_raw, str_builder_build(eb));
+    }
+    mneme_store_manager_switch_vault(manager, load64(info));
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "Switched to vault '");
+    str_builder_add(sb, load64(info + 8));
+    str_builder_add_cstr(sb, "'");
+    return mneme_mcp_success(id_raw, str_builder_build(sb));
+}
+
+# dispatch a tool call → response JSON string
+fn mneme_mcp_handle_tool_call(id_raw, tool, args, manager, engines): i64 {
+    if (str_eq_cstr(tool, "mneme_create_note") == 1) { return _mcp_handle_create_note(id_raw, args, manager, engines); }
+    if (str_eq_cstr(tool, "mneme_search") == 1) { return _mcp_handle_search(id_raw, args, manager, engines); }
+    if (str_eq_cstr(tool, "mneme_get_note") == 1) { return _mcp_handle_get_note(id_raw, args, manager, engines); }
+    if (str_eq_cstr(tool, "mneme_update_note") == 1) { return _mcp_handle_update_note(id_raw, args, manager, engines); }
+    if (str_eq_cstr(tool, "mneme_query_graph") == 1) { return _mcp_handle_query_graph(id_raw, args, manager, engines); }
+    if (str_eq_cstr(tool, "mneme_search_feedback") == 1) { return _mcp_handle_search_feedback(id_raw, args, engines); }
+    if (str_eq_cstr(tool, "mneme_list_vaults") == 1) { return _mcp_handle_list_vaults(id_raw, manager); }
+    if (str_eq_cstr(tool, "mneme_switch_vault") == 1) { return _mcp_handle_switch_vault(id_raw, args, manager); }
+    var eb = str_builder_new();
+    str_builder_add_cstr(eb, "Unknown tool: ");
+    str_builder_add_cstr(eb, tool);
+    return mneme_mcp_error(id_raw, str_builder_build(eb));
+}

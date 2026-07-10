@@ -1,0 +1,16 @@
+# mneme-ai — daimon Agent Runtime client (ported from
+# rust-old/crates/mneme-ai/src/client.rs). The REST methods (rag/vectors/
+# knowledge/cluster-label/merge) bridge to daimon over sandhi HTTP and are
+# DEFERRED (like the embedding/LLM bridges). The Rust tests only exercise the
+# constructor's base-url defaulting — pure and portable.
+
+# DaimonClient (16): [base_url@0(Str), api_key@8(0=None)]
+fn mneme_ai_daimon_client_new(base_url, api_key): i64 {
+    var c = alloc(16);
+    if (base_url == 0) { store64(c, str_from("http://127.0.0.1:8090")); }
+    else { store64(c, base_url); }
+    store64(c + 8, api_key);
+    return c;
+}
+fn mneme_ai_daimon_client_base_url(c): i64 { return load64(c); }
+fn mneme_ai_daimon_client_api_key(c): i64 { return load64(c + 8); }

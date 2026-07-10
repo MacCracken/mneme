@@ -1,0 +1,352 @@
+# mneme-ai — temporal analysis (ported from rust-old/crates/mneme-ai/src/temporal.rs)
+# Tracks note activity + concept trends over months. Timestamps are packed
+# YYYYMMDD integers (y*10000+m*100+d): chrono has no ymd/epoch helpers here and
+# every tested value is a whole day (created==updated at 12:00:00), so day
+# granularity reproduces all Rust behavior — year/month keys, %Y-%m-%d range
+# formatting, min/max, and created!=updated comparison. Depends on ai_concepts.
+
+enum TrendDirection { TREND_RISING; TREND_STABLE; TREND_DECLINING; }
+
+fn mneme_ai_ymd(y, m, d): i64 { return y * 10000 + m * 100 + d; }
+
+# NoteSnapshot (40): [title@0, content@8, tags@16(vec), created@24(ymd), updated@32(ymd)]
+fn mneme_ai_note_snapshot_new(title, content, tags, created, updated): i64 {
+    var s = alloc(40);
+    store64(s, title);
+    store64(s + 8, content);
+    store64(s + 16, tags);
+    store64(s + 24, created);
+    store64(s + 32, updated);
+    return s;
+}
+fn _snap_content(s): i64 { return load64(s + 8); }
+fn _snap_created(s): i64 { return load64(s + 24); }
+fn _snap_updated(s): i64 { return load64(s + 32); }
+
+# PeriodActivity (32): [period@0(Str), notes_created@8, notes_updated@16, total_words@24]
+fn mneme_ai_period_activity_period(p): i64 { return load64(p); }
+fn mneme_ai_period_activity_notes_created(p): i64 { return load64(p + 8); }
+fn mneme_ai_period_activity_notes_updated(p): i64 { return load64(p + 16); }
+fn mneme_ai_period_activity_total_words(p): i64 { return load64(p + 24); }
+
+# ConceptTrend (32): [term@0, occurrences_by_period@8(vec of [period,count]), trend@16, total_occurrences@24]
+fn mneme_ai_concept_trend_term(t): i64 { return load64(t); }
+fn mneme_ai_concept_trend_occurrences(t): i64 { return load64(t + 8); }
+fn mneme_ai_concept_trend_trend(t): i64 { return load64(t + 16); }
+fn mneme_ai_concept_trend_total(t): i64 { return load64(t + 24); }
+
+# DateRange (16): [min@0(Str), max@8(Str)]
+fn mneme_ai_date_range_new(mn, mx): i64 {
+    var dr = alloc(16);
+    store64(dr, mn);
+    store64(dr + 8, mx);
+    return dr;
+}
+fn mneme_ai_date_range_min(dr): i64 { return load64(dr); }
+fn mneme_ai_date_range_max(dr): i64 { return load64(dr + 8); }
+
+# TemporalReport (48): [total_notes@0, date_range@8(0=None), activity@16(vec),
+#                       trends@24(vec), most_active@32(0=None Str), avg_words@40]
+fn mneme_ai_temporal_report_new(total_notes, date_range, activity, trends, most_active, avg): i64 {
+    var r = alloc(48);
+    store64(r, total_notes);
+    store64(r + 8, date_range);
+    store64(r + 16, activity);
+    store64(r + 24, trends);
+    store64(r + 32, most_active);
+    store64(r + 40, avg);
+    return r;
+}
+fn mneme_ai_temporal_report_total_notes(r): i64 { return load64(r); }
+fn mneme_ai_temporal_report_date_range(r): i64 { return load64(r + 8); }
+fn mneme_ai_temporal_report_activity(r): i64 { return load64(r + 16); }
+fn mneme_ai_temporal_report_trends(r): i64 { return load64(r + 24); }
+fn mneme_ai_temporal_report_most_active(r): i64 { return load64(r + 32); }
+fn mneme_ai_temporal_report_avg_words(r): i64 { return load64(r + 40); }
+
+fn _temporal_pad2(sb, n): i64 {
+    if (n < 10) { str_builder_putc(sb, 48); }
+    str_builder_add_int(sb, n);
+    return 0;
+}
+fn _temporal_month_key(p): i64 {
+    var sb = str_builder_new();
+    str_builder_add_int(sb, p / 10000);
+    str_builder_putc(sb, 45);
+    _temporal_pad2(sb, (p / 100) % 100);
+    return str_builder_build(sb);
+}
+fn _temporal_date_fmt(p): i64 {
+    var sb = str_builder_new();
+    str_builder_add_int(sb, p / 10000);
+    str_builder_putc(sb, 45);
+    _temporal_pad2(sb, (p / 100) % 100);
+    str_builder_putc(sb, 45);
+    _temporal_pad2(sb, p % 100);
+    return str_builder_build(sb);
+}
+fn _temporal_word_count(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var count = 0;
+    var in_word = 0;
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        var ws = 0;
+        if (c == 32 || c == 9 || c == 10 || c == 13) { ws = 1; }
+        if (ws == 0 && in_word == 0) { count = count + 1; in_word = 1; }
+        if (ws == 1) { in_word = 0; }
+        i = i + 1;
+    }
+    return count;
+}
+fn _temporal_str_lt(a: Str, b: Str): i64 {
+    var na = str_len(a);
+    var nb = str_len(b);
+    var da = str_data(a);
+    var db = str_data(b);
+    var n = na;
+    if (nb < na) { n = nb; }
+    var i = 0;
+    while (i < n) {
+        var ca = load8(da + i);
+        var cb = load8(db + i);
+        if (ca < cb) { return 1; }
+        if (ca > cb) { return 0; }
+        i = i + 1;
+    }
+    if (na < nb) { return 1; }
+    return 0;
+}
+# find-or-0: PeriodActivity by period key
+fn _temporal_period_find(v, key: Str): i64 {
+    var i = 0;
+    while (i < vec_len(v)) {
+        if (str_eq(load64(vec_get(v, i)), key) == 1) { return vec_get(v, i); }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _temporal_period_new(key, created, updated, words): i64 {
+    var p = alloc(32);
+    store64(p, key);
+    store64(p + 8, created);
+    store64(p + 16, updated);
+    store64(p + 24, words);
+    return p;
+}
+# find-or-0: [key@0, count@8] pair in a vec
+fn _temporal_pair_find(v, key: Str): i64 {
+    var i = 0;
+    while (i < vec_len(v)) {
+        if (str_eq(load64(vec_get(v, i)), key) == 1) { return vec_get(v, i); }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# compute_trend over a vec of [period, count] pairs
+fn mneme_ai_compute_trend(data): i64 {
+    if (vec_len(data) < 2) { return TREND_STABLE; }
+    var mid = vec_len(data) / 2;
+    var first = 0;
+    var i = 0;
+    while (i < mid) { first = first + load64(vec_get(data, i) + 8); i = i + 1; }
+    var second = 0;
+    i = mid;
+    while (i < vec_len(data)) { second = second + load64(vec_get(data, i) + 8); i = i + 1; }
+    if (second > first + (first / 3)) { return TREND_RISING; }
+    if (first > second + (second / 3)) { return TREND_DECLINING; }
+    return TREND_STABLE;
+}
+
+fn mneme_ai_analyze_temporal(notes): i64 {
+    if (vec_len(notes) == 0) {
+        return mneme_ai_temporal_report_new(0, 0, vec_new(), vec_new(), 0, 0);
+    }
+    # activity by month
+    var monthly = vec_new();
+    var total_words = 0;
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var note = vec_get(notes, i);
+        var created = _snap_created(note);
+        var mk = _temporal_month_key(created);
+        var words = _temporal_word_count(_snap_content(note));
+        total_words = total_words + words;
+        var e = _temporal_period_find(monthly, mk);
+        if (e == 0) { e = _temporal_period_new(mk, 0, 0, 0); vec_push(monthly, e); }
+        store64(e + 8, load64(e + 8) + 1);
+        store64(e + 24, load64(e + 24) + words);
+        if (_snap_updated(note) != created) {
+            var uk = _temporal_month_key(_snap_updated(note));
+            var ue = _temporal_period_find(monthly, uk);
+            if (ue == 0) { ue = _temporal_period_new(uk, 0, 0, 0); vec_push(monthly, ue); }
+            store64(ue + 16, load64(ue + 16) + 1);
+        }
+        i = i + 1;
+    }
+    # sort activity by period ascending (bubble)
+    var m = vec_len(monthly);
+    var a = 0;
+    while (a < m) {
+        var b = 0;
+        while (b + 1 + a < m) {
+            if (_temporal_str_lt(load64(vec_get(monthly, b + 1)), load64(vec_get(monthly, b))) == 1) {
+                var tmp = vec_get(monthly, b);
+                vec_set(monthly, b, vec_get(monthly, b + 1));
+                vec_set(monthly, b + 1, tmp);
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    # most active month = max by (created+updated); ties → last (matches max_by_key)
+    var most_active = 0;
+    var best = 0 - 1;
+    i = 0;
+    while (i < vec_len(monthly)) {
+        var pa = vec_get(monthly, i);
+        var act = load64(pa + 8) + load64(pa + 16);
+        if (act >= best) { best = act; most_active = load64(pa); }
+        i = i + 1;
+    }
+    # date range: min created, max updated
+    var min_created = _snap_created(vec_get(notes, 0));
+    var max_updated = _snap_updated(vec_get(notes, 0));
+    i = 1;
+    while (i < vec_len(notes)) {
+        var n2 = vec_get(notes, i);
+        if (_snap_created(n2) < min_created) { min_created = _snap_created(n2); }
+        if (_snap_updated(n2) > max_updated) { max_updated = _snap_updated(n2); }
+        i = i + 1;
+    }
+    var dr = mneme_ai_date_range_new(_temporal_date_fmt(min_created), _temporal_date_fmt(max_updated));
+
+    # concept trends: concept_by_month = vec of [month_key@0, term_counts@8 (vec of [term,count])]
+    var cbm = vec_new();
+    i = 0;
+    while (i < vec_len(notes)) {
+        var note3 = vec_get(notes, i);
+        var mk3 = _temporal_month_key(_snap_created(note3));
+        var extracted = mneme_ai_extract_concepts(_snap_content(note3));
+        if (extracted != 0) {
+            var mm = _temporal_pair_find(cbm, mk3);
+            if (mm == 0) { mm = alloc(16); store64(mm, mk3); store64(mm + 8, vec_new()); vec_push(cbm, mm); }
+            var tc = load64(mm + 8);
+            var ci = 0;
+            while (ci < vec_len(extracted)) {
+                var con = vec_get(extracted, ci);
+                var tp = _temporal_pair_find(tc, mneme_ai_concept_term(con));
+                if (tp == 0) { tp = alloc(16); store64(tp, mneme_ai_concept_term(con)); store64(tp + 8, 0); vec_push(tc, tp); }
+                store64(tp + 8, load64(tp + 8) + mneme_ai_concept_occurrences(con));
+                ci = ci + 1;
+            }
+        }
+        i = i + 1;
+    }
+    # global concept totals
+    var gc = vec_new();
+    i = 0;
+    while (i < vec_len(cbm)) {
+        var tc2 = load64(vec_get(cbm, i) + 8);
+        var ti = 0;
+        while (ti < vec_len(tc2)) {
+            var pair = vec_get(tc2, ti);
+            var gp = _temporal_pair_find(gc, load64(pair));
+            if (gp == 0) { gp = alloc(16); store64(gp, load64(pair)); store64(gp + 8, 0); vec_push(gc, gp); }
+            store64(gp + 8, load64(gp + 8) + load64(pair + 8));
+            ti = ti + 1;
+        }
+        i = i + 1;
+    }
+    # sort global concepts by count descending, keep top 10
+    var gm = vec_len(gc);
+    a = 0;
+    while (a < gm) {
+        var gb = 0;
+        while (gb + 1 + a < gm) {
+            if (load64(vec_get(gc, gb + 1) + 8) > load64(vec_get(gc, gb) + 8)) {
+                var gt = vec_get(gc, gb);
+                vec_set(gc, gb, vec_get(gc, gb + 1));
+                vec_set(gc, gb + 1, gt);
+            }
+            gb = gb + 1;
+        }
+        a = a + 1;
+    }
+    # sorted month keys
+    var months = vec_new();
+    i = 0;
+    while (i < vec_len(cbm)) { vec_push(months, load64(vec_get(cbm, i))); i = i + 1; }
+    var mm2 = vec_len(months);
+    a = 0;
+    while (a < mm2) {
+        var mb = 0;
+        while (mb + 1 + a < mm2) {
+            if (_temporal_str_lt(vec_get(months, mb + 1), vec_get(months, mb)) == 1) {
+                var mt = vec_get(months, mb);
+                vec_set(months, mb, vec_get(months, mb + 1));
+                vec_set(months, mb + 1, mt);
+            }
+            mb = mb + 1;
+        }
+        a = a + 1;
+    }
+    # build trends for top concepts
+    var trends = vec_new();
+    i = 0;
+    while (i < vec_len(gc) && i < 10) {
+        var g = vec_get(gc, i);
+        var term = load64(g);
+        var obp = vec_new();
+        var mi = 0;
+        while (mi < vec_len(months)) {
+            var mon = vec_get(months, mi);
+            var cnt = 0;
+            var mmp = _temporal_pair_find(cbm, mon);
+            if (mmp != 0) {
+                var found = _temporal_pair_find(load64(mmp + 8), term);
+                if (found != 0) { cnt = load64(found + 8); }
+            }
+            var pp = alloc(16);
+            store64(pp, mon);
+            store64(pp + 8, cnt);
+            vec_push(obp, pp);
+            mi = mi + 1;
+        }
+        var ct = alloc(32);
+        store64(ct, term);
+        store64(ct + 8, obp);
+        store64(ct + 16, mneme_ai_compute_trend(obp));
+        store64(ct + 24, load64(g + 8));
+        vec_push(trends, ct);
+        i = i + 1;
+    }
+
+    var avg = total_words / vec_len(notes);
+    return mneme_ai_temporal_report_new(vec_len(notes), dr, monthly, trends, most_active, avg);
+}
+
+# minimal serde: emits most_active_month + date_range (tests check most_active substring)
+fn mneme_ai_temporal_report_to_json(r): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"total_notes\":");
+    str_builder_add_int(sb, load64(r));
+    str_builder_add_cstr(sb, ",\"most_active_month\":");
+    if (load64(r + 32) != 0) { str_builder_putc(sb, 34); str_builder_add(sb, load64(r + 32)); str_builder_putc(sb, 34); }
+    else { str_builder_add_cstr(sb, "null"); }
+    str_builder_add_cstr(sb, ",\"date_range\":");
+    if (load64(r + 8) != 0) {
+        str_builder_putc(sb, 34);
+        str_builder_add(sb, mneme_ai_date_range_min(load64(r + 8)));
+        str_builder_add_cstr(sb, "\",\"");
+        str_builder_add(sb, mneme_ai_date_range_max(load64(r + 8)));
+        str_builder_putc(sb, 34);
+    } else { str_builder_add_cstr(sb, "null"); }
+    str_builder_add_cstr(sb, ",\"avg_words_per_note\":");
+    str_builder_add_int(sb, load64(r + 40));
+    str_builder_add_cstr(sb, "}");
+    return str_builder_build(sb);
+}

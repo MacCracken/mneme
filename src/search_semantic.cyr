@@ -1,0 +1,154 @@
+# mneme-search — semantic types + hybrid (RRF) merge (ported from
+# rust-old/crates/mneme-search/src/semantic.rs). SemanticResult lives in
+# search_vector_store.cyr; BlendWeights in search_retrieval_optimizer.cyr.
+# Reciprocal-rank-fusion (RRF, k=60) blends full-text + semantic signals,
+# weighted by BlendWeights, with an optional rank-position recency boost.
+# f64 fields are IEEE-754 bit patterns (Cyrius convention).
+
+enum ResultSource { RESULT_SOURCE_FULLTEXT; RESULT_SOURCE_SEMANTIC; RESULT_SOURCE_BOTH; }
+
+# FtResult tuple (40): [id@0, title@8, path@16, snippet@24, score@32(f64, unused in merge)]
+fn mneme_search_ft_result_new(id, title, path, snippet, score): i64 {
+    var t = alloc(40);
+    store64(t, id);
+    store64(t + 8, title);
+    store64(t + 16, path);
+    store64(t + 24, snippet);
+    store64(t + 32, score);
+    return t;
+}
+
+# HybridResult (48): [note_id@0, title@8, path@16, snippet@24, score@32(f64), source@40]
+fn mneme_search_hybridresult_note_id(h): i64 { return load64(h); }
+fn mneme_search_hybridresult_title(h): i64 { return load64(h + 8); }
+fn mneme_search_hybridresult_path(h): i64 { return load64(h + 16); }
+fn mneme_search_hybridresult_snippet(h): i64 { return load64(h + 24); }
+fn mneme_search_hybridresult_score(h): i64 { return load64(h + 32); }
+fn mneme_search_hybridresult_source(h): i64 { return load64(h + 40); }
+
+fn _sem_truncate(s: Str): i64 {
+    if (str_len(s) > 200) {
+        var sb = str_builder_new();
+        str_builder_add(sb, str_substr(s, 0, 200));
+        str_builder_add_cstr(sb, "...");
+        return str_builder_build(sb);
+    }
+    return s;
+}
+
+# HybridEntry (56): [id@0, title@8, path@16, snippet@24, score@32(f64), has_ft@40, has_sem@48]
+fn _sem_find_entry(entries, id): i64 {
+    var i = 0;
+    while (i < vec_len(entries)) {
+        if (mneme_core_uuid_eq(load64(vec_get(entries, i)), id) == 1) { return vec_get(entries, i); }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _sem_get_or_insert(entries, id, title, path, snippet): i64 {
+    var e = _sem_find_entry(entries, id);
+    if (e != 0) { return e; }
+    e = alloc(56);
+    store64(e, id);
+    store64(e + 8, title);
+    store64(e + 16, path);
+    store64(e + 24, snippet);
+    store64(e + 32, f64_from(0));
+    store64(e + 40, 0);
+    store64(e + 48, 0);
+    vec_push(entries, e);
+    return e;
+}
+
+# Merge full-text + semantic results into a ranked hybrid list (RRF, k=60).
+fn mneme_search_weighted_hybrid_merge(ft, sem, limit, weights): i64 {
+    var k = f64_from(60);
+    var entries = vec_new();
+
+    # score full-text by rank, weighted
+    var rank = 0;
+    while (rank < vec_len(ft)) {
+        var t = vec_get(ft, rank);
+        var rrf = f64_div(mneme_search_blend_weights_fulltext(weights), f64_add(f64_add(k, f64_from(rank)), f64_from(1)));
+        var e = _sem_get_or_insert(entries, load64(t), load64(t + 8), load64(t + 16), load64(t + 24));
+        store64(e + 32, f64_add(load64(e + 32), rrf));
+        store64(e + 40, 1);
+        rank = rank + 1;
+    }
+
+    # score semantic by rank, weighted (skip None note_id)
+    rank = 0;
+    while (rank < vec_len(sem)) {
+        var r = vec_get(sem, rank);
+        var id = mneme_search_semresult_note_id(r);
+        if (id != 0) {
+            var title = mneme_search_semresult_title(r);
+            if (title == 0) { title = str_from(""); }
+            var rrf2 = f64_div(mneme_search_blend_weights_semantic(weights), f64_add(f64_add(k, f64_from(rank)), f64_from(1)));
+            var e2 = _sem_get_or_insert(entries, id, title, str_from(""), _sem_truncate(mneme_search_semresult_content(r)));
+            store64(e2 + 32, f64_add(load64(e2 + 32), rrf2));
+            store64(e2 + 48, 1);
+        }
+        rank = rank + 1;
+    }
+
+    # recency boost (only when recency > 0): inverse to insertion position
+    if (f64_le(mneme_search_blend_weights_recency(weights), f64_from(0)) == 0) {
+        var total = f64_from(vec_len(entries));
+        var i = 0;
+        while (i < vec_len(entries)) {
+            var e3 = vec_get(entries, i);
+            var factor = f64_sub(f64_from(1), f64_div(f64_from(i), total));
+            store64(e3 + 32, f64_add(load64(e3 + 32), f64_mul(mneme_search_blend_weights_recency(weights), factor)));
+            i = i + 1;
+        }
+    }
+
+    # materialize HybridResult with source tag
+    var out = vec_new();
+    var j = 0;
+    while (j < vec_len(entries)) {
+        var e4 = vec_get(entries, j);
+        var hf = load64(e4 + 40);
+        var hs = load64(e4 + 48);
+        var src = RESULT_SOURCE_FULLTEXT;
+        if (hf == 1 && hs == 1) { src = RESULT_SOURCE_BOTH; }
+        elif (hf == 0 && hs == 1) { src = RESULT_SOURCE_SEMANTIC; }
+        var h = alloc(48);
+        store64(h, load64(e4));
+        store64(h + 8, load64(e4 + 8));
+        store64(h + 16, load64(e4 + 16));
+        store64(h + 24, load64(e4 + 24));
+        store64(h + 32, load64(e4 + 32));
+        store64(h + 40, src);
+        vec_push(out, h);
+        j = j + 1;
+    }
+
+    # sort by score descending (bubble; f64 compare)
+    var m = vec_len(out);
+    var a = 0;
+    while (a < m) {
+        var b = 0;
+        while (b + 1 + a < m) {
+            if (f64_ge(load64(vec_get(out, b) + 32), load64(vec_get(out, b + 1) + 32)) == 0) {
+                var tmp = vec_get(out, b);
+                vec_set(out, b, vec_get(out, b + 1));
+                vec_set(out, b + 1, tmp);
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+
+    # truncate to limit
+    var res = vec_new();
+    var q = 0;
+    while (q < vec_len(out) && q < limit) { vec_push(res, vec_get(out, q)); q = q + 1; }
+    return res;
+}
+
+# Merge with default blend weights (fulltext=1, semantic=1, recency=0).
+fn mneme_search_hybrid_merge(ft, sem, limit): i64 {
+    return mneme_search_weighted_hybrid_merge(ft, sem, limit, mneme_search_blend_weights_default());
+}

@@ -1,0 +1,242 @@
+# mneme-ai — note templates (ported from rust-old/crates/mneme-ai/src/templates.rs)
+# {{variable}} substitution with built-in date/time vars from the system clock
+# (chrono: clock_epoch_secs + epoch_to_date). Pure logic; the `variables` field
+# is metadata only (render does NOT apply variable defaults — matches Rust).
+
+# TemplateVariable (24): [name@0, description@8, default@16 (0=None)]
+fn mneme_ai_template_variable_new(name, description, dflt): i64 {
+    var v = alloc(24);
+    store64(v, name);
+    store64(v + 8, description);
+    store64(v + 16, dflt);
+    return v;
+}
+# Template (48): [name@0, description@8, title_pattern@16, content@24, default_tags@32(vec), variables@40(vec)]
+fn mneme_ai_template_new(name, description, title_pattern, content, default_tags, variables): i64 {
+    var t = alloc(48);
+    store64(t, name);
+    store64(t + 8, description);
+    store64(t + 16, title_pattern);
+    store64(t + 24, content);
+    store64(t + 32, default_tags);
+    store64(t + 40, variables);
+    return t;
+}
+fn mneme_ai_template_name(t): i64 { return load64(t); }
+fn mneme_ai_template_title_pattern(t): i64 { return load64(t + 16); }
+fn mneme_ai_template_content(t): i64 { return load64(t + 24); }
+fn mneme_ai_template_default_tags(t): i64 { return load64(t + 32); }
+fn mneme_ai_template_variables(t): i64 { return load64(t + 40); }
+
+# RenderedTemplate (32): [title@0, content@8, tags@16(vec), path@24 (0=None)]
+fn mneme_ai_rendered_title(r): i64 { return load64(r); }
+fn mneme_ai_rendered_content(r): i64 { return load64(r + 8); }
+fn mneme_ai_rendered_tags(r): i64 { return load64(r + 16); }
+fn mneme_ai_rendered_path(r): i64 { return load64(r + 24); }
+
+fn _templates_replace_all(s: Str, from: Str, to: Str): i64 {
+    var sb = str_builder_new();
+    var flen = str_len(from);
+    var fd = str_data(from);
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        if (flen > 0 && i + flen <= n && memeq(d + i, fd, flen) == 1) {
+            str_builder_add(sb, to);
+            i = i + flen;
+        } else {
+            str_builder_putc(sb, load8(d + i));
+            i = i + 1;
+        }
+    }
+    return str_builder_build(sb);
+}
+# {{variable}} substitution over a context (vec of [key,value] pairs)
+fn mneme_ai_substitute(template: Str, ctx): i64 {
+    var result = template;
+    var i = 0;
+    while (i < vec_len(ctx)) {
+        var p = vec_get(ctx, i);
+        var needle = str_builder_new();
+        str_builder_add_cstr(needle, "{{");
+        str_builder_add(needle, load64(p));
+        str_builder_add_cstr(needle, "}}");
+        result = _templates_replace_all(result, str_builder_build(needle), load64(p + 8));
+        i = i + 1;
+    }
+    return result;
+}
+
+fn _templates_ctx_set(ctx, key: Str, value): i64 {
+    var i = 0;
+    while (i < vec_len(ctx)) {
+        if (str_eq(load64(vec_get(ctx, i)), key) == 1) { store64(vec_get(ctx, i) + 8, value); return 0; }
+        i = i + 1;
+    }
+    var p = alloc(16);
+    store64(p, key);
+    store64(p + 8, value);
+    vec_push(ctx, p);
+    return 0;
+}
+fn _templates_ctx_get(ctx, key_cstr): i64 {
+    var i = 0;
+    while (i < vec_len(ctx)) {
+        if (str_eq_cstr(load64(vec_get(ctx, i)), key_cstr) == 1) { return load64(vec_get(ctx, i) + 8); }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _templates_int_str(n): i64 {
+    var sb = str_builder_new();
+    str_builder_add_int(sb, n);
+    return str_builder_build(sb);
+}
+fn _templates_pad2(n): i64 {
+    var sb = str_builder_new();
+    if (n < 10) { str_builder_putc(sb, 48); }
+    str_builder_add_int(sb, n);
+    return str_builder_build(sb);
+}
+fn _templates_weekday(epoch): i64 {
+    var dow = (epoch / 86400 + 4) % 7;
+    if (dow == 0) { return str_from("Sunday"); }
+    if (dow == 1) { return str_from("Monday"); }
+    if (dow == 2) { return str_from("Tuesday"); }
+    if (dow == 3) { return str_from("Wednesday"); }
+    if (dow == 4) { return str_from("Thursday"); }
+    if (dow == 5) { return str_from("Friday"); }
+    return str_from("Saturday");
+}
+fn _templates_build_context(vars): i64 {
+    var ctx = vec_new();
+    var epoch = clock_epoch_secs();
+    var dt = epoch_to_date(epoch);
+    var year = load64(dt);
+    var month = load64(dt + 8);
+    var day = load64(dt + 16);
+    var hour = load64(dt + 24);
+    var minute = load64(dt + 32);
+    # date = YYYY-MM-DD
+    var date_sb = str_builder_new();
+    str_builder_add_int(date_sb, year);
+    str_builder_putc(date_sb, 45);
+    str_builder_add(date_sb, _templates_pad2(month));
+    str_builder_putc(date_sb, 45);
+    str_builder_add(date_sb, _templates_pad2(day));
+    var date = str_builder_build(date_sb);
+    # time = HH:MM
+    var time_sb = str_builder_new();
+    str_builder_add(time_sb, _templates_pad2(hour));
+    str_builder_putc(time_sb, 58);
+    str_builder_add(time_sb, _templates_pad2(minute));
+    var time = str_builder_build(time_sb);
+    # datetime = date + " " + time
+    var dtm_sb = str_builder_new();
+    str_builder_add(dtm_sb, date);
+    str_builder_putc(dtm_sb, 32);
+    str_builder_add(dtm_sb, time);
+    _templates_ctx_set(ctx, str_from("date"), date);
+    _templates_ctx_set(ctx, str_from("time"), time);
+    _templates_ctx_set(ctx, str_from("datetime"), str_builder_build(dtm_sb));
+    _templates_ctx_set(ctx, str_from("year"), _templates_int_str(year));
+    _templates_ctx_set(ctx, str_from("month"), _templates_pad2(month));
+    _templates_ctx_set(ctx, str_from("day"), _templates_pad2(day));
+    _templates_ctx_set(ctx, str_from("weekday"), _templates_weekday(epoch));
+    # user vars override built-ins
+    var i = 0;
+    while (i < vec_len(vars)) {
+        var p = vec_get(vars, i);
+        _templates_ctx_set(ctx, load64(p), load64(p + 8));
+        i = i + 1;
+    }
+    return ctx;
+}
+# slug: alphanumeric→lowercase, runs of other chars → single '-', trimmed
+fn _templates_slug(s: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(s);
+    var d = str_data(s);
+    var prev_dash = 1;
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        var isaln = 0;
+        if ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)) { isaln = 1; }
+        if (isaln == 1) {
+            if (c >= 65 && c <= 90) { c = c + 32; }
+            str_builder_putc(sb, c);
+            prev_dash = 0;
+        } else {
+            if (prev_dash == 0) { str_builder_putc(sb, 45); prev_dash = 1; }
+        }
+        i = i + 1;
+    }
+    var res = str_builder_build(sb);
+    var rn = str_len(res);
+    while (rn > 0 && load8(str_data(res) + rn - 1) == 45) { rn = rn - 1; }
+    return str_substr(res, 0, rn);
+}
+
+fn mneme_ai_render_template(template, vars): i64 {
+    var ctx = _templates_build_context(vars);
+    var title = mneme_ai_substitute(mneme_ai_template_title_pattern(template), ctx);
+    var content = mneme_ai_substitute(mneme_ai_template_content(template), ctx);
+    _templates_ctx_set(ctx, str_from("title"), title);
+    var path = 0;
+    if (str_contains(mneme_ai_template_title_pattern(template), str_from("{{date}}")) == 1) {
+        var date = _templates_ctx_get(ctx, "date");
+        if (date == 0) { date = str_from(""); }
+        var i1 = str_index_of(date, 45);
+        if (i1 >= 0) {
+            var year = str_substr(date, 0, i1);
+            var rest = str_substr(date, i1 + 1, str_len(date));
+            var i2 = str_index_of(rest, 45);
+            if (i2 >= 0) {
+                var month = str_substr(rest, 0, i2);
+                var pb = str_builder_new();
+                str_builder_add(pb, year);
+                str_builder_putc(pb, 47);
+                str_builder_add(pb, month);
+                str_builder_putc(pb, 47);
+                str_builder_add(pb, _templates_slug(title));
+                str_builder_add_cstr(pb, ".md");
+                path = str_builder_build(pb);
+            }
+        }
+    }
+    var r = alloc(32);
+    store64(r, title);
+    store64(r + 8, content);
+    store64(r + 16, mneme_ai_template_default_tags(template));
+    store64(r + 24, path);
+    return r;
+}
+
+fn _templates_tags1(tag): i64 {
+    var v = vec_new();
+    vec_push(v, str_from(tag));
+    return v;
+}
+fn mneme_ai_daily_note_template(): i64 {
+    return mneme_ai_template_new(str_from("daily"), str_from("Daily journal / log note"), str_from("{{date}} — Daily Note"), str_from("# {{date}} — {{weekday}}\n\n## Tasks\n- [ ]\n\n## Notes\n\n\n## Log\n\n"), _templates_tags1("daily"), vec_new());
+}
+fn mneme_ai_meeting_note_template(): i64 {
+    var vars = vec_new();
+    vec_push(vars, mneme_ai_template_variable_new(str_from("topic"), str_from("Meeting topic"), str_from("Untitled Meeting")));
+    vec_push(vars, mneme_ai_template_variable_new(str_from("attendees"), str_from("Comma-separated list of attendees"), 0));
+    return mneme_ai_template_new(str_from("meeting"), str_from("Meeting notes with attendees, agenda, and action items"), str_from("Meeting: {{topic}} — {{date}}"), str_from("# Meeting: {{topic}}\n\n**Date:** {{datetime}}\n**Attendees:** {{attendees}}\n\n## Agenda\n1.\n\n## Notes\n\n\n## Action Items\n- [ ]\n\n## Decisions\n\n"), _templates_tags1("meeting"), vars);
+}
+fn mneme_ai_project_note_template(): i64 {
+    var vars = vec_new();
+    vec_push(vars, mneme_ai_template_variable_new(str_from("name"), str_from("Project name"), 0));
+    return mneme_ai_template_new(str_from("project"), str_from("Project overview note"), str_from("Project: {{name}}"), str_from("# {{name}}\n\n## Overview\n\n\n## Goals\n-\n\n## Status\n**Current phase:**\n**Started:** {{date}}\n\n## Links\n\n"), _templates_tags1("project"), vars);
+}
+fn mneme_ai_builtin_templates(): i64 {
+    var v = vec_new();
+    vec_push(v, mneme_ai_daily_note_template());
+    vec_push(v, mneme_ai_meeting_note_template());
+    vec_push(v, mneme_ai_project_note_template());
+    return v;
+}

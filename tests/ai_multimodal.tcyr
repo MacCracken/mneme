@@ -1,0 +1,72 @@
+# mneme-ai multimodal tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/multimodal.rs (12 test cases incl. the async one,
+# which uses local fs — portable here).
+include "src/ai_multimodal.cyr"
+
+fn _has(s: Str, w): i64 { if (str_index_of_cstr(s, w) >= 0) { return 1; } return 0; }
+fn _att(filename, media_type): i64 {
+    return mneme_ai_attachment_new(str_from(filename), media_type, 1024, str_from(filename));
+}
+
+fn main() {
+    alloc_init();
+    test_group("ai_multimodal");
+
+    # detect_image_types
+    assert_eq(mneme_ai_detect_media_type(str_from("photo.jpg")), MEDIA_IMAGE, "jpg image");
+    assert_eq(mneme_ai_detect_media_type(str_from("photo.PNG")), MEDIA_IMAGE, "PNG image (case)");
+    assert_eq(mneme_ai_detect_media_type(str_from("diagram.svg")), MEDIA_IMAGE, "svg image");
+
+    # detect_audio_types
+    assert_eq(mneme_ai_detect_media_type(str_from("voice.mp3")), MEDIA_AUDIO, "mp3 audio");
+    assert_eq(mneme_ai_detect_media_type(str_from("recording.wav")), MEDIA_AUDIO, "wav audio");
+    assert_eq(mneme_ai_detect_media_type(str_from("music.flac")), MEDIA_AUDIO, "flac audio");
+
+    # detect_video_types
+    assert_eq(mneme_ai_detect_media_type(str_from("clip.mp4")), MEDIA_VIDEO, "mp4 video");
+    assert_eq(mneme_ai_detect_media_type(str_from("movie.mkv")), MEDIA_VIDEO, "mkv video");
+
+    # detect_unknown
+    assert_eq(mneme_ai_detect_media_type(str_from("file.xyz")), MEDIA_UNKNOWN, "xyz unknown");
+    assert_eq(mneme_ai_detect_media_type(str_from("noext")), MEDIA_UNKNOWN, "noext unknown");
+
+    # detect_document_types
+    assert_eq(mneme_ai_detect_media_type(str_from("file.pdf")), MEDIA_DOCUMENT, "pdf document");
+    assert_eq(mneme_ai_detect_media_type(str_from("doc.docx")), MEDIA_DOCUMENT, "docx document");
+
+    # image_markdown
+    var mi = mneme_ai_attachment_markdown(_att("photo.jpg", MEDIA_IMAGE));
+    assert_eq(_has(mi, "![photo.jpg]"), 1, "image md link");
+    assert_eq(_has(mi, "attachments/photo.jpg"), 1, "image md path");
+
+    # audio_markdown
+    assert_eq(_has(mneme_ai_attachment_markdown(_att("voice.mp3", MEDIA_AUDIO)), "voice.mp3"), 1, "audio md filename");
+
+    # video_markdown
+    assert_eq(_has(mneme_ai_attachment_markdown(_att("clip.mp4", MEDIA_VIDEO)), "clip.mp4"), 1, "video md filename");
+
+    # document_markdown
+    assert_eq(_has(mneme_ai_attachment_markdown(_att("report.pdf", MEDIA_DOCUMENT)), "report.pdf"), 1, "document md filename");
+
+    # unknown_markdown
+    assert_eq(_has(mneme_ai_attachment_markdown(_att("data.xyz", MEDIA_UNKNOWN)), "data.xyz"), 1, "unknown md filename");
+
+    # attachment_serialization
+    assert_eq(_has(mneme_ai_attachment_to_json(_att("test.mp3", MEDIA_AUDIO)), "audio"), 1, "serde has audio");
+
+    # create_attachment_from_file (local fs)
+    sys_mkdir(_mm_cstr(str_from("/tmp/mneme_mm_d")), 493);
+    var path = str_from("/tmp/mneme_mm_d/test.png");
+    var pc = _mm_cstr(path);
+    var data = str_from("fake png data");
+    file_write_all(pc, str_data(data), str_len(data));
+    var att = mneme_ai_create_attachment(path);
+    assert_eq(str_eq_cstr(mneme_ai_attachment_filename(att), "test.png"), 1, "attachment filename");
+    assert_eq(mneme_ai_attachment_media_type(att), MEDIA_IMAGE, "attachment image type");
+    assert_eq(mneme_ai_attachment_size_bytes(att) > 0, 1, "attachment size > 0");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

@@ -1,0 +1,99 @@
+# mneme-ai clustering tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/clustering.rs (8 #[test] cases).
+# NOTE: inertia_decreases uses cos/sin circle points in Rust; no trig in the
+# Cyrius stdlib, so we substitute a 5x4 grid — it exercises the identical
+# property (more clusters ⇒ lower total inertia).
+include "src/core_uuid.cyr"
+include "src/ai_clustering.cyr"
+
+fn _e2(a, b): i64 {
+    var v = vec_new();
+    vec_push(v, a);
+    vec_push(v, b);
+    return v;
+}
+fn _e3(a, b, c): i64 {
+    var v = vec_new();
+    vec_push(v, a);
+    vec_push(v, b);
+    vec_push(v, c);
+    return v;
+}
+fn _f01(i): i64 { return f64_mul(f64_parse("0.01"), f64_from(i)); }
+fn _ne(title, emb): i64 { return mneme_ai_note_embedding_new(mneme_core_uuid_v4(), str_from(title), emb); }
+
+fn main() {
+    alloc_init();
+    test_group("ai_clustering");
+
+    # cluster_single_note
+    var s1 = vec_new();
+    vec_push(s1, _ne("Solo", _e3(f64_from(1), f64_from(0), f64_from(0))));
+    var r1 = mneme_ai_cluster_notes(s1, 0 - 1, 5);
+    assert_eq(mneme_ai_clustering_result_k(r1), 1, "single k 1");
+    assert_eq(vec_len(mneme_ai_cluster_note_ids(vec_get(mneme_ai_clustering_result_clusters(r1), 0))), 1, "single cluster 1 note");
+
+    # cluster_two_groups
+    var s2 = vec_new();
+    var i = 0;
+    while (i < 5) { vec_push(s2, _ne("A", _e3(f64_from(1), _f01(i), f64_from(0)))); i = i + 1; }
+    i = 0;
+    while (i < 5) { vec_push(s2, _ne("B", _e3(f64_from(0), f64_from(1), _f01(i)))); i = i + 1; }
+    var r2 = mneme_ai_cluster_notes(s2, 2, 5);
+    assert_eq(mneme_ai_clustering_result_k(r2), 2, "two-group k 2");
+    assert_eq(mneme_ai_clustering_result_total_notes(r2), 10, "two-group total 10");
+    assert_eq(vec_len(mneme_ai_cluster_note_ids(vec_get(mneme_ai_clustering_result_clusters(r2), 0))), 5, "cluster0 size 5");
+    assert_eq(vec_len(mneme_ai_cluster_note_ids(vec_get(mneme_ai_clustering_result_clusters(r2), 1))), 5, "cluster1 size 5");
+
+    # cluster_with_elbow
+    var s3 = vec_new();
+    i = 0;
+    while (i < 6) { vec_push(s3, _ne("A", _e3(f64_from(1), _f01(i), f64_from(0)))); i = i + 1; }
+    i = 0;
+    while (i < 6) { vec_push(s3, _ne("B", _e3(f64_from(0), f64_from(1), _f01(i)))); i = i + 1; }
+    var r3 = mneme_ai_cluster_notes(s3, 0 - 1, 8);
+    assert_eq(mneme_ai_clustering_result_k(r3) >= 2, 1, "elbow k >= 2");
+    assert_eq(mneme_ai_clustering_result_total_notes(r3), 12, "elbow total 12");
+
+    # empty_input
+    var r4 = mneme_ai_cluster_notes(vec_new(), 0 - 1, 5);
+    assert_eq(mneme_ai_clustering_result_k(r4), 1, "empty k 1");
+    assert_eq(mneme_ai_clustering_result_total_notes(r4), 0, "empty total 0");
+
+    # squared_distance_identical
+    assert_eq(mneme_ai_squared_distance(_e2(f64_from(1), f64_from(2)), _e2(f64_from(1), f64_from(2))), f64_from(0), "identical dist 0");
+
+    # squared_distance_values
+    assert_eq(mneme_ai_squared_distance(_e2(f64_from(0), f64_from(0)), _e2(f64_from(3), f64_from(4))), f64_from(25), "dist 25");
+
+    # three_clear_clusters
+    var s7 = vec_new();
+    i = 0;
+    while (i < 4) { vec_push(s7, _ne("X", _e3(f64_add(f64_from(10), _f01(i)), f64_from(0), f64_from(0)))); i = i + 1; }
+    i = 0;
+    while (i < 4) { vec_push(s7, _ne("Y", _e3(f64_from(0), f64_add(f64_from(10), _f01(i)), f64_from(0)))); i = i + 1; }
+    i = 0;
+    while (i < 4) { vec_push(s7, _ne("Z", _e3(f64_from(0), f64_from(0), f64_add(f64_from(10), _f01(i))))); i = i + 1; }
+    var r7 = mneme_ai_cluster_notes(s7, 3, 5);
+    assert_eq(mneme_ai_clustering_result_k(r7), 3, "three k 3");
+    var cok = 1;
+    i = 0;
+    while (i < vec_len(mneme_ai_clustering_result_clusters(r7))) {
+        if (vec_len(mneme_ai_cluster_note_ids(vec_get(mneme_ai_clustering_result_clusters(r7), i))) != 4) { cok = 0; }
+        i = i + 1;
+    }
+    assert_eq(cok, 1, "three each cluster 4");
+
+    # inertia_decreases_with_more_clusters (grid substitute for circle)
+    var s8 = vec_new();
+    i = 0;
+    while (i < 20) { vec_push(s8, _ne("N", _e3(f64_from(i % 5), f64_from(i / 5), f64_from(0)))); i = i + 1; }
+    var ir2 = mneme_ai_cluster_notes(s8, 2, 5);
+    var ir5 = mneme_ai_cluster_notes(s8, 5, 5);
+    assert_eq(f64_le(mneme_ai_clustering_result_total_inertia(ir5), mneme_ai_clustering_result_total_inertia(ir2)), 1, "inertia decreases");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

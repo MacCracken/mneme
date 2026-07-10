@@ -1,0 +1,48 @@
+# mneme-ai event-bus tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/event_bus.rs (4 #[test] cases).
+include "src/core_uuid.cyr"
+include "src/ai_event_bus.cyr"
+
+fn _starts_mneme(t: Str): i64 {
+    if (str_index_of_cstr(t, "mneme.") == 0) { return 1; }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("ai_event_bus");
+
+    var vid = mneme_core_uuid_v4();
+    var nid = mneme_core_uuid_v4();
+
+    # event_topics
+    assert_eq(str_eq_cstr(mneme_ai_event_topic(mneme_ai_event_note_created(vid, nid, str_from("Test"), vec_new())), "mneme.note.created"), 1, "note.created topic");
+
+    # event_serialization
+    assert_eq(str_index_of_cstr(mneme_ai_event_to_json(mneme_ai_event_note_updated(vid, nid, str_from("Updated"))), "\"event_type\":\"note.updated\"") >= 0, 1, "note.updated serialized");
+
+    # all_event_variants_have_topics
+    var events = vec_new();
+    vec_push(events, mneme_ai_event_note_created(vid, nid, str_from("t"), vec_new()));
+    vec_push(events, mneme_ai_event_note_updated(vid, nid, str_from("t")));
+    vec_push(events, mneme_ai_event_note_deleted(vid, nid));
+    vec_push(events, mneme_ai_event_concept_extracted(vid, nid, vec_new()));
+    vec_push(events, mneme_ai_event_search_executed(vid, str_from("q"), 0));
+    var allok = 1;
+    var i = 0;
+    while (i < vec_len(events)) {
+        if (_starts_mneme(mneme_ai_event_topic(vec_get(events, i))) == 0) { allok = 0; }
+        i = i + 1;
+    }
+    assert_eq(allok, 1, "all topics start with mneme.");
+
+    # client_default_url
+    var c = mneme_ai_event_bus_client_new(0, 0);
+    assert_eq(str_eq_cstr(mneme_ai_event_bus_client_base_url(c), "http://127.0.0.1:8090"), 1, "default base_url");
+    assert_eq(str_eq_cstr(mneme_ai_event_bus_client_sender_name(c), "mneme"), 1, "default sender_name");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

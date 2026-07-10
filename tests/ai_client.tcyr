@@ -1,0 +1,19 @@
+# mneme-ai daimon-client tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/client.rs (2 #[test] cases).
+include "src/ai_client.cyr"
+
+fn main() {
+    alloc_init();
+    test_group("ai_client");
+
+    # client_default_url
+    assert_eq(str_eq_cstr(mneme_ai_daimon_client_base_url(mneme_ai_daimon_client_new(0, 0)), "http://127.0.0.1:8090"), 1, "default url");
+
+    # client_custom_url
+    assert_eq(str_eq_cstr(mneme_ai_daimon_client_base_url(mneme_ai_daimon_client_new(str_from("http://localhost:9090"), 0)), "http://localhost:9090"), 1, "custom url");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

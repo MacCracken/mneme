@@ -1,0 +1,119 @@
+# mneme-ai RAG-eval tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/rag_eval.rs (15 #[test] cases).
+include "src/ai_rag_eval.cyr"
+
+fn _gt(a, b): i64 { if (f64_le(a, b) == 0) { return 1; } return 0; }
+fn _lt(a, b): i64 { if (f64_le(a, b) == 1 && a != b) { return 1; } return 0; }
+fn _fabs(x): i64 { if (f64_le(x, f64_from(0)) == 1) { return f64_neg(x); } return x; }
+fn _approx(a, b): i64 { if (_lt(_fabs(f64_sub(a, b)), f64_parse("0.0000000001")) == 1) { return 1; } return 0; }
+fn _in01(x): i64 { if (f64_le(f64_from(0), x) == 1 && f64_le(x, f64_from(1)) == 1) { return 1; } return 0; }
+fn _set_has(set, w): i64 {
+    var i = 0;
+    while (i < vec_len(set)) {
+        if (str_eq_cstr(vec_get(set, i), w) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _c1(a): i64 { var v = vec_new(); vec_push(v, str_from(a)); return v; }
+
+fn main() {
+    alloc_init();
+    test_group("ai_rag_eval");
+
+    # perfect_faithfulness
+    var s1 = mneme_ai_rag_evaluate(str_from("What is Rust?"), str_from("Rust is a systems programming language"), _c1("Rust is a systems programming language"));
+    assert_eq(_gt(mneme_ai_rag_eval_scores_faithfulness(s1), f64_parse("0.8")), 1, "perfect faithfulness > 0.8");
+
+    # zero_faithfulness_ungrounded
+    var s2 = mneme_ai_rag_evaluate(str_from("What is Rust?"), str_from("Rust was created by Mozilla for web browsers"), _c1("Python is an interpreted language"));
+    assert_eq(_lt(mneme_ai_rag_eval_scores_faithfulness(s2), f64_parse("0.3")), 1, "ungrounded faithfulness < 0.3");
+
+    # answer_relevance_high
+    var s3 = mneme_ai_rag_evaluate(str_from("borrow checker in Rust"), str_from("Rust borrow checker ensures memory safety"), _c1("Rust has a borrow checker"));
+    assert_eq(_gt(mneme_ai_rag_eval_scores_answer_relevance(s3), f64_parse("0.5")), 1, "relevance high > 0.5");
+
+    # answer_relevance_low
+    var s4 = mneme_ai_rag_evaluate(str_from("borrow checker in Rust"), str_from("The weather today is sunny and warm"), _c1("Weather today is sunny"));
+    assert_eq(_lt(mneme_ai_rag_eval_scores_answer_relevance(s4), f64_parse("0.2")), 1, "relevance low < 0.2");
+
+    # chunk_utilization_full
+    var s5 = mneme_ai_rag_evaluate(str_from("What about Rust?"), str_from("Rust provides memory safety guarantees"), _c1("Rust memory safety"));
+    assert_eq(_gt(mneme_ai_rag_eval_scores_chunk_utilization(s5), f64_parse("0.5")), 1, "utilization full > 0.5");
+
+    # chunk_utilization_low
+    var cl = vec_new();
+    vec_push(cl, str_from("Rust has ownership semantics and borrowing rules"));
+    vec_push(cl, str_from("The type system prevents data races at compile time"));
+    vec_push(cl, str_from("Cargo is the Rust package manager"));
+    var s6 = mneme_ai_rag_evaluate(str_from("Tell me about Rust"), str_from("Rust is nice"), cl);
+    assert_eq(_lt(mneme_ai_rag_eval_scores_chunk_utilization(s6), f64_parse("0.2")), 1, "utilization low < 0.2");
+
+    # empty_answer_scores_zero
+    var s7 = mneme_ai_rag_evaluate(str_from("query"), str_from(""), _c1("Some context"));
+    assert_eq(mneme_ai_rag_eval_scores_faithfulness(s7), f64_from(0), "empty answer faithfulness 0");
+    assert_eq(mneme_ai_rag_eval_scores_answer_relevance(s7), f64_from(0), "empty answer relevance 0");
+    assert_eq(mneme_ai_rag_eval_scores_overall(s7), f64_from(0), "empty answer overall 0");
+
+    # empty_context_scores_zero_utilization
+    var s8 = mneme_ai_rag_evaluate(str_from("query"), str_from("some answer text here"), vec_new());
+    assert_eq(mneme_ai_rag_eval_scores_chunk_utilization(s8), f64_from(0), "empty ctx utilization 0");
+    assert_eq(mneme_ai_rag_eval_scores_faithfulness(s8), f64_from(0), "empty ctx faithfulness 0");
+
+    # overall_is_weighted_average
+    var s9 = mneme_ai_rag_evaluate(str_from("Rust"), str_from("Rust programming language"), _c1("Rust programming"));
+    var expected = f64_add(f64_add(f64_mul(mneme_ai_rag_eval_scores_faithfulness(s9), f64_parse("0.5")), f64_mul(mneme_ai_rag_eval_scores_answer_relevance(s9), f64_parse("0.3"))), f64_mul(mneme_ai_rag_eval_scores_chunk_utilization(s9), f64_parse("0.2")));
+    assert_eq(mneme_ai_rag_eval_scores_overall(s9), expected, "overall weighted average");
+
+    # scores_bounded_zero_to_one
+    var s10 = mneme_ai_rag_evaluate(str_from("alpha bravo"), str_from("alpha bravo charlie delta echo foxtrot golf hotel india"), _c1("alpha bravo charlie delta echo foxtrot"));
+    assert_eq(_in01(mneme_ai_rag_eval_scores_faithfulness(s10)), 1, "faithfulness in [0,1]");
+    assert_eq(_in01(mneme_ai_rag_eval_scores_answer_relevance(s10)), 1, "relevance in [0,1]");
+    assert_eq(_in01(mneme_ai_rag_eval_scores_chunk_utilization(s10)), 1, "utilization in [0,1]");
+    assert_eq(_in01(mneme_ai_rag_eval_scores_overall(s10)), 1, "overall in [0,1]");
+
+    # aggregates_track_running_average
+    var agg = mneme_ai_rag_eval_aggregates_new();
+    assert_eq(mneme_ai_rag_eval_aggregates_query_count(agg), 0, "agg starts empty");
+    mneme_ai_rag_eval_aggregates_record(agg, mneme_ai_rag_eval_scores_new(f64_parse("0.8"), f64_parse("0.6"), f64_parse("0.4"), f64_parse("0.66")));
+    assert_eq(mneme_ai_rag_eval_aggregates_query_count(agg), 1, "agg count 1");
+    assert_eq(_approx(mneme_ai_rag_eval_aggregates_avg_faithfulness(agg), f64_parse("0.8")), 1, "avg_f 0.8");
+    mneme_ai_rag_eval_aggregates_record(agg, mneme_ai_rag_eval_scores_new(f64_parse("0.4"), f64_parse("0.2"), f64_parse("0.6"), f64_parse("0.36")));
+    assert_eq(mneme_ai_rag_eval_aggregates_query_count(agg), 2, "agg count 2");
+    assert_eq(_approx(mneme_ai_rag_eval_aggregates_avg_faithfulness(agg), f64_parse("0.6")), 1, "avg_f 0.6");
+    assert_eq(_approx(mneme_ai_rag_eval_aggregates_avg_overall(agg), f64_parse("0.51")), 1, "avg_overall 0.51");
+
+    # aggregates_serde_roundtrip
+    var agg2 = mneme_ai_rag_eval_aggregates_new();
+    mneme_ai_rag_eval_aggregates_record(agg2, mneme_ai_rag_eval_scores_new(f64_parse("0.7"), f64_parse("0.5"), f64_parse("0.3"), f64_parse("0.55")));
+    var restored = mneme_ai_rag_eval_aggregates_from_json(mneme_ai_rag_eval_aggregates_to_json(agg2));
+    assert_eq(mneme_ai_rag_eval_aggregates_query_count(restored), 1, "restored count 1");
+    assert_eq(_approx(mneme_ai_rag_eval_aggregates_avg_faithfulness(restored), f64_parse("0.7")), 1, "restored avg_f 0.7");
+
+    # tokenize_filters_stopwords
+    var t1 = mneme_ai_rag_tokenize(str_from("the quick brown fox jumps over the lazy dog"));
+    assert_eq(_set_has(t1, "the"), 0, "no the");
+    assert_eq(_set_has(t1, "quick"), 1, "has quick");
+    assert_eq(_set_has(t1, "brown"), 1, "has brown");
+    assert_eq(_set_has(t1, "jumps"), 1, "has jumps");
+
+    # tokenize_lowercases
+    var t2 = mneme_ai_rag_tokenize(str_from("Rust PROGRAMMING Language"));
+    assert_eq(_set_has(t2, "rust"), 1, "has rust");
+    assert_eq(_set_has(t2, "programming"), 1, "has programming");
+    assert_eq(_set_has(t2, "language"), 1, "has language");
+
+    # multiple_context_chunks
+    var mc = vec_new();
+    vec_push(mc, str_from("Rust provides memory safety"));
+    vec_push(mc, str_from("The borrow checker enforces ownership"));
+    vec_push(mc, str_from("Cargo manages dependencies"));
+    var s15 = mneme_ai_rag_evaluate(str_from("How does Rust ensure safety?"), str_from("Rust provides memory safety through the borrow checker which enforces ownership rules"), mc);
+    assert_eq(_gt(mneme_ai_rag_eval_scores_faithfulness(s15), f64_parse("0.5")), 1, "multi faithfulness > 0.5");
+    assert_eq(_gt(mneme_ai_rag_eval_scores_chunk_utilization(s15), f64_parse("0.3")), 1, "multi utilization > 0.3");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

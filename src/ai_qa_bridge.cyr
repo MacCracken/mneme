@@ -1,0 +1,132 @@
+# mneme-ai — Agnostic QA bridge (ported from rust-old/crates/mneme-ai/src/qa_bridge.rs)
+# generate_assertions + KnowledgeAssertion serde are pure; the AgnosticClient HTTP
+# (run_assertions/get_run_result) is DEFERRED. Depends on core_uuid for note ids.
+
+enum AssertionType { ASSERT_CONTENT_CONTAINS; ASSERT_TAG_MIN_COUNT; ASSERT_BACKLINK_MIN_COUNT; ASSERT_NO_ORPHANS; ASSERT_NO_DEAD_LINKS; }
+
+fn _qa_hexc(nib): i64 { if (nib < 10) { return 48 + nib; } return 87 + nib; }
+fn _qa_uuid_hex(u): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < 16) {
+        var b = load8(u + i);
+        str_builder_putc(sb, _qa_hexc((b >> 4) & 15));
+        str_builder_putc(sb, _qa_hexc(b & 15));
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+fn _qa_json_str(json: Str, quoted_key): i64 {
+    var pos = str_index_of_cstr(json, quoted_key);
+    if (pos < 0) { return 0; }
+    var n = str_len(json);
+    var d = str_data(json);
+    var i = pos + strlen(quoted_key);
+    while (i < n && (load8(d + i) == 32 || load8(d + i) == 58)) { i = i + 1; }
+    if (i < n && load8(d + i) == 34) {
+        i = i + 1;
+        var start = i;
+        while (i < n && load8(d + i) != 34) {
+            if (load8(d + i) == 92) { i = i + 1; }
+            i = i + 1;
+        }
+        return str_substr(json, start, i);
+    }
+    return 0;
+}
+
+# KnowledgeAssertion (32): [description@0, assertion_type@8, note_id@16(0=None), expected@24]
+fn mneme_ai_knowledge_assertion_new(description, assertion_type, note_id, expected): i64 {
+    var a = alloc(32);
+    store64(a, description);
+    store64(a + 8, assertion_type);
+    store64(a + 16, note_id);
+    store64(a + 24, expected);
+    return a;
+}
+fn mneme_ai_knowledge_assertion_description(a): i64 { return load64(a); }
+fn mneme_ai_knowledge_assertion_type(a): i64 { return load64(a + 8); }
+fn mneme_ai_knowledge_assertion_note_id(a): i64 { return load64(a + 16); }
+fn mneme_ai_knowledge_assertion_expected(a): i64 { return load64(a + 24); }
+fn _qa_assert_type_str(t): i64 {
+    if (t == ASSERT_CONTENT_CONTAINS) { return str_from("content_contains"); }
+    if (t == ASSERT_TAG_MIN_COUNT) { return str_from("tag_min_count"); }
+    if (t == ASSERT_BACKLINK_MIN_COUNT) { return str_from("backlink_min_count"); }
+    if (t == ASSERT_NO_ORPHANS) { return str_from("no_orphans"); }
+    return str_from("no_dead_links");
+}
+fn mneme_ai_knowledge_assertion_to_json(a): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"description\":\"");
+    str_builder_add(sb, load64(a));
+    str_builder_add_cstr(sb, "\",\"assertion_type\":\"");
+    str_builder_add(sb, _qa_assert_type_str(load64(a + 8)));
+    str_builder_add_cstr(sb, "\",\"note_id\":");
+    if (load64(a + 16) != 0) { str_builder_putc(sb, 34); str_builder_add(sb, _qa_uuid_hex(load64(a + 16))); str_builder_putc(sb, 34); }
+    else { str_builder_add_cstr(sb, "null"); }
+    str_builder_add_cstr(sb, ",\"expected\":\"");
+    str_builder_add(sb, load64(a + 24));
+    str_builder_add_cstr(sb, "\"}");
+    return str_builder_build(sb);
+}
+fn mneme_ai_knowledge_assertion_from_json(json: Str): i64 {
+    return mneme_ai_knowledge_assertion_new(_qa_json_str(json, "\"description\""), ASSERT_NO_ORPHANS, 0, _qa_json_str(json, "\"expected\""));
+}
+
+# QA note tuple (32): [id@0, title@8, tags@16(vec), backlinks@24]
+fn mneme_ai_qa_note_new(id, title, tags, backlinks): i64 {
+    var n = alloc(32);
+    store64(n, id);
+    store64(n + 8, title);
+    store64(n + 16, tags);
+    store64(n + 24, backlinks);
+    return n;
+}
+# QA tag-count (16): [tag@0, count@8]
+fn mneme_ai_qa_tag_count_new(tag, count): i64 {
+    var t = alloc(16);
+    store64(t, tag);
+    store64(t + 8, count);
+    return t;
+}
+
+fn mneme_ai_generate_assertions(notes, tag_counts): i64 {
+    var assertions = vec_new();
+    # orphan detection
+    var i = 0;
+    while (i < vec_len(notes)) {
+        var note = vec_get(notes, i);
+        if (vec_len(load64(note + 16)) == 0 && load64(note + 24) == 0) {
+            var sb = str_builder_new();
+            str_builder_add_cstr(sb, "Note '");
+            str_builder_add(sb, load64(note + 8));
+            str_builder_add_cstr(sb, "' has no tags and no backlinks (orphan)");
+            vec_push(assertions, mneme_ai_knowledge_assertion_new(str_builder_build(sb), ASSERT_NO_ORPHANS, load64(note), str_from("at least 1 tag or backlink")));
+        }
+        i = i + 1;
+    }
+    # tag health
+    i = 0;
+    while (i < vec_len(tag_counts)) {
+        var tc = vec_get(tag_counts, i);
+        if (load64(tc + 8) < 2) {
+            var sb2 = str_builder_new();
+            str_builder_add_cstr(sb2, "Tag '#");
+            str_builder_add(sb2, load64(tc));
+            str_builder_add_cstr(sb2, "' has only ");
+            str_builder_add_int(sb2, load64(tc + 8));
+            str_builder_add_cstr(sb2, " note(s) — consider merging or removing");
+            vec_push(assertions, mneme_ai_knowledge_assertion_new(str_builder_build(sb2), ASSERT_TAG_MIN_COUNT, 0, str_from("at least 2 notes per tag")));
+        }
+        i = i + 1;
+    }
+    return assertions;
+}
+
+# AgnosticClient (8): [base_url@0]
+fn mneme_ai_agnostic_client_new(base_url): i64 {
+    var c = alloc(8);
+    if (base_url == 0) { store64(c, str_from("http://127.0.0.1:8000")); } else { store64(c, base_url); }
+    return c;
+}
+fn mneme_ai_agnostic_client_base_url(c): i64 { return load64(c); }

@@ -1,0 +1,70 @@
+# mneme-mcp protocol tests — ported 1:1 from
+# rust-old/crates/mneme-mcp/src/protocol.rs (8 #[test] cases).
+include "src/mcp_protocol.cyr"
+
+fn _has(s: Str, w): i64 { if (str_index_of_cstr(s, w) >= 0) { return 1; } return 0; }
+
+fn main() {
+    alloc_init();
+    test_group("mcp_protocol");
+
+    # mcp_success_format
+    var s = mneme_mcp_success(str_from("1"), str_from("hello"));
+    assert_eq(_has(s, "\"jsonrpc\":\"2.0\""), 1, "success jsonrpc 2.0");
+    assert_eq(_has(s, "\"id\":1"), 1, "success id 1");
+    assert_eq(_has(s, "\"text\":\"hello\""), 1, "success text hello");
+
+    # mcp_error_format
+    var e = mneme_mcp_error(str_from("2"), str_from("something failed"));
+    assert_eq(_has(e, "\"isError\":true"), 1, "error isError true");
+    assert_eq(_has(e, "\"text\":\"something failed\""), 1, "error text");
+
+    # tool_definitions_count
+    var tools = mneme_mcp_tool_definitions();
+    assert_eq(vec_len(tools), 8, "8 tools");
+
+    # jsonrpc_error_format
+    var je = mneme_mcp_jsonrpc_error(str_from("3"), 0 - 32601, str_from("Method not found"));
+    assert_eq(_has(je, "\"jsonrpc\":\"2.0\""), 1, "jsonrpc-error 2.0");
+    assert_eq(_has(je, "\"id\":3"), 1, "jsonrpc-error id 3");
+    assert_eq(_has(je, "\"code\":-32601"), 1, "jsonrpc-error code");
+    assert_eq(_has(je, "\"message\":\"Method not found\""), 1, "jsonrpc-error message");
+
+    # tool_definitions_have_schemas
+    var schemas_ok = 1;
+    var i = 0;
+    while (i < vec_len(tools)) {
+        var t = vec_get(tools, i);
+        if (str_len(mneme_mcp_tool_def_name(t)) == 0) { schemas_ok = 0; }
+        if (str_len(mneme_mcp_tool_def_description(t)) == 0) { schemas_ok = 0; }
+        if (str_eq_cstr(mneme_mcp_tool_schema_type(mneme_mcp_tool_def_input_schema(t)), "object") == 0) { schemas_ok = 0; }
+        i = i + 1;
+    }
+    assert_eq(schemas_ok, 1, "all schemas object with name+desc");
+
+    # tool_definitions_required_fields
+    var create = mneme_mcp_tool_find(tools, "mneme_create_note");
+    assert_eq(mneme_mcp_tool_schema_required_has(mneme_mcp_tool_def_input_schema(create), "title"), 1, "create requires title");
+    assert_eq(mneme_mcp_tool_schema_required_has(mneme_mcp_tool_def_input_schema(create), "content"), 1, "create requires content");
+    var search = mneme_mcp_tool_find(tools, "mneme_search");
+    assert_eq(mneme_mcp_tool_schema_required_has(mneme_mcp_tool_def_input_schema(search), "query"), 1, "search requires query");
+
+    # tool_definitions_names
+    assert_eq(mneme_mcp_tool_find(tools, "mneme_create_note") != 0, 1, "has create_note");
+    assert_eq(mneme_mcp_tool_find(tools, "mneme_search") != 0, 1, "has search");
+    assert_eq(mneme_mcp_tool_find(tools, "mneme_get_note") != 0, 1, "has get_note");
+    assert_eq(mneme_mcp_tool_find(tools, "mneme_update_note") != 0, 1, "has update_note");
+    assert_eq(mneme_mcp_tool_find(tools, "mneme_query_graph") != 0, 1, "has query_graph");
+    assert_eq(mneme_mcp_tool_find(tools, "mneme_list_vaults") != 0, 1, "has list_vaults");
+    assert_eq(mneme_mcp_tool_find(tools, "mneme_switch_vault") != 0, 1, "has switch_vault");
+
+    # vault_tools_exist
+    assert_eq(mneme_mcp_tool_find(tools, "mneme_list_vaults") != 0, 1, "list_vaults exists");
+    var sw = mneme_mcp_tool_find(tools, "mneme_switch_vault");
+    assert_eq(mneme_mcp_tool_schema_required_has(mneme_mcp_tool_def_input_schema(sw), "vault"), 1, "switch requires vault");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

@@ -26,14 +26,27 @@ uuid), 99 assertions green.
 - io: wikilink, notion, web_clipper, obsidian, markdown, export_html (+ a hand-rolled
   markdown→HTML renderer).
 
-### M3 — `mneme-search` — ▶ in progress
-Pure-logic first (query_dsl, retrieval_optimizer, context_buffer, cross_vault), then
-the hard subsystems: full-text = **build-in-mneme BM25 index** (Tantivy has no Cyrius
-analog); vectors = brute-force cosine via `simd`/`ganita`; embeddings = **bridge to
-daimon** (or the sovereign ML stack: akshara/rosnet/rupantara/anukulana).
+### M3 — `mneme-search` — ✅ done
+All 10 modules. Full-text = **build-in-mneme BM25 index** (Tantivy has no Cyrius
+analog); vectors = brute-force cosine; embeddings config/dispatch/ranking ported,
+the live embed() **bridge to daimon** deferred (degraded path = what the tests hit).
 
-### M4 — `mneme-ai` (RAG/summarize/concept/consolidate) — HTTP to daimon
-### M5 — `mneme-api` (sandhi HTTP server) · M6 — `mneme-mcp` (bote) · M7 — TUI (darshana)
+### M4 — `mneme-ai` — ✅ done
+All 19 test-bearing modules (pure + bridge tiers). Local fallbacks / extraction /
+SM-2 / serde ported; daimon LLM/embedding/HTTP calls deferred.
+
+### M6 — `mneme-mcp` (bote) — ✅ done
+protocol (JSON-RPC 2.0 + 8 tool schemas) + tools (full dispatch, tested against a
+real on-disk vault composing store + search + optimizer).
+
+### M7 — TUI (darshana) — ⧗ app done
+`ui_app` = the tested state layer (vault/engine wiring, load_notes, navigation,
+search guard). `views`/`main` = ratatui/crossterm rendering (0 tests) — remaining.
+
+### M5 — `mneme-api` (sandhi HTTP server) — ⏸ deferred (external-bridge tier)
+Handlers have no unit tests; `tests/api_integration.rs` (30 tests) drives the axum
+router via `tower::oneshot`. Needs a sandhi HTTP router/server bridge (same class as
+the deferred daimon client / event bus / remote embeddings).
 
 ## Post-v1 / P2 backlog (deferred, non-blocking)
 

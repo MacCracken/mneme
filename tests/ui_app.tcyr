@@ -1,0 +1,100 @@
+# mneme-ui app tests — ported 1:1 from
+# rust-old/crates/mneme-ui/src/app.rs (6 #[test] cases).
+include "lib/patra.cyr"
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/sigil.cyr"
+include "lib/bayan.cyr"
+include "src/core_uuid.cyr"
+include "src/core_note.cyr"
+include "src/core_link.cyr"
+include "src/core_config.cyr"
+include "src/core_frontmatter.cyr"
+include "src/store_db.cyr"
+include "src/store_files.cyr"
+include "src/store_registry.cyr"
+include "src/store_vault.cyr"
+include "src/store_manager.cyr"
+include "src/search_vector_store.cyr"
+include "src/search_embedding_backend.cyr"
+include "src/search_semantic_engine.cyr"
+include "src/search_engine.cyr"
+include "src/ui_app.cyr"
+
+var _appn = 0;
+fn _test_app(): i64 {
+    _appn = _appn + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_ui");
+    str_builder_add_int(pb, _appn);
+    var manager = mneme_store_manager_single(str_builder_build(pb));
+    return mneme_ui_app_new(manager, str_from("/nonexistent"));
+}
+fn _seed_notes(app, n): i64 {
+    var vault = mneme_store_openvault_vault(mneme_store_manager_active(load64(app)));
+    var i = 0;
+    while (i < n) {
+        var tb = str_builder_new();
+        str_builder_add_cstr(tb, "Note ");
+        str_builder_add_int(tb, i);
+        var cb = str_builder_new();
+        str_builder_add_cstr(cb, "Content ");
+        str_builder_add_int(cb, i);
+        mneme_store_vault_create_note(vault, mneme_store_create_note_new(str_builder_build(tb), 0, str_builder_build(cb), vec_new(), 0 - 1));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("ui_app");
+
+    # new_app_defaults
+    var app1 = _test_app();
+    assert_eq(mneme_ui_app_panel(app1), PANEL_NOTE_LIST, "default panel NoteList");
+    assert_eq(mneme_ui_app_selected_index(app1), 0, "default selected 0");
+    assert_eq(vec_len(mneme_ui_app_notes(app1)), 0, "default notes empty");
+    assert_eq(mneme_ui_app_should_quit(app1), 0, "default not quitting");
+
+    # active_vault_name
+    assert_eq(str_eq_cstr(mneme_ui_app_active_vault_name(_test_app()), "default"), 1, "active vault default");
+
+    # load_notes_populates_list
+    var app3 = _test_app();
+    _seed_notes(app3, 3);
+    mneme_ui_app_load_notes(app3);
+    assert_eq(vec_len(mneme_ui_app_notes(app3)), 3, "load_notes 3");
+
+    # select_navigation
+    var app4 = _test_app();
+    _seed_notes(app4, 3);
+    mneme_ui_app_load_notes(app4);
+    mneme_ui_app_select_next(app4);
+    assert_eq(mneme_ui_app_selected_index(app4), 1, "next -> 1");
+    mneme_ui_app_select_next(app4);
+    assert_eq(mneme_ui_app_selected_index(app4), 2, "next -> 2");
+    mneme_ui_app_select_next(app4);
+    assert_eq(mneme_ui_app_selected_index(app4), 2, "next clamps at 2");
+    mneme_ui_app_select_prev(app4);
+    assert_eq(mneme_ui_app_selected_index(app4), 1, "prev -> 1");
+
+    # search_empty_query_clears
+    var app5 = _test_app();
+    mneme_ui_app_set_search_query(app5, str_from(""));
+    mneme_ui_app_run_search(app5);
+    assert_eq(vec_len(mneme_ui_app_search_results(app5)), 0, "empty query clears");
+
+    # vault_picker_navigation
+    var app6 = _test_app();
+    mneme_ui_app_load_vault_list(app6);
+    assert_eq(vec_len(mneme_ui_app_vault_list(app6)), 1, "one vault");
+    mneme_ui_app_set_panel(app6, PANEL_VAULT_PICKER);
+    mneme_ui_app_select_next(app6);
+    assert_eq(mneme_ui_app_selected_index(app6), 0, "picker clamps at 0");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

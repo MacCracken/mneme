@@ -1,0 +1,90 @@
+# mneme-search — unified semantic engine facade (ported from
+# rust-old/crates/mneme-search/src/semantic_engine.rs). Composes a pluggable
+# embedding backend (search_embedding_backend) with the brute-force vector
+# store (search_vector_store). The live embed()/index paths are DEFERRED (no
+# embedding source yet — daimon/sandhi bridge), so build_backend yields None and
+# the engine runs in the graceful "degraded" mode the Rust tests exercise.
+
+# SemanticEngine (16): [backend@0 (0=None), vector_store@8 (0=None)]
+fn mneme_search_semantic_engine_disabled(): i64 {
+    var e = alloc(16);
+    store64(e, 0);
+    store64(e + 8, 0);
+    return e;
+}
+fn mneme_search_semantic_engine_open_with_config(models_dir: Str, vectors_dir: Str, config): i64 {
+    var backend = mneme_search_build_backend(config, models_dir);   # deferred → 0 (None)
+    var dim = 384;                                                  # backend.dimension() when live
+    var e = alloc(16);
+    store64(e, backend);
+    store64(e + 8, mneme_search_vstore_open(vectors_dir, dim));
+    return e;
+}
+fn mneme_search_semantic_engine_open(models_dir: Str, vectors_dir: Str): i64 {
+    return mneme_search_semantic_engine_open_with_config(models_dir, vectors_dir, mneme_search_embconfig_default());
+}
+fn mneme_search_semantic_engine_is_available(e): i64 {
+    if (load64(e) != 0 && load64(e + 8) != 0) { return 1; }
+    return 0;
+}
+fn mneme_search_semantic_engine_backend_name(e): i64 {
+    if (load64(e) != 0) { return str_from("remote"); }   # TODO: backend.name() when live
+    return str_from("none");
+}
+fn mneme_search_semantic_engine_embedding_dimension(e): i64 {
+    if (load64(e) != 0) { return 384; }                  # TODO: backend.dimension() when live
+    return 0;
+}
+fn mneme_search_semantic_engine_vector_count(e): i64 {
+    if (load64(e + 8) != 0) { return mneme_search_vstore_len(load64(e + 8)); }
+    return 0;
+}
+# index_note: Ok noop when backend/store absent; embed→insert DEFERRED
+fn mneme_search_semantic_engine_index_note(e, note_id, title: Str, content: Str): i64 {
+    if (load64(e) == 0) { return 1; }
+    if (load64(e + 8) == 0) { return 1; }
+    return 1;   # TODO: embed(title\n\ncontent) → vstore_insert — deferred
+}
+# embed: 0 (None) when no backend; real embed DEFERRED
+fn mneme_search_semantic_engine_embed(e, text: Str): i64 {
+    if (load64(e) == 0) { return 0; }
+    return 0;   # TODO: backend.embed(text)
+}
+fn mneme_search_semantic_engine_embed_batch(e, texts): i64 {
+    if (load64(e) == 0) { return 0; }
+    return 0;   # TODO: backend.embed_batch(texts)
+}
+fn mneme_search_semantic_engine_indexed_note_ids(e): i64 {
+    if (load64(e + 8) != 0) { return mneme_search_vstore_note_ids(load64(e + 8)); }
+    return vec_new();
+}
+fn mneme_search_semantic_engine_search(e, query: Str, limit): i64 {
+    if (load64(e) == 0) { return vec_new(); }
+    if (load64(e + 8) == 0) { return vec_new(); }
+    return vec_new();   # TODO: embed(query) → vstore_search — deferred
+}
+# find_similar_to: search then drop results below the score threshold
+fn mneme_search_semantic_engine_find_similar_to(e, text: Str, threshold, limit): i64 {
+    var results = mneme_search_semantic_engine_search(e, text, limit);
+    var out = vec_new();
+    var i = 0;
+    while (i < vec_len(results)) {
+        var r = vec_get(results, i);
+        if (f64_ge(mneme_search_semresult_score(r), threshold) == 1) { vec_push(out, r); }
+        i = i + 1;
+    }
+    return out;
+}
+fn mneme_search_semantic_engine_context_search(e, query: Str, context_emb, query_weight, limit): i64 {
+    if (load64(e) == 0) { return vec_new(); }
+    if (load64(e + 8) == 0) { return vec_new(); }
+    return vec_new();   # TODO: embed(query) → fuse_embeddings → vstore_search — deferred
+}
+fn mneme_search_semantic_engine_remove_note(e, note_id): i64 {
+    if (load64(e + 8) != 0) { mneme_search_vstore_remove(load64(e + 8), note_id); }
+    return 1;
+}
+fn mneme_search_semantic_engine_save(e): i64 {
+    if (load64(e + 8) != 0) { mneme_search_vstore_save(load64(e + 8)); }
+    return 1;
+}

@@ -1,0 +1,49 @@
+# mneme-ai qa-bridge tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/qa_bridge.rs (5 #[test] cases).
+include "src/core_uuid.cyr"
+include "src/ai_qa_bridge.cyr"
+
+fn _has(s: Str, w): i64 { if (str_index_of_cstr(s, w) >= 0) { return 1; } return 0; }
+fn _tags(a): i64 { var v = vec_new(); vec_push(v, str_from(a)); return v; }
+
+fn main() {
+    alloc_init();
+    test_group("ai_qa_bridge");
+
+    # generate_orphan_assertions
+    var n1 = vec_new();
+    vec_push(n1, mneme_ai_qa_note_new(mneme_core_uuid_v4(), str_from("Tagged"), _tags("rust"), 1));
+    vec_push(n1, mneme_ai_qa_note_new(mneme_core_uuid_v4(), str_from("Orphan"), vec_new(), 0));
+    var a1 = mneme_ai_generate_assertions(n1, vec_new());
+    assert_eq(vec_len(a1), 1, "one orphan assertion");
+    assert_eq(_has(mneme_ai_knowledge_assertion_description(vec_get(a1, 0)), "Orphan"), 1, "orphan desc");
+
+    # generate_tag_health_assertions
+    var t2 = vec_new();
+    vec_push(t2, mneme_ai_qa_tag_count_new(str_from("rust"), 5));
+    vec_push(t2, mneme_ai_qa_tag_count_new(str_from("lonely"), 1));
+    var a2 = mneme_ai_generate_assertions(vec_new(), t2);
+    assert_eq(vec_len(a2), 1, "one tag-health assertion");
+    assert_eq(_has(mneme_ai_knowledge_assertion_description(vec_get(a2, 0)), "lonely"), 1, "lonely desc");
+
+    # no_assertions_for_healthy_vault
+    var n3 = vec_new();
+    vec_push(n3, mneme_ai_qa_note_new(mneme_core_uuid_v4(), str_from("A"), _tags("tag"), 2));
+    vec_push(n3, mneme_ai_qa_note_new(mneme_core_uuid_v4(), str_from("B"), _tags("tag"), 1));
+    var t3 = vec_new();
+    vec_push(t3, mneme_ai_qa_tag_count_new(str_from("tag"), 2));
+    assert_eq(vec_len(mneme_ai_generate_assertions(n3, t3)), 0, "healthy vault no assertions");
+
+    # client_default_url
+    assert_eq(str_eq_cstr(mneme_ai_agnostic_client_base_url(mneme_ai_agnostic_client_new(0)), "http://127.0.0.1:8000"), 1, "default url");
+
+    # assertion_serde_roundtrip
+    var a = mneme_ai_knowledge_assertion_new(str_from("test"), ASSERT_NO_ORPHANS, mneme_core_uuid_v4(), str_from("at least 1"));
+    var parsed = mneme_ai_knowledge_assertion_from_json(mneme_ai_knowledge_assertion_to_json(a));
+    assert_eq(str_eq_cstr(mneme_ai_knowledge_assertion_description(parsed), "test"), 1, "roundtrip description");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

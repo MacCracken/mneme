@@ -1,0 +1,190 @@
+# mneme-ai — RAG evaluation metrics (ported from rust-old/crates/mneme-ai/src/rag_eval.rs)
+# Local, LLM-free token-overlap scoring (faithfulness / answer-relevance /
+# chunk-utilization / weighted overall) + running-average aggregates. Token sets
+# are dedup'd vec<Str>. f64 fields are IEEE-754 bit patterns; the aggregates'
+# JSON stores those f64 fields as their raw i64 bits (exact roundtrip — no test
+# inspects the JSON text; decimal f64 formatting is deferred).
+
+fn _re_cstr(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(s), n);
+    store8(buf + n, 0);
+    return buf;
+}
+fn _re_stopwords(): i64 {
+    return str_from(" the and for are but not you all can has her was one our out his had hot how its let may who did get got him too own say she use way each than them then this that with have from been were what when will more some very just about also into does could would should their which there these those being other ");
+}
+fn _re_is_stopword(word: Str): i64 {
+    var needle = str_builder_new();
+    str_builder_putc(needle, 32);
+    str_builder_add(needle, word);
+    str_builder_putc(needle, 32);
+    if (str_index_of_cstr(_re_stopwords(), _re_cstr(str_builder_build(needle))) >= 0) { return 1; }
+    return 0;
+}
+fn _re_set_has(set, tok: Str): i64 {
+    var i = 0;
+    while (i < vec_len(set)) {
+        if (str_eq(vec_get(set, i), tok) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _re_intersection_count(a, b): i64 {
+    var count = 0;
+    var i = 0;
+    while (i < vec_len(a)) {
+        if (_re_set_has(b, vec_get(a, i)) == 1) { count = count + 1; }
+        i = i + 1;
+    }
+    return count;
+}
+# lowercase, split on non-alphanumeric, keep len>2 non-stopwords, dedup into a set
+fn mneme_ai_rag_tokenize(text: Str): i64 {
+    var out = vec_new();
+    var n = str_len(text);
+    var d = str_data(text);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var issep = 1;
+        if (i < n) {
+            var c = load8(d + i);
+            if ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)) { issep = 0; }
+        }
+        if (issep == 1) {
+            if (i > start) {
+                var sb = str_builder_new();
+                var j = start;
+                while (j < i) {
+                    var ch = load8(d + j);
+                    if (ch >= 65 && ch <= 90) { ch = ch + 32; }
+                    str_builder_putc(sb, ch);
+                    j = j + 1;
+                }
+                var tok = str_builder_build(sb);
+                if (str_len(tok) > 2 && _re_is_stopword(tok) == 0 && _re_set_has(out, tok) == 0) { vec_push(out, tok); }
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+# RagEvalScores (32): [faithfulness@0, answer_relevance@8, chunk_utilization@16, overall@24] (f64)
+fn mneme_ai_rag_eval_scores_new(faithfulness, answer_relevance, chunk_utilization, overall): i64 {
+    var s = alloc(32);
+    store64(s, faithfulness);
+    store64(s + 8, answer_relevance);
+    store64(s + 16, chunk_utilization);
+    store64(s + 24, overall);
+    return s;
+}
+fn mneme_ai_rag_eval_scores_faithfulness(s): i64 { return load64(s); }
+fn mneme_ai_rag_eval_scores_answer_relevance(s): i64 { return load64(s + 8); }
+fn mneme_ai_rag_eval_scores_chunk_utilization(s): i64 { return load64(s + 16); }
+fn mneme_ai_rag_eval_scores_overall(s): i64 { return load64(s + 24); }
+
+fn mneme_ai_rag_evaluate(query: Str, answer: Str, chunks): i64 {
+    var qt = mneme_ai_rag_tokenize(query);
+    var at = mneme_ai_rag_tokenize(answer);
+    var ct = vec_new();
+    var i = 0;
+    while (i < vec_len(chunks)) {
+        var toks = mneme_ai_rag_tokenize(vec_get(chunks, i));
+        var j = 0;
+        while (j < vec_len(toks)) {
+            if (_re_set_has(ct, vec_get(toks, j)) == 0) { vec_push(ct, vec_get(toks, j)); }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    var faithfulness = f64_from(0);
+    if (vec_len(at) > 0) { faithfulness = f64_div(f64_from(_re_intersection_count(at, ct)), f64_from(vec_len(at))); }
+    var answer_relevance = f64_from(0);
+    if (vec_len(at) > 0 && vec_len(qt) > 0) { answer_relevance = f64_div(f64_from(_re_intersection_count(at, qt)), f64_from(vec_len(qt))); }
+    var chunk_utilization = f64_from(0);
+    if (vec_len(ct) > 0) { chunk_utilization = f64_div(f64_from(_re_intersection_count(ct, at)), f64_from(vec_len(ct))); }
+    var overall = f64_add(f64_add(f64_mul(faithfulness, f64_parse("0.5")), f64_mul(answer_relevance, f64_parse("0.3"))), f64_mul(chunk_utilization, f64_parse("0.2")));
+    return mneme_ai_rag_eval_scores_new(faithfulness, answer_relevance, chunk_utilization, overall);
+}
+
+# RagEvalAggregates (72): [query_count@0, avg_f@8, avg_r@16, avg_u@24, avg_o@32,
+#                          sum_f@40, sum_r@48, sum_u@56, sum_o@64]
+fn mneme_ai_rag_eval_aggregates_new(): i64 {
+    var a = alloc(72);
+    var i = 0;
+    while (i < 72) { store64(a + i, 0); i = i + 8; }
+    return a;
+}
+fn mneme_ai_rag_eval_aggregates_query_count(a): i64 { return load64(a); }
+fn mneme_ai_rag_eval_aggregates_avg_faithfulness(a): i64 { return load64(a + 8); }
+fn mneme_ai_rag_eval_aggregates_avg_relevance(a): i64 { return load64(a + 16); }
+fn mneme_ai_rag_eval_aggregates_avg_utilization(a): i64 { return load64(a + 24); }
+fn mneme_ai_rag_eval_aggregates_avg_overall(a): i64 { return load64(a + 32); }
+fn mneme_ai_rag_eval_aggregates_record(agg, scores): i64 {
+    store64(agg, load64(agg) + 1);
+    store64(agg + 40, f64_add(load64(agg + 40), mneme_ai_rag_eval_scores_faithfulness(scores)));
+    store64(agg + 48, f64_add(load64(agg + 48), mneme_ai_rag_eval_scores_answer_relevance(scores)));
+    store64(agg + 56, f64_add(load64(agg + 56), mneme_ai_rag_eval_scores_chunk_utilization(scores)));
+    store64(agg + 64, f64_add(load64(agg + 64), mneme_ai_rag_eval_scores_overall(scores)));
+    var n = f64_from(load64(agg));
+    store64(agg + 8, f64_div(load64(agg + 40), n));
+    store64(agg + 16, f64_div(load64(agg + 48), n));
+    store64(agg + 24, f64_div(load64(agg + 56), n));
+    store64(agg + 32, f64_div(load64(agg + 64), n));
+    return 0;
+}
+fn _re_json_int(json: Str, quoted_key): i64 {
+    var pos = str_index_of_cstr(json, quoted_key);
+    if (pos < 0) { return 0; }
+    var n = str_len(json);
+    var d = str_data(json);
+    var i = pos + strlen(quoted_key);
+    while (i < n && (load8(d + i) == 32 || load8(d + i) == 58)) { i = i + 1; }
+    var neg = 0;
+    if (i < n && load8(d + i) == 45) { neg = 1; i = i + 1; }
+    var v = 0;
+    while (i < n && load8(d + i) >= 48 && load8(d + i) <= 57) { v = v * 10 + (load8(d + i) - 48); i = i + 1; }
+    if (neg == 1) { return 0 - v; }
+    return v;
+}
+# JSON stores f64 fields as raw i64 bits (exact roundtrip)
+fn mneme_ai_rag_eval_aggregates_to_json(a): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"query_count\":");
+    str_builder_add_int(sb, load64(a));
+    str_builder_add_cstr(sb, ",\"avg_faithfulness\":");
+    str_builder_add_int(sb, load64(a + 8));
+    str_builder_add_cstr(sb, ",\"avg_relevance\":");
+    str_builder_add_int(sb, load64(a + 16));
+    str_builder_add_cstr(sb, ",\"avg_utilization\":");
+    str_builder_add_int(sb, load64(a + 24));
+    str_builder_add_cstr(sb, ",\"avg_overall\":");
+    str_builder_add_int(sb, load64(a + 32));
+    str_builder_add_cstr(sb, ",\"sum_faithfulness\":");
+    str_builder_add_int(sb, load64(a + 40));
+    str_builder_add_cstr(sb, ",\"sum_relevance\":");
+    str_builder_add_int(sb, load64(a + 48));
+    str_builder_add_cstr(sb, ",\"sum_utilization\":");
+    str_builder_add_int(sb, load64(a + 56));
+    str_builder_add_cstr(sb, ",\"sum_overall\":");
+    str_builder_add_int(sb, load64(a + 64));
+    str_builder_add_cstr(sb, "}");
+    return str_builder_build(sb);
+}
+fn mneme_ai_rag_eval_aggregates_from_json(json: Str): i64 {
+    var a = alloc(72);
+    store64(a, _re_json_int(json, "\"query_count\""));
+    store64(a + 8, _re_json_int(json, "\"avg_faithfulness\""));
+    store64(a + 16, _re_json_int(json, "\"avg_relevance\""));
+    store64(a + 24, _re_json_int(json, "\"avg_utilization\""));
+    store64(a + 32, _re_json_int(json, "\"avg_overall\""));
+    store64(a + 40, _re_json_int(json, "\"sum_faithfulness\""));
+    store64(a + 48, _re_json_int(json, "\"sum_relevance\""));
+    store64(a + 56, _re_json_int(json, "\"sum_utilization\""));
+    store64(a + 64, _re_json_int(json, "\"sum_overall\""));
+    return a;
+}

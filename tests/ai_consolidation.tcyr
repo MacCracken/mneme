@@ -1,0 +1,122 @@
+# mneme-ai consolidation tests — ported 1:1 from
+# rust-old/crates/mneme-ai/src/consolidation.rs (14 #[test] cases).
+include "src/core_uuid.cyr"
+include "src/ai_consolidation.cyr"
+
+# make_note(title, content, days_ago): updated = now - days_ago days; accessed = updated
+fn _mk(title, content, days_ago): i64 {
+    var updated = clock_epoch_secs() - days_ago * 86400;
+    return mneme_ai_note_content_new(mneme_core_uuid_v4(), str_from(title), str_from("note.md"), str_from(content), updated, updated);
+}
+fn _tokset(a, b): i64 {
+    var v = vec_new();
+    vec_push(v, str_from(a));
+    vec_push(v, str_from(b));
+    return v;
+}
+fn _gt(a, b): i64 { if (f64_le(a, b) == 0) { return 1; } return 0; }
+fn _ge(a, b): i64 { if (f64_le(b, a) == 1) { return 1; } return 0; }
+
+fn main() {
+    alloc_init();
+    test_group("ai_consolidation");
+
+    # detect_exact_duplicates
+    var n1 = vec_new();
+    vec_push(n1, _mk("Rust Guide", "Rust is a systems programming language", 0));
+    vec_push(n1, _mk("Rust Guide", "Rust is a systems programming language", 0));
+    var d1 = mneme_ai_detect_duplicates(n1, f64_parse("0.7"));
+    assert_eq(vec_len(d1), 1, "exact dup len 1");
+    assert_eq(_gt(mneme_ai_dup_pair_similarity(vec_get(d1, 0)), f64_parse("0.95")), 1, "exact sim > 0.95");
+    assert_eq(str_eq_cstr(mneme_ai_dup_pair_suggestion(vec_get(d1, 0)), "merge"), 1, "exact suggestion merge");
+
+    # no_duplicates_for_different_content
+    var n2 = vec_new();
+    vec_push(n2, _mk("Rust Guide", "Rust is a systems programming language with ownership", 0));
+    vec_push(n2, _mk("Python Guide", "Python is a dynamic interpreted language with GC", 0));
+    assert_eq(vec_len(mneme_ai_detect_duplicates(n2, f64_parse("0.7"))), 0, "different content no dup");
+
+    # partial_overlap_detected
+    var n3 = vec_new();
+    vec_push(n3, _mk("Rust Basics", "Rust programming language provides memory safety through ownership and borrowing rules", 0));
+    vec_push(n3, _mk("Rust Safety", "Rust language provides memory safety via ownership rules and borrow checker", 0));
+    var d3 = mneme_ai_detect_duplicates(n3, f64_parse("0.5"));
+    assert_eq(vec_len(d3), 1, "partial overlap len 1");
+    assert_eq(_ge(mneme_ai_dup_pair_similarity(vec_get(d3, 0)), f64_parse("0.5")), 1, "partial sim >= 0.5");
+
+    # threshold_filters_low_similarity
+    var n4 = vec_new();
+    vec_push(n4, _mk("A", "alpha bravo charlie delta echo", 0));
+    vec_push(n4, _mk("B", "alpha bravo foxtrot golf hotel", 0));
+    assert_eq(vec_len(mneme_ai_detect_duplicates(n4, f64_parse("0.9"))), 0, "high threshold empty");
+    assert_eq(vec_len(mneme_ai_detect_duplicates(n4, f64_parse("0.2"))), 1, "low threshold 1");
+
+    # detect_stale_notes
+    var n5 = vec_new();
+    vec_push(n5, _mk("Fresh", "content", 5));
+    vec_push(n5, _mk("Old", "content", 100));
+    vec_push(n5, _mk("Very Old", "content", 365));
+    var st5 = mneme_ai_detect_stale(n5, 90);
+    assert_eq(vec_len(st5), 2, "stale len 2");
+    assert_eq(str_eq_cstr(mneme_ai_stale_note_title(vec_get(st5, 0)), "Very Old"), 1, "stale[0] Very Old");
+    assert_eq(mneme_ai_stale_note_days_since_update(vec_get(st5, 0)) >= 365, 1, "stale[0] age >= 365");
+
+    # no_stale_notes_when_fresh
+    var n6 = vec_new();
+    vec_push(n6, _mk("Fresh 1", "content", 1));
+    vec_push(n6, _mk("Fresh 2", "content", 10));
+    assert_eq(vec_len(mneme_ai_detect_stale(n6, 90)), 0, "no stale when fresh");
+
+    # consolidation_report
+    var n7 = vec_new();
+    vec_push(n7, _mk("Rust Guide", "Rust is a systems programming language", 200));
+    vec_push(n7, _mk("Rust Guide v2", "Rust is a systems programming language", 5));
+    vec_push(n7, _mk("Python Guide", "Python is interpreted and dynamic", 10));
+    var rep = mneme_ai_consolidate(n7, f64_parse("0.7"), 90);
+    assert_eq(mneme_ai_consolidation_report_total_notes(rep), 3, "report total 3");
+    assert_eq(mneme_ai_consolidation_report_duplicate_count(rep) >= 1, 1, "report dup >= 1");
+    assert_eq(mneme_ai_consolidation_report_stale_count(rep) >= 1, 1, "report stale >= 1");
+
+    # empty_vault_consolidation
+    var rep2 = mneme_ai_consolidate(vec_new(), f64_parse("0.7"), 90);
+    assert_eq(mneme_ai_consolidation_report_total_notes(rep2), 0, "empty total 0");
+    assert_eq(mneme_ai_consolidation_report_duplicate_count(rep2), 0, "empty dup 0");
+    assert_eq(mneme_ai_consolidation_report_stale_count(rep2), 0, "empty stale 0");
+
+    # single_note_no_duplicates
+    var n9 = vec_new();
+    vec_push(n9, _mk("Only", "solo content", 0));
+    assert_eq(vec_len(mneme_ai_detect_duplicates(n9, f64_parse("0.5"))), 0, "single no dup");
+
+    # suggestion_levels
+    var n10 = vec_new();
+    vec_push(n10, _mk("A", "exactly the same tokens here now", 0));
+    vec_push(n10, _mk("B", "exactly the same tokens here now", 0));
+    assert_eq(str_eq_cstr(mneme_ai_dup_pair_suggestion(vec_get(mneme_ai_detect_duplicates(n10, f64_parse("0.5")), 0)), "merge"), 1, "identical suggestion merge");
+
+    # jaccard_empty_sets
+    assert_eq(mneme_ai_jaccard_similarity(vec_new(), vec_new()), f64_from(1), "jaccard empty 1.0");
+
+    # jaccard_disjoint_sets
+    assert_eq(mneme_ai_jaccard_similarity(_tokset("alpha", "bravo"), _tokset("charlie", "delta")), f64_from(0), "jaccard disjoint 0.0");
+
+    # jaccard_identical_sets
+    assert_eq(mneme_ai_jaccard_similarity(_tokset("alpha", "bravo"), _tokset("alpha", "bravo")), f64_from(1), "jaccard identical 1.0");
+
+    # duplicates_sorted_by_similarity_desc
+    var n14 = vec_new();
+    vec_push(n14, _mk("A", "alpha bravo charlie delta echo foxtrot golf", 0));
+    vec_push(n14, _mk("B", "alpha bravo charlie delta echo foxtrot golf hotel", 0));
+    vec_push(n14, _mk("C", "alpha bravo charlie india juliet kilo lima", 0));
+    var d14 = mneme_ai_detect_duplicates(n14, f64_parse("0.3"));
+    var sorted_ok = 1;
+    if (vec_len(d14) >= 2) {
+        if (_ge(mneme_ai_dup_pair_similarity(vec_get(d14, 0)), mneme_ai_dup_pair_similarity(vec_get(d14, 1))) == 0) { sorted_ok = 0; }
+    }
+    assert_eq(sorted_ok, 1, "dups sorted desc");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

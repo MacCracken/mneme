@@ -1,0 +1,127 @@
+# mneme-ai — translation (ported from rust-old/crates/mneme-ai/src/translator.rs)
+# The daimon translate path is DEFERRED; supported_languages, the
+# markdown-structure-preserving placeholder, and serde are pure.
+
+enum TranslateSource { TRANSLATE_SOURCE_DAIMON; TRANSLATE_SOURCE_PLACEHOLDER; }
+
+# Language (16): [code@0, name@8]
+fn mneme_ai_language_new(code, name): i64 {
+    var l = alloc(16);
+    store64(l, code);
+    store64(l + 8, name);
+    return l;
+}
+fn mneme_ai_language_code(l): i64 { return load64(l); }
+fn mneme_ai_language_name(l): i64 { return load64(l + 8); }
+fn mneme_ai_language_to_json(l): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"code\":\"");
+    str_builder_add(sb, load64(l));
+    str_builder_add_cstr(sb, "\",\"name\":\"");
+    str_builder_add(sb, load64(l + 8));
+    str_builder_add_cstr(sb, "\"}");
+    return str_builder_build(sb);
+}
+fn mneme_ai_supported_languages(): i64 {
+    var v = vec_new();
+    vec_push(v, mneme_ai_language_new(str_from("en"), str_from("English")));
+    vec_push(v, mneme_ai_language_new(str_from("es"), str_from("Spanish")));
+    vec_push(v, mneme_ai_language_new(str_from("fr"), str_from("French")));
+    vec_push(v, mneme_ai_language_new(str_from("de"), str_from("German")));
+    vec_push(v, mneme_ai_language_new(str_from("it"), str_from("Italian")));
+    vec_push(v, mneme_ai_language_new(str_from("pt"), str_from("Portuguese")));
+    vec_push(v, mneme_ai_language_new(str_from("zh"), str_from("Chinese")));
+    vec_push(v, mneme_ai_language_new(str_from("ja"), str_from("Japanese")));
+    vec_push(v, mneme_ai_language_new(str_from("ko"), str_from("Korean")));
+    vec_push(v, mneme_ai_language_new(str_from("ar"), str_from("Arabic")));
+    vec_push(v, mneme_ai_language_new(str_from("ru"), str_from("Russian")));
+    vec_push(v, mneme_ai_language_new(str_from("hi"), str_from("Hindi")));
+    return v;
+}
+
+# TranslateResult (48): [original@0, translated@8, source_language@16, target_language@24, word_count@32, source@40]
+fn mneme_ai_translate_result_new(original, translated, source_language, target_language, word_count, source): i64 {
+    var r = alloc(48);
+    store64(r, original);
+    store64(r + 8, translated);
+    store64(r + 16, source_language);
+    store64(r + 24, target_language);
+    store64(r + 32, word_count);
+    store64(r + 40, source);
+    return r;
+}
+fn mneme_ai_translate_result_translated(r): i64 { return load64(r + 8); }
+fn mneme_ai_translate_result_source(r): i64 { return load64(r + 40); }
+fn mneme_ai_translate_result_to_json(r): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"original\":\"");
+    str_builder_add(sb, load64(r));
+    str_builder_add_cstr(sb, "\",\"translated\":\"");
+    str_builder_add(sb, load64(r + 8));
+    str_builder_add_cstr(sb, "\",\"source_language\":\"");
+    str_builder_add(sb, load64(r + 16));
+    str_builder_add_cstr(sb, "\",\"target_language\":\"");
+    str_builder_add(sb, load64(r + 24));
+    str_builder_add_cstr(sb, "\",\"word_count\":");
+    str_builder_add_int(sb, load64(r + 32));
+    str_builder_add_cstr(sb, ",\"source\":\"");
+    if (load64(r + 40) == TRANSLATE_SOURCE_DAIMON) { str_builder_add_cstr(sb, "daimon"); }
+    else { str_builder_add_cstr(sb, "placeholder"); }
+    str_builder_add_cstr(sb, "\"}");
+    return str_builder_build(sb);
+}
+
+fn _tr_ws(c): i64 { if (c == 32 || c == 9 || c == 10 || c == 13) { return 1; } return 0; }
+fn _tr_trim(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var a = 0;
+    while (a < n && _tr_ws(load8(d + a)) == 1) { a = a + 1; }
+    var b = n;
+    while (b > a && _tr_ws(load8(d + b - 1)) == 1) { b = b - 1; }
+    return str_substr(s, a, b);
+}
+fn _tr_starts(s: Str, pfx): i64 {
+    var pl = strlen(pfx);
+    if (str_len(s) < pl) { return 0; }
+    if (memeq(str_data(s), pfx, pl) == 1) { return 1; }
+    return 0;
+}
+fn _tr_lines(content: Str): i64 {
+    var out = vec_new();
+    var n = str_len(content);
+    var d = str_data(content);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; } elif (load8(d + i) == 10) { isend = 1; }
+        if (isend == 1) { vec_push(out, str_substr(content, start, i)); start = i + 1; }
+        i = i + 1;
+    }
+    return out;
+}
+# NB: content.lines() drops a trailing empty segment after a final '\n' (Rust
+# semantics); replicate by not emitting the phantom last empty line.
+fn mneme_ai_preserve_markdown_structure(content: Str, target_lang: Str): i64 {
+    var lines = _tr_lines(content);
+    var count = vec_len(lines);
+    if (count > 0 && str_len(vec_get(lines, count - 1)) == 0) { count = count - 1; }
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < count) {
+        var line = vec_get(lines, i);
+        var trimmed = _tr_trim(line);
+        if (str_len(trimmed) == 0 || _tr_starts(trimmed, "#") == 1 || _tr_starts(trimmed, "```") == 1 || _tr_starts(trimmed, "---") == 1 || _tr_starts(trimmed, "- [") == 1) {
+            str_builder_add(sb, line);
+        } else {
+            str_builder_add_cstr(sb, "/* ");
+            str_builder_add(sb, target_lang);
+            str_builder_add_cstr(sb, " */ ");
+            str_builder_add(sb, line);
+        }
+        str_builder_putc(sb, 10);
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}

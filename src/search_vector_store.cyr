@@ -99,6 +99,14 @@ fn _vs_mkdir_p(dir: Str): i64 {
 }
 
 # SemanticResult (32): [note_id@0(0=None), title@8(0=None), content@16, score@24(f64)]
+fn mneme_search_semresult_new(note_id, title, content, score): i64 {
+    var r = alloc(32);
+    store64(r, note_id);
+    store64(r + 8, title);
+    store64(r + 16, content);
+    store64(r + 24, score);
+    return r;
+}
 fn mneme_search_semresult_note_id(r): i64 { return load64(r); }
 fn mneme_search_semresult_title(r): i64 { return load64(r + 8); }
 fn mneme_search_semresult_content(r): i64 { return load64(r + 16); }

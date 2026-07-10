@@ -1,0 +1,172 @@
+# mneme-ai — AI-assisted writing (ported from rust-old/crates/mneme-ai/src/writer.rs)
+# The daimon generation path is DEFERRED; local_assist heuristics + WriteResult
+# serde are pure and are what the Rust tests exercise.
+
+enum WriteAction { WRITE_COMPLETE; WRITE_REWORD; WRITE_EXPAND; }
+enum WriteSource { WRITE_SOURCE_DAIMON; WRITE_SOURCE_LOCAL; }
+
+# WriteRequest (24): [action@0, text@8, context@16(0=None)]
+fn mneme_ai_write_request_new(action, text, context): i64 {
+    var r = alloc(24);
+    store64(r, action);
+    store64(r + 8, text);
+    store64(r + 16, context);
+    return r;
+}
+fn mneme_ai_write_request_action(r): i64 { return load64(r); }
+fn mneme_ai_write_request_text(r): i64 { return load64(r + 8); }
+
+# WriteResult (32): [original@0, result@8, action@16, source@24]
+fn mneme_ai_write_result_new(original, result, action, source): i64 {
+    var r = alloc(32);
+    store64(r, original);
+    store64(r + 8, result);
+    store64(r + 16, action);
+    store64(r + 24, source);
+    return r;
+}
+fn mneme_ai_write_result_original(r): i64 { return load64(r); }
+fn mneme_ai_write_result_result(r): i64 { return load64(r + 8); }
+fn mneme_ai_write_result_action(r): i64 { return load64(r + 16); }
+fn mneme_ai_write_result_source(r): i64 { return load64(r + 24); }
+
+fn _wr_ws(c): i64 { if (c == 32 || c == 9 || c == 10 || c == 13) { return 1; } return 0; }
+fn _wr_trim(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var a = 0;
+    while (a < n && _wr_ws(load8(d + a)) == 1) { a = a + 1; }
+    var b = n;
+    while (b > a && _wr_ws(load8(d + b - 1)) == 1) { b = b - 1; }
+    return str_substr(s, a, b);
+}
+fn _wr_lower(s: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c >= 65 && c <= 90) { c = c + 32; }
+        str_builder_putc(sb, c);
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+# split on '.', trim each, keep non-empty
+fn _wr_split_dot(text: Str): i64 {
+    var out = vec_new();
+    var n = str_len(text);
+    var d = str_data(text);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var isend = 0;
+        if (i == n) { isend = 1; } elif (load8(d + i) == 46) { isend = 1; }
+        if (isend == 1) {
+            var seg = _wr_trim(str_substr(text, start, i));
+            if (str_len(seg) > 0) { vec_push(out, seg); }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+fn _wr_replace_all(s: Str, from: Str, to: Str): i64 {
+    var sb = str_builder_new();
+    var flen = str_len(from);
+    var fd = str_data(from);
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        if (flen > 0 && i + flen <= n && memeq(d + i, fd, flen) == 1) {
+            str_builder_add(sb, to);
+            i = i + flen;
+        } else {
+            str_builder_putc(sb, load8(d + i));
+            i = i + 1;
+        }
+    }
+    return str_builder_build(sb);
+}
+fn _wr_swap(s: Str, from_cstr, to_cstr): i64 {
+    var fromsp = str_builder_new();
+    str_builder_putc(fromsp, 32);
+    str_builder_add_cstr(fromsp, from_cstr);
+    str_builder_putc(fromsp, 32);
+    var tosp = str_builder_new();
+    str_builder_putc(tosp, 32);
+    str_builder_add_cstr(tosp, to_cstr);
+    str_builder_putc(tosp, 32);
+    return _wr_replace_all(s, str_builder_build(fromsp), str_builder_build(tosp));
+}
+
+fn mneme_ai_writer_local_assist(req): i64 {
+    var action = load64(req);
+    var text = load64(req + 8);
+    if (action == WRITE_COMPLETE) {
+        var sentences = _wr_split_dot(text);
+        if (vec_len(sentences) == 0) { return text; }
+        var sb = str_builder_new();
+        str_builder_add(sb, vec_get(sentences, vec_len(sentences) - 1));
+        str_builder_add_cstr(sb, " Furthermore, this topic warrants additional exploration and analysis.");
+        return str_builder_build(sb);
+    }
+    if (action == WRITE_REWORD) {
+        var result = text;
+        result = _wr_swap(result, "important", "significant");
+        result = _wr_swap(result, "significant", "notable");
+        result = _wr_swap(result, "however", "nevertheless");
+        result = _wr_swap(result, "therefore", "consequently");
+        result = _wr_swap(result, "because", "since");
+        result = _wr_swap(result, "also", "additionally");
+        result = _wr_swap(result, "but", "yet");
+        result = _wr_swap(result, "big", "large");
+        result = _wr_swap(result, "small", "compact");
+        result = _wr_swap(result, "good", "effective");
+        result = _wr_swap(result, "bad", "problematic");
+        result = _wr_swap(result, "use", "utilize");
+        result = _wr_swap(result, "show", "demonstrate");
+        result = _wr_swap(result, "help", "assist");
+        result = _wr_swap(result, "make", "create");
+        result = _wr_swap(result, "get", "obtain");
+        return result;
+    }
+    # WRITE_EXPAND
+    var sentences = _wr_split_dot(text);
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < vec_len(sentences)) {
+        var s = vec_get(sentences, i);
+        str_builder_add(sb, s);
+        str_builder_add_cstr(sb, ". To elaborate on this point, ");
+        str_builder_add(sb, _wr_lower(s));
+        str_builder_add_cstr(sb, " is worth examining in greater detail. ");
+        i = i + 1;
+    }
+    return _wr_trim(str_builder_build(sb));
+}
+
+fn _wr_action_str(a): i64 {
+    if (a == WRITE_COMPLETE) { return str_from("complete"); }
+    if (a == WRITE_REWORD) { return str_from("reword"); }
+    return str_from("expand");
+}
+fn _wr_source_str(s): i64 {
+    if (s == WRITE_SOURCE_DAIMON) { return str_from("daimon"); }
+    return str_from("local");
+}
+fn mneme_ai_write_result_to_json(r): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"original\":\"");
+    str_builder_add(sb, load64(r));
+    str_builder_add_cstr(sb, "\",\"result\":\"");
+    str_builder_add(sb, load64(r + 8));
+    str_builder_add_cstr(sb, "\",\"action\":\"");
+    str_builder_add(sb, _wr_action_str(load64(r + 16)));
+    str_builder_add_cstr(sb, "\",\"source\":\"");
+    str_builder_add(sb, _wr_source_str(load64(r + 24)));
+    str_builder_add_cstr(sb, "\"}");
+    return str_builder_build(sb);
+}
