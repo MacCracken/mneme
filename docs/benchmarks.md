@@ -1,5 +1,7 @@
 # mneme — Benchmarks
 
+> Rust-vs-Cyrius comparison: [`benchmarks-rust-vs-cyrius.md`](benchmarks-rust-vs-cyrius.md).
+
 Micro-benchmarks over the hot paths of the ported subsystems. The mneme port
 targets **behavioral parity** with the Rust original first; these numbers establish
 a baseline for the pure-Cyrius implementations (built-from-scratch BM25 index,

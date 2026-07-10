@@ -89,6 +89,9 @@ Skipped intentionally during the port; revisit after v1.0 parity lands:
   the Rust suite; deferred with the f64-math work).
 - **Real datetime formatting** — chrono civil-calendar (RFC3339 format/parse beyond the
   year/month extraction already done); timestamps currently stored as INT ns.
+- **Performance (post-v1)** — the port is correct-not-fast by design. Ranked
+  optimization targets (vector ANN index, tokenizer arena reuse, real BM25 scoring,
+  f64/value-type packing) are in [`../benchmarks-rust-vs-cyrius.md`](../benchmarks-rust-vs-cyrius.md).
 
 ## Out of scope (for v1.0)
 
