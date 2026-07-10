@@ -1,0 +1,113 @@
+# mneme-store vault tests — ported 1:1 from rust-old/crates/mneme-store/src/vault.rs.
+# 9 #[tokio::test]s → sync. Fresh temp vault dir per test.
+include "lib/patra.cyr"
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/sigil.cyr"
+include "src/core_uuid.cyr"
+include "src/core_note.cyr"
+include "src/core_link.cyr"
+include "src/core_frontmatter.cyr"
+include "src/store_db.cyr"
+include "src/store_files.cyr"
+include "src/store_vault.cyr"
+
+var _vn = 0;
+fn _fresh_vault(): i64 {
+    _vn = _vn + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_vt");
+    str_builder_add_int(pb, _vn);
+    return mneme_store_vault_open(str_builder_build(pb));
+}
+fn _v2(a, b): i64 { var v = vec_new(); vec_push(v, a); vec_push(v, b); return v; }
+fn _v1(a): i64 { var v = vec_new(); vec_push(v, a); return v; }
+fn _has(v, cstr): i64 {
+    var i = 0;
+    while (i < vec_len(v)) { if (str_eq_cstr(vec_get(v, i), cstr) == 1) { return 1; } i = i + 1; }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("store_vault");
+
+    # create_and_get_note
+    var v1 = _fresh_vault();
+    var created = mneme_store_vault_create_note(v1, mneme_store_create_note_new(str_from("Hello World"), 0, str_from("This is a test note."), _v2(str_from("test"), str_from("demo")), 0 - 1));
+    assert(str_eq(mneme_core_note_title(mneme_store_nwc_note(created)), str_from("Hello World")), "created title");
+    assert_eq(vec_len(mneme_store_nwc_tags(created)), 2, "created 2 tags");
+    assert_eq(_has(mneme_store_nwc_tags(created), "test"), 1, "has test");
+    assert_eq(_has(mneme_store_nwc_tags(created), "demo"), 1, "has demo");
+    assert(str_eq(mneme_store_nwc_content(created), str_from("This is a test note.")), "created content");
+    var fetched = mneme_store_vault_get_note(v1, mneme_core_note_id(mneme_store_nwc_note(created)));
+    assert(str_eq(mneme_core_note_title(mneme_store_nwc_note(fetched)), str_from("Hello World")), "fetched title");
+    assert_eq(vec_len(mneme_store_nwc_tags(fetched)), 2, "fetched 2 tags");
+
+    # update_note
+    var v2 = _fresh_vault();
+    var c2 = mneme_store_vault_create_note(v2, mneme_store_create_note_new(str_from("Original"), 0, str_from("Original content."), vec_new(), 0 - 1));
+    var upd = mneme_store_vault_update_note(v2, mneme_core_note_id(mneme_store_nwc_note(c2)), mneme_store_update_note_new(str_from("Updated Title"), str_from("New content."), _v1(str_from("updated"))));
+    assert(str_eq(mneme_core_note_title(mneme_store_nwc_note(upd)), str_from("Updated Title")), "updated title");
+    assert(str_eq(mneme_store_nwc_content(upd), str_from("New content.")), "updated content");
+    assert_eq(vec_len(mneme_store_nwc_tags(upd)), 1, "updated 1 tag");
+    assert_eq(_has(mneme_store_nwc_tags(upd), "updated"), 1, "updated tag name");
+
+    # delete_note
+    var v3 = _fresh_vault();
+    var c3 = mneme_store_vault_create_note(v3, mneme_store_create_note_new(str_from("To Delete"), 0, str_from("Goodbye."), vec_new(), 0 - 1));
+    mneme_store_vault_delete_note(v3, mneme_core_note_id(mneme_store_nwc_note(c3)));
+    assert_eq(mneme_store_vault_get_note(v3, mneme_core_note_id(mneme_store_nwc_note(c3))), 0, "deleted note gone");
+
+    # list_and_count
+    var v4 = _fresh_vault();
+    var i = 0;
+    while (i < 5) {
+        var tb = str_builder_new();
+        str_builder_add_cstr(tb, "Note ");
+        str_builder_add_int(tb, i);
+        mneme_store_vault_create_note(v4, mneme_store_create_note_new(str_builder_build(tb), 0, str_from("Content"), vec_new(), 0 - 1));
+        i = i + 1;
+    }
+    assert_eq(mneme_store_vault_count_notes(v4), 5, "count 5");
+    assert_eq(vec_len(mneme_store_vault_list_notes(v4, 3, 0)), 3, "list limit 3");
+
+    # path_conflict
+    var v5 = _fresh_vault();
+    mneme_store_vault_create_note(v5, mneme_store_create_note_new(str_from("Same"), str_from("same.md"), str_from("First"), vec_new(), 0 - 1));
+    assert_eq(mneme_store_vault_create_note(v5, mneme_store_create_note_new(str_from("Same Again"), str_from("same.md"), str_from("Second"), vec_new(), 0 - 1)), 0, "path conflict -> 0");
+
+    # tag_operations
+    var v6 = _fresh_vault();
+    mneme_store_vault_create_note(v6, mneme_store_create_note_new(str_from("Tagged"), 0, str_from("Content."), _v2(str_from("alpha"), str_from("beta")), 0 - 1));
+    assert_eq(vec_len(mneme_store_vault_list_tags(v6)), 2, "2 tags");
+    var tags6 = mneme_store_vault_list_tags(v6);
+    var alpha_id = 0;
+    var k = 0;
+    while (k < vec_len(tags6)) {
+        if (str_eq(mneme_store_tag_name(vec_get(tags6, k)), str_from("alpha")) == 1) { alpha_id = mneme_store_tag_id(vec_get(tags6, k)); }
+        k = k + 1;
+    }
+    mneme_store_vault_delete_tag(v6, alpha_id);
+    assert_eq(vec_len(mneme_store_vault_list_tags(v6)), 1, "1 tag after delete");
+
+    # update_note_partial
+    var v7 = _fresh_vault();
+    var c7 = mneme_store_vault_create_note(v7, mneme_store_create_note_new(str_from("Original"), 0, str_from("Original content."), _v1(str_from("tag1")), 0 - 1));
+    var upd7 = mneme_store_vault_update_note(v7, mneme_core_note_id(mneme_store_nwc_note(c7)), mneme_store_update_note_new(str_from("New Title"), 0, 0));
+    assert(str_eq(mneme_core_note_title(mneme_store_nwc_note(upd7)), str_from("New Title")), "partial title");
+    assert(str_eq(mneme_store_nwc_content(upd7), str_from("Original content.")), "partial content unchanged");
+    assert_eq(vec_len(mneme_store_nwc_tags(upd7)), 1, "partial tags unchanged");
+    assert_eq(_has(mneme_store_nwc_tags(upd7), "tag1"), 1, "partial tag1 kept");
+
+    # count_notes_empty
+    assert_eq(mneme_store_vault_count_notes(_fresh_vault()), 0, "empty count 0");
+
+    # delete_nonexistent_note
+    assert_eq(mneme_store_vault_delete_note(_fresh_vault(), mneme_core_uuid_v4()), 0, "delete missing -> 0");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

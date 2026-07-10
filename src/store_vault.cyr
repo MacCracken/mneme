@@ -1,0 +1,161 @@
+# mneme-store — Vault: top-level store combining patra DB + file store + core model
+# (ported from rust-old/crates/mneme-store/src/vault.rs). Async #[tokio::test]s → sync.
+# Composes store_db + store_files + core_{note,link,frontmatter,uuid}.
+
+# CreateNote (40): [title@0, path@8 (0=None), content@16, tags@24 (vec), provenance@32 (-1=None)]
+fn mneme_store_create_note_new(title: Str, path, content: Str, tags, provenance): i64 {
+    var c = alloc(40);
+    store64(c, title);
+    store64(c + 8, path);
+    store64(c + 16, content);
+    store64(c + 24, tags);
+    store64(c + 32, provenance);
+    return c;
+}
+# UpdateNote (24): [title@0 (0=None), content@8 (0=None), tags@16 (0=None)]
+fn mneme_store_update_note_new(title, content, tags): i64 {
+    var u = alloc(24);
+    store64(u, title);
+    store64(u + 8, content);
+    store64(u + 16, tags);
+    return u;
+}
+# NoteWithContent (32): [note@0, content@8, tags@16 (vec<Str>), backlinks@24 (vec)]
+fn mneme_store_nwc_note(x): i64 { return load64(x); }
+fn mneme_store_nwc_content(x): i64 { return load64(x + 8); }
+fn mneme_store_nwc_tags(x): i64 { return load64(x + 16); }
+fn mneme_store_nwc_backlinks(x): i64 { return load64(x + 24); }
+
+# Vault (24): [db@0, files@8, root@16]
+fn mneme_store_vault_open(root: Str): i64 {
+    var mnemedir = path_join(root, str_from(".mneme"));
+    _fs_mkdir_p(mnemedir);
+    var db = mneme_store_db_open(_fs_cstr(path_join(mnemedir, str_from("db.sqlite"))));
+    var files = mneme_store_filestore_new(root);
+    mneme_store_filestore_init(files);
+    var v = alloc(24);
+    store64(v, db);
+    store64(v + 8, files);
+    store64(v + 16, root);
+    return v;
+}
+fn mneme_store_vault_db(v): i64 { return load64(v); }
+fn mneme_store_vault_root(v): i64 { return load64(v + 16); }
+
+# build note tags -> a fresh frontmatter carrying title + tags
+fn _vault_fm_of(title: Str, tags): i64 {
+    var fm = mneme_core_frontmatter_new();
+    store64(fm, title);
+    var ft = mneme_core_fm_tags(fm);
+    var i = 0;
+    while (i < vec_len(tags)) { vec_push(ft, vec_get(tags, i)); i = i + 1; }
+    return fm;
+}
+
+fn mneme_store_vault_create_note(v, req): i64 {
+    var db = load64(v);
+    var files = load64(v + 8);
+    var title = load64(req);
+    var path = load64(req + 8);
+    if (path == 0) { path = mneme_store_title_to_path(title); }
+    var content = load64(req + 16);
+    var tags = load64(req + 24);
+    var provenance = load64(req + 32);
+    if (mneme_store_filestore_exists(files, path) == 1) { return 0; }   # PathConflict
+    var document = mneme_core_frontmatter_compose(_vault_fm_of(title, tags), content);
+    var hash = mneme_store_content_hash(document);
+    mneme_store_filestore_write_note(files, path, document);
+    var note = mneme_core_note_new(title, path, hash);
+    store64(note, mneme_core_uuid_v4());
+    if (provenance != (0 - 1)) { store64(note + 56, provenance); }
+    mneme_store_db_insert_note(db, note);
+    var j = 0;
+    while (j < vec_len(tags)) {
+        var tag = mneme_store_db_get_or_create_tag(db, vec_get(tags, j));
+        mneme_store_db_tag_note(db, mneme_core_note_id(note), mneme_store_tag_id(tag));
+        j = j + 1;
+    }
+    var nwc = alloc(32);
+    store64(nwc, note);
+    store64(nwc + 8, content);
+    store64(nwc + 16, tags);
+    store64(nwc + 24, vec_new());
+    return nwc;
+}
+
+fn mneme_store_vault_get_note(v, id): i64 {
+    var db = load64(v);
+    var files = load64(v + 8);
+    var note = mneme_store_db_get_note(db, id);
+    if (note == 0) { return 0; }
+    mneme_store_db_touch_note(db, id);
+    var document = mneme_store_filestore_read_note(files, mneme_core_note_path(note));
+    var body = str_from("");
+    if (document != 0) { body = mneme_core_fm_pair_body(mneme_core_frontmatter_split(document)); }
+    var nwc = alloc(32);
+    store64(nwc, note);
+    store64(nwc + 8, body);
+    store64(nwc + 16, mneme_store_db_get_note_tags(db, mneme_core_note_id(note)));
+    store64(nwc + 24, mneme_store_db_get_backlinks(db, mneme_core_note_id(note)));
+    return nwc;
+}
+
+fn mneme_store_vault_list_notes(v, limit, offset): i64 { return mneme_store_db_list_notes(load64(v), limit, offset); }
+fn mneme_store_vault_count_notes(v): i64 { return mneme_store_db_count_notes(load64(v)); }
+fn mneme_store_vault_list_tags(v): i64 { return mneme_store_db_list_tags(load64(v)); }
+fn mneme_store_vault_delete_tag(v, id): i64 { return mneme_store_db_delete_tag(load64(v), id); }
+fn mneme_store_vault_list_all_links(v): i64 { return mneme_store_db_list_all_links(load64(v)); }
+
+fn mneme_store_vault_update_note(v, id, req): i64 {
+    var db = load64(v);
+    var files = load64(v + 8);
+    var note = mneme_store_db_get_note(db, id);
+    if (note == 0) { return 0; }
+    var document = mneme_store_filestore_read_note(files, mneme_core_note_path(note));
+    var body = str_from("");
+    var fm = mneme_core_frontmatter_new();
+    if (document != 0) {
+        var pair = mneme_core_frontmatter_split(document);
+        body = mneme_core_fm_pair_body(pair);
+        if (mneme_core_fm_pair_yaml(pair) != 0) { fm = mneme_core_frontmatter_parse(mneme_core_fm_pair_yaml(pair)); }
+    }
+    var new_title = load64(req);
+    if (new_title == 0) { new_title = mneme_core_note_title(note); }
+    var new_content = load64(req + 8);
+    if (new_content == 0) { new_content = body; }
+    store64(fm, new_title);   # fm.title = Some(new_title)
+    var req_tags = load64(req + 16);
+    if (req_tags != 0) {
+        store64(fm + 8, req_tags);   # fm.tags = new_tags
+        mneme_store_db_clear_note_tags(db, id);
+        var t = 0;
+        while (t < vec_len(req_tags)) {
+            var tag = mneme_store_db_get_or_create_tag(db, vec_get(req_tags, t));
+            mneme_store_db_tag_note(db, id, mneme_store_tag_id(tag));
+            t = t + 1;
+        }
+    }
+    var new_document = mneme_core_frontmatter_compose(fm, new_content);
+    var hash = mneme_store_content_hash(new_document);
+    mneme_store_filestore_write_note(files, mneme_core_note_path(note), new_document);
+    mneme_store_db_update_note(db, id, new_title, hash);
+    store64(note + 8, new_title);       # note.title = new_title
+    store64(note + 24, hash);           # note.content_hash = hash
+    var nwc = alloc(32);
+    store64(nwc, note);
+    store64(nwc + 8, new_content);
+    store64(nwc + 16, mneme_store_db_get_note_tags(db, id));
+    store64(nwc + 24, mneme_store_db_get_backlinks(db, id));
+    return nwc;
+}
+
+# returns 1 on success, 0 if the note doesn't exist
+fn mneme_store_vault_delete_note(v, id): i64 {
+    var db = load64(v);
+    var files = load64(v + 8);
+    var note = mneme_store_db_get_note(db, id);
+    if (note == 0) { return 0; }
+    mneme_store_db_delete_note(db, id);
+    mneme_store_filestore_delete_note(files, mneme_core_note_path(note));
+    return 1;
+}

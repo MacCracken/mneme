@@ -1,0 +1,113 @@
+# mneme-store — VaultManager: manages multiple open vaults (ported from
+# rust-old/crates/mneme-store/src/manager.rs). Composes store_registry + store_vault.
+# HashMap<Uuid,OpenVault> modeled as a vec<OpenVault> with content-based uuid match
+# (few vaults; linear is fine). active_id 0 = None (uuid handles are never 0).
+
+# OpenVault (16): [info@0 (VaultInfo), vault@8 (Vault)]
+fn mneme_store_openvault_info(o): i64 { return load64(o); }
+fn mneme_store_openvault_vault(o): i64 { return load64(o + 8); }
+
+# VaultManager (24): [registry@0, active_id@8, open_vaults@16 (vec<OpenVault>)]
+fn mneme_store_manager_registry(m): i64 { return load64(m); }
+fn mneme_store_manager_active_id(m): i64 { return load64(m + 8); }
+fn mneme_store_manager_open_count(m): i64 { return vec_len(load64(m + 16)); }
+
+fn _mgr_find(m, id): i64 {
+    var ov = load64(m + 16);
+    var i = 0;
+    while (i < vec_len(ov)) {
+        var o = vec_get(ov, i);
+        if (mneme_core_uuid_eq(mneme_store_vault_info_id(load64(o)), id) == 1) { return o; }
+        i = i + 1;
+    }
+    return 0;
+}
+fn mneme_store_manager_get(m, id): i64 { return _mgr_find(m, id); }
+fn mneme_store_manager_active(m): i64 {
+    if (load64(m + 8) == 0) { return 0; }
+    return _mgr_find(m, load64(m + 8));
+}
+fn mneme_store_manager_open_vault_ids(m): i64 {
+    var out = vec_new();
+    var ov = load64(m + 16);
+    var i = 0;
+    while (i < vec_len(ov)) {
+        vec_push(out, mneme_store_vault_info_id(load64(vec_get(ov, i))));
+        i = i + 1;
+    }
+    return out;
+}
+
+fn _mgr_insert(m, info, vault): i64 {
+    var o = alloc(16);
+    store64(o, info);
+    store64(o + 8, vault);
+    vec_push(load64(m + 16), o);
+    if (load64(m + 8) == 0) { store64(m + 8, mneme_store_vault_info_id(info)); }
+    return o;
+}
+
+# open a registered vault by id; 1 ok, 0 = VaultNotFound
+fn mneme_store_manager_open_vault(m, id): i64 {
+    if (_mgr_find(m, id) != 0) { return 1; }
+    var info = mneme_store_registry_get_by_id(load64(m), id);
+    if (info == 0) { return 0; }
+    _mgr_insert(m, info, mneme_store_vault_open(load64(info + 16)));
+    mneme_store_registry_touch(load64(m), id);
+    return 1;
+}
+fn mneme_store_manager_switch_vault(m, id): i64 {
+    if (_mgr_find(m, id) == 0) {
+        if (mneme_store_manager_open_vault(m, id) == 0) { return 0; }
+    }
+    store64(m + 8, id);
+    mneme_store_registry_touch(load64(m), id);
+    return 1;
+}
+fn mneme_store_manager_close_vault(m, id): i64 {
+    var ov = load64(m + 16);
+    var kept = vec_new();
+    var i = 0;
+    while (i < vec_len(ov)) {
+        var o = vec_get(ov, i);
+        if (mneme_core_uuid_eq(mneme_store_vault_info_id(load64(o)), id) == 0) { vec_push(kept, o); }
+        i = i + 1;
+    }
+    store64(m + 16, kept);
+    if (load64(m + 8) != 0 && mneme_core_uuid_eq(load64(m + 8), id) == 1) {
+        if (vec_len(kept) > 0) { store64(m + 8, mneme_store_vault_info_id(load64(vec_get(kept, 0)))); }
+        else { store64(m + 8, 0); }
+    }
+    return 0;
+}
+# create + register + open a new vault; returns the VaultInfo
+fn mneme_store_manager_create_vault(m, name: Str, path: Str): i64 {
+    var info = mneme_store_registry_create(load64(m), name, path);
+    _mgr_insert(m, info, mneme_store_vault_open(path));
+    return info;
+}
+fn mneme_store_manager_remove_vault(m, id): i64 {
+    mneme_store_manager_close_vault(m, id);
+    return mneme_store_registry_remove(load64(m), id);
+}
+
+# single-vault manager (registers "default" at vault_dir and opens it)
+fn mneme_store_manager_single(vault_dir: Str): i64 {
+    var registry = mneme_store_registry_in_memory();
+    var info = mneme_store_registry_create(registry, str_from("default"), vault_dir);
+    var m = alloc(24);
+    store64(m, registry);
+    store64(m + 8, 0);
+    store64(m + 16, vec_new());
+    _mgr_insert(m, info, mneme_store_vault_open(load64(info + 16)));
+    return m;
+}
+fn mneme_store_manager_new(registry): i64 {
+    var m = alloc(24);
+    store64(m, registry);
+    var dv = mneme_store_registry_default_vault(registry);
+    if (dv != 0) { store64(m + 8, mneme_store_vault_info_id(dv)); }
+    else { store64(m + 8, 0); }
+    store64(m + 16, vec_new());
+    return m;
+}

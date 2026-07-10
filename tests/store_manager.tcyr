@@ -1,0 +1,109 @@
+# mneme-store manager tests — ported 1:1 from rust-old/crates/mneme-store/src/manager.rs.
+# 13 #[tokio::test]s → sync. Fresh temp vault dir(s) per test.
+include "lib/patra.cyr"
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/sigil.cyr"
+include "lib/bayan.cyr"
+include "src/core_uuid.cyr"
+include "src/core_note.cyr"
+include "src/core_link.cyr"
+include "src/core_config.cyr"
+include "src/core_frontmatter.cyr"
+include "src/store_db.cyr"
+include "src/store_files.cyr"
+include "src/store_registry.cyr"
+include "src/store_vault.cyr"
+include "src/store_manager.cyr"
+
+var _mvn = 0;
+fn _vault_dir(): i64 {
+    _mvn = _mvn + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_mv");
+    str_builder_add_int(pb, _mvn);
+    return str_builder_build(pb);
+}
+fn _fresh_mgr(): i64 { return mneme_store_manager_single(_vault_dir()); }
+
+fn main() {
+    alloc_init();
+    test_group("store_manager");
+
+    # single_vault_manager
+    var m1 = _fresh_mgr();
+    assert(mneme_store_manager_active_id(m1) != 0, "active id is some");
+    assert(mneme_store_manager_active(m1) != 0, "active vault present");
+    assert_eq(mneme_store_registry_len(mneme_store_manager_registry(m1)), 1, "registry has 1");
+
+    # active_vault_works
+    assert(str_eq(mneme_core_vault_info_name(mneme_store_openvault_info(mneme_store_manager_active(_fresh_mgr()))), str_from("default")), "active name default");
+
+    # create_second_vault
+    var m3 = _fresh_mgr();
+    var info3 = mneme_store_manager_create_vault(m3, str_from("second"), _vault_dir());
+    assert(str_eq(mneme_core_vault_info_name(info3), str_from("second")), "second name");
+    assert_eq(mneme_store_registry_len(mneme_store_manager_registry(m3)), 2, "registry has 2");
+
+    # switch_vault
+    var m4 = _fresh_mgr();
+    var sid4 = mneme_store_vault_info_id(mneme_store_manager_create_vault(m4, str_from("second"), _vault_dir()));
+    mneme_store_manager_switch_vault(m4, sid4);
+    assert_eq(mneme_core_uuid_eq(mneme_store_manager_active_id(m4), sid4), 1, "active is second");
+    assert(str_eq(mneme_core_vault_info_name(mneme_store_openvault_info(mneme_store_manager_active(m4))), str_from("second")), "active name second");
+
+    # close_vault_switches_active
+    var m5 = _fresh_mgr();
+    var sid5 = mneme_store_vault_info_id(mneme_store_manager_create_vault(m5, str_from("second"), _vault_dir()));
+    mneme_store_manager_switch_vault(m5, sid5);
+    mneme_store_manager_close_vault(m5, sid5);
+    assert(mneme_store_manager_active_id(m5) != 0, "active still set");
+    assert_eq(mneme_core_uuid_eq(mneme_store_manager_active_id(m5), sid5), 0, "active no longer second");
+
+    # remove_vault
+    var m6 = _fresh_mgr();
+    var sid6 = mneme_store_vault_info_id(mneme_store_manager_create_vault(m6, str_from("second"), _vault_dir()));
+    mneme_store_manager_remove_vault(m6, sid6);
+    assert_eq(mneme_store_registry_len(mneme_store_manager_registry(m6)), 1, "registry back to 1");
+    assert_eq(mneme_store_manager_get(m6, sid6), 0, "removed vault gone");
+
+    # get_specific_vault
+    var m7 = _fresh_mgr();
+    assert(mneme_store_manager_get(m7, mneme_store_manager_active_id(m7)) != 0, "get active present");
+    assert_eq(mneme_store_manager_get(m7, mneme_core_uuid_v4()), 0, "get random absent");
+
+    # open_vaults_iterator
+    var m8 = _fresh_mgr();
+    mneme_store_manager_create_vault(m8, str_from("second"), _vault_dir());
+    assert_eq(mneme_store_manager_open_count(m8), 2, "2 open vaults");
+
+    # open_vault_ids_list
+    var m9 = _fresh_mgr();
+    var ids9 = mneme_store_manager_open_vault_ids(m9);
+    assert_eq(vec_len(ids9), 1, "1 open id");
+    assert_eq(mneme_core_uuid_eq(vec_get(ids9, 0), mneme_store_manager_active_id(m9)), 1, "id is active");
+
+    # registry_mut_access
+    assert_eq(mneme_store_registry_len(mneme_store_manager_registry(_fresh_mgr())), 1, "registry len 1");
+
+    # open_vault_already_open
+    var m11 = _fresh_mgr();
+    mneme_store_manager_open_vault(m11, mneme_store_manager_active_id(m11));
+    assert_eq(vec_len(mneme_store_manager_open_vault_ids(m11)), 1, "still 1 after reopen");
+
+    # open_vault_not_found
+    assert_eq(mneme_store_manager_open_vault(_fresh_mgr(), mneme_core_uuid_v4()), 0, "open missing -> 0");
+
+    # close_last_vault_clears_active
+    var m13 = _fresh_mgr();
+    mneme_store_manager_close_vault(m13, mneme_store_manager_active_id(m13));
+    var cleared = 0;
+    if (mneme_store_manager_active_id(m13) == 0) { cleared = 1; }
+    elif (mneme_store_manager_open_count(m13) == 0) { cleared = 1; }
+    assert_eq(cleared, 1, "active cleared or no open vaults");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);
