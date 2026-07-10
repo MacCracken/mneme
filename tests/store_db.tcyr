@@ -1,0 +1,199 @@
+# mneme-store db tests — ported from rust-old/crates/mneme-store/src/db.rs.
+# The 21 #[tokio::test] async DB tests become synchronous; the 3 parse_datetime
+# #[test]s are pure. Each test uses a fresh temp patra file (unlinked first).
+include "lib/patra.cyr"
+include "src/core_uuid.cyr"
+include "src/core_note.cyr"
+include "src/core_link.cyr"
+include "src/store_db.cyr"
+
+var _dbn = 0;
+fn _reset_db(): i64 {
+    _dbn = _dbn + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_dbt");
+    str_builder_add_int(pb, _dbn);
+    str_builder_add_cstr(pb, ".patra");
+    var path = _db_cstr(str_builder_build(pb));
+    sys_unlink(path);
+    var wb = str_builder_new();
+    str_builder_add_cstr(wb, "/tmp/mneme_dbt");
+    str_builder_add_int(wb, _dbn);
+    str_builder_add_cstr(wb, ".patra-wal");
+    sys_unlink(_db_cstr(str_builder_build(wb)));
+    return mneme_store_db_open(path);
+}
+fn _sample_note(): i64 {
+    var note = mneme_core_note_new(str_from("Test Note"), str_from("test-note.md"), str_from("abc123"));
+    store64(note, mneme_core_uuid_v4());
+    return note;
+}
+fn _note_i(i): i64 {
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "note-");
+    str_builder_add_int(pb, i);
+    str_builder_add_cstr(pb, ".md");
+    var note = mneme_core_note_new(str_from("Note"), str_builder_build(pb), str_from("h"));
+    store64(note, mneme_core_uuid_v4());
+    return note;
+}
+fn _has_str(v, cstr): i64 {
+    var i = 0;
+    while (i < vec_len(v)) { if (str_eq_cstr(vec_get(v, i), cstr) == 1) { return 1; } i = i + 1; }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("store_db");
+
+    # open_and_migrate
+    assert_eq(mneme_store_db_count_notes(_reset_db()), 0, "fresh db empty");
+
+    # insert_and_get_note
+    var db = _reset_db();
+    var note = _sample_note();
+    mneme_store_db_insert_note(db, note);
+    var fetched = mneme_store_db_get_note(db, mneme_core_note_id(note));
+    assert(fetched != 0, "note fetched");
+    assert_eq(mneme_core_uuid_eq(mneme_core_note_id(fetched), mneme_core_note_id(note)), 1, "id roundtrip");
+    assert(str_eq(mneme_core_note_title(fetched), str_from("Test Note")), "title");
+    assert(str_eq(mneme_core_note_path(fetched), str_from("test-note.md")), "path");
+
+    # get_note_by_path
+    var db3 = _reset_db();
+    var n3 = _sample_note();
+    mneme_store_db_insert_note(db3, n3);
+    assert_eq(mneme_core_uuid_eq(mneme_core_note_id(mneme_store_db_get_note_by_path(db3, str_from("test-note.md"))), mneme_core_note_id(n3)), 1, "get by path");
+
+    # get_note_not_found
+    assert_eq(mneme_store_db_get_note(_reset_db(), mneme_core_uuid_v4()), 0, "not found -> 0");
+
+    # list_notes_with_pagination
+    var db5 = _reset_db();
+    var i = 0;
+    while (i < 5) { mneme_store_db_insert_note(db5, _note_i(i)); i = i + 1; }
+    assert_eq(vec_len(mneme_store_db_list_notes(db5, 100, 0)), 5, "list all 5");
+    assert_eq(vec_len(mneme_store_db_list_notes(db5, 2, 0)), 2, "list limit 2");
+    assert_eq(vec_len(mneme_store_db_list_notes(db5, 100, 3)), 2, "list offset 3 -> 2");
+
+    # update_note
+    var db6 = _reset_db();
+    var n6 = _sample_note();
+    mneme_store_db_insert_note(db6, n6);
+    mneme_store_db_update_note(db6, mneme_core_note_id(n6), str_from("Updated Title"), str_from("newhash"));
+    var f6 = mneme_store_db_get_note(db6, mneme_core_note_id(n6));
+    assert(str_eq(mneme_core_note_title(f6), str_from("Updated Title")), "updated title");
+    assert(str_eq(mneme_core_note_content_hash(f6), str_from("newhash")), "updated hash");
+
+    # update_note_not_found
+    assert_eq(mneme_store_db_update_note(_reset_db(), mneme_core_uuid_v4(), str_from("t"), str_from("h")), 0, "update missing -> 0");
+
+    # delete_note
+    var db8 = _reset_db();
+    var n8 = _sample_note();
+    mneme_store_db_insert_note(db8, n8);
+    mneme_store_db_delete_note(db8, mneme_core_note_id(n8));
+    assert_eq(mneme_store_db_count_notes(db8), 0, "deleted -> count 0");
+
+    # delete_note_not_found
+    assert_eq(mneme_store_db_delete_note(_reset_db(), mneme_core_uuid_v4()), 0, "delete missing -> 0");
+
+    # touch_note
+    var db10 = _reset_db();
+    var n10 = _sample_note();
+    mneme_store_db_insert_note(db10, n10);
+    var before = mneme_core_note_last_accessed(mneme_store_db_get_note(db10, mneme_core_note_id(n10)));
+    mneme_store_db_touch_note(db10, mneme_core_note_id(n10));
+    var after = mneme_core_note_last_accessed(mneme_store_db_get_note(db10, mneme_core_note_id(n10)));
+    assert_gte(after, before, "touch bumps last_accessed");
+
+    # count_notes
+    var db11 = _reset_db();
+    assert_eq(mneme_store_db_count_notes(db11), 0, "count 0");
+    mneme_store_db_insert_note(db11, _sample_note());
+    assert_eq(mneme_store_db_count_notes(db11), 1, "count 1");
+
+    # tag_operations
+    var db12 = _reset_db();
+    var tag = mneme_store_db_get_or_create_tag(db12, str_from("rust"));
+    assert(str_eq(mneme_store_tag_name(tag), str_from("rust")), "tag name");
+    var tag2 = mneme_store_db_get_or_create_tag(db12, str_from("rust"));
+    assert_eq(mneme_core_uuid_eq(mneme_store_tag_id(tag), mneme_store_tag_id(tag2)), 1, "idempotent tag id");
+    assert_eq(vec_len(mneme_store_db_list_tags(db12)), 1, "one tag");
+
+    # delete_tag
+    var db13 = _reset_db();
+    var t13 = mneme_store_db_get_or_create_tag(db13, str_from("ephemeral"));
+    mneme_store_db_delete_tag(db13, mneme_store_tag_id(t13));
+    assert_eq(vec_len(mneme_store_db_list_tags(db13)), 0, "tag deleted");
+
+    # delete_tag_not_found
+    assert_eq(mneme_store_db_delete_tag(_reset_db(), mneme_core_uuid_v4()), 0, "delete missing tag -> 0");
+
+    # note_tag_associations
+    var db15 = _reset_db();
+    var n15 = _sample_note();
+    mneme_store_db_insert_note(db15, n15);
+    var t1 = mneme_store_db_get_or_create_tag(db15, str_from("rust"));
+    var t2 = mneme_store_db_get_or_create_tag(db15, str_from("programming"));
+    mneme_store_db_tag_note(db15, mneme_core_note_id(n15), mneme_store_tag_id(t1));
+    mneme_store_db_tag_note(db15, mneme_core_note_id(n15), mneme_store_tag_id(t2));
+    var nt = mneme_store_db_get_note_tags(db15, mneme_core_note_id(n15));
+    assert_eq(vec_len(nt), 2, "2 note tags");
+    assert_eq(_has_str(nt, "rust"), 1, "has rust");
+    assert_eq(_has_str(nt, "programming"), 1, "has programming");
+    mneme_store_db_untag_note(db15, mneme_core_note_id(n15), mneme_store_tag_id(t1));
+    assert_eq(vec_len(mneme_store_db_get_note_tags(db15, mneme_core_note_id(n15))), 1, "1 after untag");
+    mneme_store_db_clear_note_tags(db15, mneme_core_note_id(n15));
+    assert_eq(vec_len(mneme_store_db_get_note_tags(db15, mneme_core_note_id(n15))), 0, "0 after clear");
+
+    # link_operations
+    var db16 = _reset_db();
+    var na = _sample_note();
+    var nb = _sample_note();
+    store64(nb + 16, str_from("note2.md"));
+    store64(nb + 8, str_from("Note 2"));
+    mneme_store_db_insert_note(db16, na);
+    mneme_store_db_insert_note(db16, nb);
+    var link = mneme_core_link_new(mneme_core_note_id(na), mneme_core_note_id(nb), str_from("see also"), str_from("Related work"));
+    mneme_store_db_insert_link(db16, link);
+    var outg = mneme_store_db_get_outgoing_links(db16, mneme_core_note_id(na));
+    assert_eq(vec_len(outg), 1, "1 outgoing link");
+    assert_eq(mneme_core_uuid_eq(mneme_core_link_target_id(vec_get(outg, 0)), mneme_core_note_id(nb)), 1, "outgoing target");
+    var back = mneme_store_db_get_backlinks(db16, mneme_core_note_id(nb));
+    assert_eq(vec_len(back), 1, "1 backlink");
+    assert_eq(mneme_core_uuid_eq(mneme_store_backlink_source_id(vec_get(back, 0)), mneme_core_note_id(na)), 1, "backlink source");
+    assert(str_eq(mneme_store_backlink_source_title(vec_get(back, 0)), str_from("Test Note")), "backlink title");
+    assert_eq(vec_len(mneme_store_db_list_all_links(db16)), 1, "1 total link");
+    mneme_store_db_clear_note_links(db16, mneme_core_note_id(na));
+    assert_eq(vec_len(mneme_store_db_get_outgoing_links(db16, mneme_core_note_id(na))), 0, "links cleared");
+
+    # provenance_roundtrip
+    var db17 = _reset_db();
+    var n17 = _sample_note();
+    store64(n17 + 56, PROV_GENERATED);
+    store64(n17 + 64, 1);
+    store64(n17 + 72, f64_parse("0.5"));
+    mneme_store_db_insert_note(db17, n17);
+    var f17 = mneme_store_db_get_note(db17, mneme_core_note_id(n17));
+    assert_eq(mneme_core_note_provenance(f17), PROV_GENERATED, "provenance roundtrip");
+    assert_eq(mneme_core_note_trust_override_has(f17), 1, "trust has");
+    assert_eq(mneme_core_note_trust_override_val(f17), f64_parse("0.5"), "trust val 0.5");
+
+    # parse_datetime_rfc3339
+    var dt1 = mneme_store_parse_datetime(str_from("2026-03-18T12:00:00+00:00"));
+    assert_eq(mneme_store_datetime_year(dt1), 2026, "rfc3339 year");
+    assert_eq(mneme_store_datetime_month(dt1), 3, "rfc3339 month");
+
+    # parse_datetime_sqlite_format
+    assert_eq(mneme_store_datetime_year(mneme_store_parse_datetime(str_from("2026-03-18 12:00:00"))), 2026, "sqlite year");
+
+    # parse_datetime_invalid_returns_now
+    assert_gte(mneme_store_datetime_year(mneme_store_parse_datetime(str_from("not-a-date"))), 2026, "invalid -> now year");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

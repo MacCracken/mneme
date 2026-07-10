@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "mneme — AI-native knowledge base (Cyrius port, from 21014 lines of Rust)"
 license = "AGPL-3.0"
 language = "cyrius"
-cyrius = "6.4.34"
+cyrius = "6.4.35"
 
 [build]
 entry = "src/main.cyr"
