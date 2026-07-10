@@ -1,0 +1,94 @@
+# mneme-search query DSL tests — ported 1:1 from rust-old/crates/mneme-search/src/query_dsl.rs.
+include "src/search_query_dsl.cyr"
+
+fn _has(v, cstr): i64 {
+    var i = 0;
+    while (i < vec_len(v)) { if (str_eq_cstr(vec_get(v, i), cstr) == 1) { return 1; } i = i + 1; }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_group("search_query_dsl");
+
+    # plain_text_query
+    var q1 = mneme_search_parse_query(str_from("rust ownership borrowing"));
+    assert(str_eq(mneme_search_query_text(q1), str_from("rust ownership borrowing")), "plain text");
+    assert_eq(vec_len(mneme_search_tags_include(mneme_search_query_tags(q1))), 0, "no include tags");
+    assert_eq(mneme_search_query_temporal(q1), 0, "no temporal");
+
+    # tag_include
+    var q2 = mneme_search_parse_query(str_from("notes tagged #project AND #rust"));
+    assert_eq(_has(mneme_search_tags_include(mneme_search_query_tags(q2)), "project"), 1, "include project");
+    assert_eq(_has(mneme_search_tags_include(mneme_search_query_tags(q2)), "rust"), 1, "include rust");
+
+    # tag_exclude
+    var q3 = mneme_search_parse_query(str_from("#project NOT #archived"));
+    assert_eq(_has(mneme_search_tags_include(mneme_search_query_tags(q3)), "project"), 1, "include project");
+    assert_eq(_has(mneme_search_tags_exclude(mneme_search_query_tags(q3)), "archived"), 1, "exclude archived");
+
+    # temporal_last_week
+    var q4 = mneme_search_parse_query(str_from("notes edited last week about Rust"));
+    assert(mneme_search_query_temporal(q4) != 0, "has temporal");
+    assert(str_eq(mneme_search_temporal_field(mneme_search_query_temporal(q4)), str_from("edited")), "field edited");
+    assert(mneme_search_temporal_after(mneme_search_query_temporal(q4)) != 0, "after some");
+    assert(str_eq(mneme_search_query_text(q4), str_from("Rust")), "text Rust");
+
+    # temporal_last_n_days
+    var q5 = mneme_search_parse_query(str_from("notes last 30 days"));
+    assert(mneme_search_query_temporal(q5) != 0, "n days temporal");
+    assert(mneme_search_temporal_after(mneme_search_query_temporal(q5)) != 0, "n days after");
+
+    # temporal_older_than
+    var q6 = mneme_search_parse_query(str_from("stale notes older than 6 months"));
+    assert_eq(mneme_search_query_stale_only(q6), 1, "stale only");
+    assert(mneme_search_query_temporal(q6) != 0, "older temporal");
+    assert(mneme_search_temporal_before(mneme_search_query_temporal(q6)) != 0, "older before");
+
+    # graph_query
+    var q7 = mneme_search_parse_query(str_from("notes connected to Design within 3 hops"));
+    assert(mneme_search_query_graph(q7) != 0, "has graph");
+    assert(str_eq(mneme_search_graph_origin(mneme_search_query_graph(q7)), str_from("Design")), "graph origin");
+    assert_eq(mneme_search_graph_max_hops(mneme_search_query_graph(q7)), 3, "graph hops 3");
+
+    # combined_query
+    var q8 = mneme_search_parse_query(str_from("#rust NOT #archived last month Rust patterns"));
+    assert_eq(_has(mneme_search_tags_include(mneme_search_query_tags(q8)), "rust"), 1, "combined include");
+    assert_eq(_has(mneme_search_tags_exclude(mneme_search_query_tags(q8)), "archived"), 1, "combined exclude");
+    assert(mneme_search_query_temporal(q8) != 0, "combined temporal");
+    assert(str_eq(mneme_search_query_text(q8), str_from("Rust patterns")), "combined text");
+
+    # empty_query
+    var q9 = mneme_search_parse_query(str_from(""));
+    assert_eq(str_len(mneme_search_query_text(q9)), 0, "empty text");
+    assert_eq(vec_len(mneme_search_tags_include(mneme_search_query_tags(q9))), 0, "empty tags");
+    assert_eq(mneme_search_query_temporal(q9), 0, "empty temporal");
+
+    # limit_query
+    var q10 = mneme_search_parse_query(str_from("rust limit 5"));
+    assert_eq(mneme_search_query_limit(q10), 5, "limit 5");
+    assert(str_eq(mneme_search_query_text(q10), str_from("rust")), "limit text rust");
+
+    # stale_keyword
+    assert_eq(mneme_search_query_stale_only(mneme_search_parse_query(str_from("stale notes"))), 1, "stale keyword");
+
+    # temporal_last_n_weeks / n_months
+    assert(mneme_search_temporal_after(mneme_search_query_temporal(mneme_search_parse_query(str_from("notes last 2 weeks")))) != 0, "last 2 weeks");
+    assert(mneme_search_temporal_after(mneme_search_query_temporal(mneme_search_parse_query(str_from("notes last 3 months")))) != 0, "last 3 months");
+
+    # temporal_older_than_years
+    assert(mneme_search_temporal_before(mneme_search_query_temporal(mneme_search_parse_query(str_from("older than 1 year")))) != 0, "older 1 year");
+
+    # temporal_created_field / accessed_field
+    assert(str_eq(mneme_search_temporal_field(mneme_search_query_temporal(mneme_search_parse_query(str_from("created last week")))), str_from("created")), "created field");
+    assert(str_eq(mneme_search_temporal_field(mneme_search_query_temporal(mneme_search_parse_query(str_from("accessed last 7 days")))), str_from("accessed")), "accessed field");
+
+    # temporal_last_number_only / older_than_without_unit
+    assert(mneme_search_query_temporal(mneme_search_parse_query(str_from("notes last 5"))) != 0, "last 5 temporal");
+    assert(mneme_search_query_temporal(mneme_search_parse_query(str_from("older than 30"))) != 0, "older 30 temporal");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

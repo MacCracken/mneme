@@ -1,0 +1,222 @@
+# mneme-search — query DSL parser (ported from rust-old/crates/mneme-search/src/query_dsl.rs)
+# Zero-I/O. Parses NL queries into a StructuredQuery. Temporal after/before are stored
+# as epoch-seconds (0 = None; tests only check presence). Requires chrono (clock_epoch_secs).
+
+# --- helpers ---
+fn _qd_lower(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c >= 65 && c <= 90) { store8(buf + i, c + 32); } else { store8(buf + i, c); }
+        i = i + 1;
+    }
+    return str_new(buf, n);
+}
+fn _qd_parse_int(s: Str): i64 {
+    var n = str_len(s);
+    if (n == 0) { return 0 - 1; }
+    var d = str_data(s);
+    var val = 0;
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c < 48 || c > 57) { return 0 - 1; }
+        val = val * 10 + (c - 48);
+        i = i + 1;
+    }
+    return val;
+}
+fn _qd_starts_hash(w: Str): i64 { if (str_len(w) > 0 && load8(str_data(w)) == 35) { return 1; } return 0; }
+fn _qd_trim_hash(w: Str): i64 {
+    var n = str_len(w);
+    var i = 0;
+    while (i < n && load8(str_data(w) + i) == 35) { i = i + 1; }
+    return str_substr(w, i, n);
+}
+fn _qd_trim_end_s(s: Str): i64 {
+    var n = str_len(s);
+    if (n > 0 && load8(str_data(s) + n - 1) == 115) { return str_substr(s, 0, n - 1); }
+    return s;
+}
+fn _qd_trim_quotes(s: Str): i64 {
+    var n = str_len(s);
+    var start = 0;
+    var end = n;
+    if (n >= 1 && load8(str_data(s)) == 34) { start = 1; }
+    if (end > start && load8(str_data(s) + end - 1) == 34) { end = end - 1; }
+    return str_substr(s, start, end);
+}
+fn _qd_is_ws(c): i64 { if (c == 32 || c == 9 || c == 10 || c == 13) { return 1; } return 0; }
+fn _qd_words(input: Str): i64 {
+    var out = vec_new();
+    var n = str_len(input);
+    var d = str_data(input);
+    var i = 0;
+    while (i < n) {
+        while (i < n && _qd_is_ws(load8(d + i)) == 1) { i = i + 1; }
+        var start = i;
+        while (i < n && _qd_is_ws(load8(d + i)) == 0) { i = i + 1; }
+        if (i > start) { vec_push(out, str_substr(input, start, i)); }
+    }
+    return out;
+}
+fn _qd_is_noise(lower: Str): i64 {
+    if (str_eq_cstr(lower, "notes") == 1 || str_eq_cstr(lower, "about") == 1 || str_eq_cstr(lower, "from") == 1 || str_eq_cstr(lower, "the") == 1 || str_eq_cstr(lower, "with") == 1 || str_eq_cstr(lower, "edited") == 1 || str_eq_cstr(lower, "created") == 1 || str_eq_cstr(lower, "accessed") == 1) { return 1; }
+    return 0;
+}
+# detect the temporal field from words around `idx` (default "edited")
+fn _qd_detect_field(words, idx, len): i64 {
+    var start = idx - 3;
+    if (start < 0) { start = 0; }
+    var end = idx + 3;
+    if (end > len) { end = len; }
+    var i = start;
+    while (i < end) {
+        var w = _qd_lower(vec_get(words, i));
+        if (str_eq_cstr(w, "edited") == 1 || str_eq_cstr(w, "updated") == 1 || str_eq_cstr(w, "modified") == 1) { return str_from("edited"); }
+        if (str_eq_cstr(w, "created") == 1 || str_eq_cstr(w, "made") == 1 || str_eq_cstr(w, "new") == 1) { return str_from("created"); }
+        if (str_eq_cstr(w, "accessed") == 1 || str_eq_cstr(w, "viewed") == 1 || str_eq_cstr(w, "read") == 1 || str_eq_cstr(w, "opened") == 1) { return str_from("accessed"); }
+        i = i + 1;
+    }
+    return str_from("edited");
+}
+
+# --- accessors ---
+# StructuredQuery (48): [text@0, tags@8, temporal@16(0=None), graph@24(0=None), limit@32(-1=None), stale_only@40]
+fn mneme_search_query_text(q): i64 { return load64(q); }
+fn mneme_search_query_tags(q): i64 { return load64(q + 8); }
+fn mneme_search_query_temporal(q): i64 { return load64(q + 16); }
+fn mneme_search_query_graph(q): i64 { return load64(q + 24); }
+fn mneme_search_query_limit(q): i64 { return load64(q + 32); }
+fn mneme_search_query_stale_only(q): i64 { return load64(q + 40); }
+# TagFilter (16): [include@0, exclude@8]
+fn mneme_search_tags_include(t): i64 { return load64(t); }
+fn mneme_search_tags_exclude(t): i64 { return load64(t + 8); }
+# TemporalFilter (24): [field@0, after@8, before@16]
+fn mneme_search_temporal_field(t): i64 { return load64(t); }
+fn mneme_search_temporal_after(t): i64 { return load64(t + 8); }
+fn mneme_search_temporal_before(t): i64 { return load64(t + 16); }
+# GraphFilter (16): [origin@0, max_hops@8]
+fn mneme_search_graph_origin(g): i64 { return load64(g); }
+fn mneme_search_graph_max_hops(g): i64 { return load64(g + 8); }
+
+fn mneme_search_parse_query(input_raw: Str): i64 {
+    var q = alloc(48);
+    var tags = alloc(16);
+    store64(tags, vec_new());
+    store64(tags + 8, vec_new());
+    store64(q, str_from(""));
+    store64(q + 8, tags);
+    store64(q + 16, 0);
+    store64(q + 24, 0);
+    store64(q + 32, 0 - 1);
+    store64(q + 40, 0);
+
+    var input = str_trim(input_raw);
+    if (str_len(input) == 0) { return q; }
+    var include = load64(tags);
+    var exclude = load64(tags + 8);
+    var words = _qd_words(input);
+    var len = vec_len(words);
+    var remaining = vec_new();
+    var i = 0;
+    while (i < len) {
+        var word = vec_get(words, i);
+        var lower = _qd_lower(word);
+        if (_qd_starts_hash(word) == 1) {
+            var tag = _qd_trim_hash(word);
+            if (str_len(tag) > 0) { vec_push(include, tag); }
+            i = i + 1;
+        } elif ((str_eq_cstr(lower, "not") == 1 || str_eq_cstr(lower, "!") == 1) && i + 1 < len && _qd_starts_hash(vec_get(words, i + 1)) == 1) {
+            var tag2 = _qd_trim_hash(vec_get(words, i + 1));
+            if (str_len(tag2) > 0) { vec_push(exclude, tag2); }
+            i = i + 2;
+        } elif (str_eq_cstr(lower, "tagged") == 1 && i + 1 < len && _qd_starts_hash(vec_get(words, i + 1)) == 1) {
+            i = i + 1;
+        } elif (str_eq_cstr(lower, "and") == 1 || str_eq_cstr(lower, "or") == 1) {
+            i = i + 1;
+        } elif (str_eq_cstr(lower, "last") == 1 && i + 1 < len) {
+            var period = _qd_lower(vec_get(words, i + 1));
+            var dur_days = 0 - 1;
+            var skip_unit = 0;
+            if (str_eq_cstr(period, "week") == 1) { dur_days = 7; }
+            elif (str_eq_cstr(period, "month") == 1) { dur_days = 30; }
+            elif (str_eq_cstr(period, "year") == 1) { dur_days = 365; }
+            else {
+                var nn = _qd_parse_int(period);
+                if (nn >= 0) {
+                    if (i + 2 < len) {
+                        var unit = _qd_trim_end_s(_qd_lower(vec_get(words, i + 2)));
+                        if (str_eq_cstr(unit, "day") == 1) { dur_days = nn; skip_unit = 1; }
+                        elif (str_eq_cstr(unit, "week") == 1) { dur_days = nn * 7; skip_unit = 1; }
+                        elif (str_eq_cstr(unit, "month") == 1) { dur_days = nn * 30; skip_unit = 1; }
+                    } else { dur_days = nn; }
+                }
+            }
+            if (dur_days >= 0) {
+                var tf = alloc(24);
+                store64(tf, _qd_detect_field(words, i, len));
+                store64(tf + 8, clock_epoch_secs() - dur_days * 86400);
+                store64(tf + 16, 0);
+                store64(q + 16, tf);
+                if (skip_unit == 1) { i = i + 1; }
+                i = i + 2;
+            } else {
+                vec_push(remaining, word);
+                i = i + 1;
+            }
+        } elif (str_eq_cstr(lower, "older") == 1 && i + 2 < len && str_eq_cstr(_qd_lower(vec_get(words, i + 1)), "than") == 1 && _qd_parse_int(vec_get(words, i + 2)) >= 0) {
+            var onn = _qd_parse_int(vec_get(words, i + 2));
+            var ounit = str_from("days");
+            if (i + 3 < len) { ounit = _qd_lower(vec_get(words, i + 3)); }
+            ounit = _qd_trim_end_s(ounit);
+            var dd = onn;
+            if (str_eq_cstr(ounit, "week") == 1) { dd = onn * 7; }
+            elif (str_eq_cstr(ounit, "month") == 1) { dd = onn * 30; }
+            elif (str_eq_cstr(ounit, "year") == 1) { dd = onn * 365; }
+            var tfo = alloc(24);
+            store64(tfo, str_from("edited"));
+            store64(tfo + 8, 0);
+            store64(tfo + 16, clock_epoch_secs() - dd * 86400);
+            store64(q + 16, tfo);
+            i = i + 4;
+        } elif (str_eq_cstr(lower, "stale") == 1) {
+            store64(q + 40, 1);
+            i = i + 1;
+        } elif (str_eq_cstr(lower, "connected") == 1 && i + 2 < len && str_eq_cstr(_qd_lower(vec_get(words, i + 1)), "to") == 1) {
+            var origin = _qd_trim_quotes(vec_get(words, i + 2));
+            var hops = 2;
+            if (i + 4 < len && str_eq_cstr(_qd_lower(vec_get(words, i + 3)), "within") == 1 && _qd_parse_int(vec_get(words, i + 4)) >= 0) {
+                hops = _qd_parse_int(vec_get(words, i + 4));
+                i = i + 3;
+                if (i + 1 < len && str_eq_cstr(_qd_lower(vec_get(words, i)), "hops") == 1) { i = i + 1; }
+            }
+            var gf = alloc(16);
+            store64(gf, origin);
+            store64(gf + 8, hops);
+            store64(q + 24, gf);
+            i = i + 3;
+        } elif (str_eq_cstr(lower, "limit") == 1 && i + 1 < len && _qd_parse_int(vec_get(words, i + 1)) >= 0) {
+            store64(q + 32, _qd_parse_int(vec_get(words, i + 1)));
+            i = i + 2;
+        } elif (_qd_is_noise(lower) == 1) {
+            i = i + 1;
+        } else {
+            vec_push(remaining, word);
+            i = i + 1;
+        }
+    }
+    # text = remaining joined by ' '
+    var sb = str_builder_new();
+    var r = 0;
+    while (r < vec_len(remaining)) {
+        if (r > 0) { str_builder_putc(sb, 32); }
+        str_builder_add(sb, vec_get(remaining, r));
+        r = r + 1;
+    }
+    store64(q, str_builder_build(sb));
+    return q;
+}
