@@ -1,0 +1,74 @@
+# mneme-store files tests — ported 1:1 from rust-old/crates/mneme-store/src/files.rs.
+# 3 pure #[test]s + 6 #[tokio::test] fs tests (sync). Each fs test uses a fresh
+# temp vault under /tmp (unique counter suffix).
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/sigil.cyr"
+include "src/store_files.cyr"
+
+var _ftn = 0;
+fn _fresh_store(): i64 {
+    _ftn = _ftn + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_ft");
+    str_builder_add_int(pb, _ftn);
+    var fs = mneme_store_filestore_new(str_builder_build(pb));
+    mneme_store_filestore_init(fs);
+    return fs;
+}
+
+fn main() {
+    alloc_init();
+    test_group("store_files");
+
+    # hash_deterministic
+    var h1 = mneme_store_content_hash(str_from("hello world"));
+    var h2 = mneme_store_content_hash(str_from("hello world"));
+    assert(str_eq(h1, h2), "hash deterministic");
+    assert_eq(str_len(h1), 64, "hash 64 hex chars");
+
+    # hash_differs
+    assert_eq(str_eq(mneme_store_content_hash(str_from("a")), mneme_store_content_hash(str_from("b"))), 0, "hash differs");
+
+    # title_to_path_basic
+    assert(str_eq(mneme_store_title_to_path(str_from("Hello World")), str_from("hello-world.md")), "title basic");
+
+    # title_to_path_special_chars
+    assert(str_eq(mneme_store_title_to_path(str_from("What's New? (2026)")), str_from("what-s-new-2026.md")), "title special");
+
+    # title_to_path_collapses_hyphens
+    assert(str_eq(mneme_store_title_to_path(str_from("a   b")), str_from("a-b.md")), "title collapse");
+
+    # filestore_notes_dir
+    var fs1 = mneme_store_filestore_new(str_from("/tmp/mneme_ftND"));
+    assert(str_eq(mneme_store_filestore_notes_dir(fs1), str_from("/tmp/mneme_ftND/notes")), "notes_dir");
+
+    # filestore_write_and_read
+    var s2 = _fresh_store();
+    mneme_store_filestore_write_note(s2, str_from("test.md"), str_from("# Hello"));
+    assert(str_eq(mneme_store_filestore_read_note(s2, str_from("test.md")), str_from("# Hello")), "write then read");
+
+    # filestore_read_not_found
+    var s3 = _fresh_store();
+    assert_eq(mneme_store_filestore_read_note(s3, str_from("nonexistent.md")), 0, "read missing -> 0");
+
+    # filestore_delete
+    var s4 = _fresh_store();
+    mneme_store_filestore_write_note(s4, str_from("to-delete.md"), str_from("temp"));
+    assert_eq(mneme_store_filestore_exists(s4, str_from("to-delete.md")), 1, "exists before delete");
+    mneme_store_filestore_delete_note(s4, str_from("to-delete.md"));
+    assert_eq(mneme_store_filestore_exists(s4, str_from("to-delete.md")), 0, "gone after delete");
+
+    # filestore_delete_not_found
+    assert(mneme_store_filestore_delete_note(_fresh_store(), str_from("nonexistent.md")) != 0, "delete missing is error");
+
+    # filestore_write_subdirectory
+    var s6 = _fresh_store();
+    mneme_store_filestore_write_note(s6, str_from("subdir/nested.md"), str_from("nested content"));
+    assert(str_eq(mneme_store_filestore_read_note(s6, str_from("subdir/nested.md")), str_from("nested content")), "subdir write+read");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

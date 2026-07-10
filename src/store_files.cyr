@@ -1,0 +1,112 @@
+# mneme-store — file-backed Markdown storage (ported from rust-old/crates/mneme-store/src/files.rs)
+# FileStore over lib/io (file_read_all/write_all/exists) + sys_mkdir/sys_unlink;
+# content_hash via sigil sha256; title_to_path is pure. Async #[tokio::test]s → sync.
+# Requires: lib/sigil.cyr (sha256), fs (path_join/path_dirname), io, syscalls.
+
+fn _fs_cstr(s: Str): i64 {
+    var n = str_len(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(s), n);
+    store8(buf + n, 0);
+    return buf;
+}
+fn _fs_hexc(nib): i64 { if (nib < 10) { return 48 + nib; } return 87 + nib; }
+
+# mkdir -p: create `dir` and every parent (ignore EEXIST)
+fn _fs_mkdir_p(dir: Str): i64 {
+    var n = str_len(dir);
+    var d = str_data(dir);
+    var i = 1;
+    while (i <= n) {
+        if (i == n || load8(d + i) == 47) {
+            sys_mkdir(_fs_cstr(str_substr(dir, 0, i)), 493);   # 0755
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# FileStore (8 bytes): [notes_dir@0 (Str)]
+fn mneme_store_filestore_new(vault_root: Str): i64 {
+    var fs = alloc(8);
+    store64(fs, path_join(vault_root, str_from("notes")));
+    return fs;
+}
+fn mneme_store_filestore_notes_dir(fs): i64 { return load64(fs); }
+
+fn mneme_store_filestore_init(fs): i64 {
+    return _fs_mkdir_p(load64(fs));
+}
+# read Markdown content, or 0 (NotFound) on open failure
+fn mneme_store_filestore_read_note(fs, rel: Str): i64 {
+    var full = _fs_cstr(path_join(load64(fs), rel));
+    var buf = alloc(262144);
+    var n = file_read_all(full, buf, 262144);
+    if (n < 0) { return 0; }
+    return str_new(buf, n);
+}
+fn mneme_store_filestore_write_note(fs, rel: Str, content: Str): i64 {
+    var full = path_join(load64(fs), rel);
+    _fs_mkdir_p(path_dirname(full));
+    return file_write_all(_fs_cstr(full), str_data(content), str_len(content));
+}
+# delete; returns 0 on success, negative (e.g. -ENOENT) if not found
+fn mneme_store_filestore_delete_note(fs, rel: Str): i64 {
+    return sys_unlink(_fs_cstr(path_join(load64(fs), rel)));
+}
+fn mneme_store_filestore_exists(fs, rel: Str): i64 {
+    return file_exists(_fs_cstr(path_join(load64(fs), rel)));
+}
+
+# SHA-256 of content, hex-encoded (64 chars)
+fn mneme_store_content_hash(content: Str): i64 {
+    var out = alloc(32);
+    sha256(str_data(content), str_len(content), out);
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < 32) {
+        var b = load8(out + i);
+        str_builder_putc(sb, _fs_hexc((b >> 4) & 15));
+        str_builder_putc(sb, _fs_hexc(b & 15));
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+
+# title -> "<slug>.md" (alnum->lower, else '-', collapse '-' runs, trim trailing)
+fn mneme_store_title_to_path(title: Str): i64 {
+    var n = str_len(title);
+    var d = str_data(title);
+    var tmp = str_builder_new();
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if ((c >= 48 && c <= 57) || (c >= 97 && c <= 122)) { str_builder_putc(tmp, c); }
+        elif (c >= 65 && c <= 90) { str_builder_putc(tmp, c + 32); }
+        else { str_builder_putc(tmp, 45); }
+        i = i + 1;
+    }
+    var mapped = str_builder_build(tmp);
+    var mn = str_len(mapped);
+    var md = str_data(mapped);
+    var out = str_builder_new();
+    var start = 0;
+    var first = 1;
+    var k = 0;
+    while (k <= mn) {
+        var isend = 0;
+        if (k == mn) { isend = 1; }
+        elif (load8(md + k) == 45) { isend = 1; }
+        if (isend == 1) {
+            if (k > start) {
+                if (first == 0) { str_builder_putc(out, 45); }
+                str_builder_add(out, str_substr(mapped, start, k));
+                first = 0;
+            }
+            start = k + 1;
+        }
+        k = k + 1;
+    }
+    str_builder_add_cstr(out, ".md");
+    return str_builder_build(out);
+}
