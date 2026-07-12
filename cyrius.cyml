@@ -1,10 +1,10 @@
 [package]
 name = "mneme"
-version = "1.0.0"
+version = "${file:VERSION}"
 description = "mneme — AI-native knowledge base (Cyrius port, from 21014 lines of Rust)"
 license = "AGPL-3.0"
 language = "cyrius"
-cyrius = "6.4.42"
+cyrius = "6.4.56"
 
 [build]
 entry = "src/main.cyr"

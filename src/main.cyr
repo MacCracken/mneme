@@ -28,12 +28,25 @@ include "src/ui_render.cyr"
 include "src/ui_events.cyr"
 include "src/ui_terminal.cyr"
 
+# Resolve the vault root to a WRITABLE location. `/mneme` is the AGNOS canonical
+# mount, but a normal user on a portable host cannot create dirs under `/`, so a
+# bare launch there fails at patra open ("cannot open or create file"). Order:
+#   MNEME_VAULT (explicit) -> $HOME/.mneme (portable default) -> /mneme (AGNOS).
+fn _mneme_vault_dir(): i64 {
+    var mv = getenv("MNEME_VAULT");
+    if (mv != 0) { if (load8(mv) != 0) { return str_from(mv); } }
+    var home = getenv("HOME");
+    if (home != 0) { if (load8(home) != 0) { return path_join(str_from(home), str_from(".mneme")); } }
+    return str_from("/mneme");
+}
+
 fn main(): i64 {
     alloc_init();
     # live daimon embeddings when a server is reachable (degrades to full-text only)
     mneme_net_wire_embeddings();
-    var manager = mneme_store_manager_single(str_from("/mneme"));
-    var app = mneme_ui_app_new(manager, str_from("/mneme/models"));
+    var vault = _mneme_vault_dir();
+    var manager = mneme_store_manager_single(vault);
+    var app = mneme_ui_app_new(manager, path_join(vault, str_from("models")));
     mneme_ui_app_load_notes(app);
     mneme_ui_app_load_tags(app);
     mneme_ui_run(app);
