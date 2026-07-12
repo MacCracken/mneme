@@ -2,6 +2,24 @@
 
 All notable changes to Mneme will be documented in this file.
 
+## [1.0.1] — 2026-07-12
+
+**Launch repair.** A bare `mneme` launch off-AGNOS died immediately at patra open
+(`[ERROR] patra: cannot open or create file`) because `main.cyr` hardcoded the vault
+root to `/mneme` — an absolute path under `/` that a normal user cannot create.
+
+### Fixed
+- **Portable vault root** — `main.cyr` now resolves the vault to a writable location:
+  `MNEME_VAULT` (explicit) → `$HOME/.mneme` (portable default) → `/mneme` (the AGNOS
+  canonical mount, last resort). The store layer already `mkdir -p`'d the vault dir;
+  only the entrypoint's hardcoded root was wrong. The models dir moves with it
+  (`<vault>/models`). Verified: a bare launch now creates the vault and runs.
+
+### Changed
+- **Toolchain pin** `6.4.42` → `6.4.57` (`cyrius.cyml [package].cyrius`).
+- **`cyrius.cyml` version** now reads `${file:VERSION}` — the `VERSION` file is the
+  single source of truth (no inlined number to drift).
+
 ## [1.0.0] — 2026-07-10
 
 **Full Rust → Cyrius port.** The entire 21,014-LOC Rust workspace (`rust-old/`, the

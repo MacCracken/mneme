@@ -5,12 +5,18 @@
 
 ## Version
 
+**1.0.1** — launch repair (2026-07-12): the TUI vault root is now resolved to a
+WRITABLE location (`MNEME_VAULT` → `$HOME/.mneme` → `/mneme`) instead of the
+hardcoded `/mneme`, so a bare launch off-AGNOS no longer dies at patra open
+("cannot open or create file"). Toolchain pin refreshed; `cyrius.cyml` version now
+reads `${file:VERSION}` (single source of truth).
+
 **1.0.0** — ported from Rust (2026-07-09) via `cyrius port`. **21,014 lines** of
 Rust preserved at `rust-old/` (the full original workspace) for parity reference.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.4.42` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.4.57` (in `cyrius.cyml [package].cyrius`)
 
 ## Source
 
