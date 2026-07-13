@@ -65,5 +65,19 @@ fn main() {
     var mixed = _pv("[\"a\",7,\"b\"]");
     assert_eq(vec_len(_mcp_json_str_arr(mixed)), 2, "str-arr keeps only the 2 strings");
 
+    # --- _mcp_schema_json (1.1.1): a ToolSchema serializes to a VALID Anthropic input_schema, never a bare {} ---
+    # (a bare {} was omitted->{} before 1.1.1 and made an Anthropic-backed consumer reject the whole tools request).
+    var sb1 = str_builder_new();
+    _mcp_schema_json(sb1, _mcp_obj(_mcp_req2("title", "content")));
+    assert_eq(str_eq_cstr(str_builder_build(sb1), "{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"title\",\"content\"]}"), 1, "schema: required fields -> typed string props + required array");
+    var sb2 = str_builder_new();
+    _mcp_schema_json(sb2, _mcp_obj(_mcp_req0()));
+    assert_eq(str_eq_cstr(str_builder_build(sb2), "{\"type\":\"object\"}"), 1, "schema: no required -> minimal {type:object}");
+
+    # --- _mcp_reg_body (1.1.1): includes the real inputSchema, with callback_url BEFORE it (daimon's flat parser
+    #     reports "missing callback_url" if a nested object precedes it). ---
+    var body = _mcp_reg_body(str_from("mneme_create_note"), str_from("Create a note"), _mcp_obj(_mcp_req2("title", "content")), str_from("http://127.0.0.1:8100"));
+    assert_eq(str_eq_cstr(body, "{\"name\":\"mneme_create_note\",\"description\":\"Create a note\",\"callback_url\":\"http://127.0.0.1:8100\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"title\",\"content\"]}}"), 1, "reg body: callback_url before the real inputSchema (never a bare {})");
+
     return 0;
 }

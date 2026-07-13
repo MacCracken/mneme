@@ -170,9 +170,51 @@ fn _mcp_default_callback(port): i64 {
     return str_builder_build(sb);
 }
 
-# _mcp_reg_body: {"name","description","callback_url"} for daimon's POST /v1/mcp/tools. Escapes each field (the
-# description carries commas/periods and could carry quotes) via the mcp_protocol escaper.
-fn _mcp_reg_body(name: Str, desc: Str, cb: Str): i64 {
+# _mcp_schema_json: serialize a ToolSchema to a JSON input schema an Anthropic-backed consumer accepts. Anthropic
+# REQUIRES a tool's input_schema to be `{"type":"object", ...}`; a bare `{}` is invalid and makes the provider
+# reject the WHOLE tools request (the consumer sees an empty completion / a 502). mneme's note-tool args are all
+# strings, so each required field is emitted as a `{"type":"string"}` property plus the `required` array; a tool
+# with no required fields emits the minimal `{"type":"object"}`. (Before 1.1.1 the registration omitted the schema
+# entirely, so daimon advertised `{}` — see docs/development/issues/2026-07-13-mcp-tools-advertise-empty-inputschema.md.)
+fn _mcp_schema_json(sb, schema): i64 {
+    str_builder_add_cstr(sb, "{\"type\":\"");
+    _mcp_escape(sb, mneme_mcp_tool_schema_type(schema));   # "object"
+    str_builder_add_cstr(sb, "\"");
+    var req = mneme_mcp_tool_schema_required(schema);
+    if (req != 0) {
+        if (vec_len(req) > 0) {
+            str_builder_add_cstr(sb, ",\"properties\":{");
+            var i = 0;
+            while (i < vec_len(req)) {
+                if (i > 0) { str_builder_add_cstr(sb, ","); }
+                str_builder_add_cstr(sb, "\"");
+                _mcp_escape(sb, vec_get(req, i));
+                str_builder_add_cstr(sb, "\":{\"type\":\"string\"}");
+                i = i + 1;
+            }
+            str_builder_add_cstr(sb, "},\"required\":[");
+            var j = 0;
+            while (j < vec_len(req)) {
+                if (j > 0) { str_builder_add_cstr(sb, ","); }
+                str_builder_add_cstr(sb, "\"");
+                _mcp_escape(sb, vec_get(req, j));
+                str_builder_add_cstr(sb, "\"");
+                j = j + 1;
+            }
+            str_builder_add_cstr(sb, "]");
+        }
+    }
+    str_builder_add_cstr(sb, "}");
+    return 0;
+}
+
+# _mcp_reg_body: {"name","description","callback_url","inputSchema"} for daimon's POST /v1/mcp/tools. Escapes each
+# text field (the description carries commas/periods and could carry quotes) via the mcp_protocol escaper, and
+# serializes the tool's input schema (1.1.1 — previously omitted, so daimon stored a bare `{}`). NOTE the field
+# ORDER: `callback_url` MUST precede the nested `inputSchema` object — daimon's registration parser scans flatly for
+# `callback_url` and a preceding nested object makes it report "missing callback_url" (400). This matches the order
+# `scripts/stack.sh`'s tool registration uses; a more robust daimon parser is a separate upstream nicety.
+fn _mcp_reg_body(name: Str, desc: Str, schema, cb: Str): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "{\"name\":\"");
     _mcp_escape(sb, name);
@@ -180,7 +222,9 @@ fn _mcp_reg_body(name: Str, desc: Str, cb: Str): i64 {
     _mcp_escape(sb, desc);
     str_builder_add_cstr(sb, "\",\"callback_url\":\"");
     _mcp_escape(sb, cb);
-    str_builder_add_cstr(sb, "\"}");
+    str_builder_add_cstr(sb, "\",\"inputSchema\":");
+    _mcp_schema_json(sb, schema);
+    str_builder_add_cstr(sb, "}");
     return str_builder_build(sb);
 }
 
@@ -200,7 +244,7 @@ fn _mcp_self_register(port): i64 {
     var i = 0;
     while (i < vec_len(tools)) {
         var t = vec_get(tools, i);
-        var body = _mcp_reg_body(mneme_mcp_tool_def_name(t), mneme_mcp_tool_def_description(t), cbstr);
+        var body = _mcp_reg_body(mneme_mcp_tool_def_name(t), mneme_mcp_tool_def_description(t), mneme_mcp_tool_def_input_schema(t), cbstr);
         mneme_net_http_post_json(regurl, body, 0);          # fire-and-forget; daimon replies 201 {"ok":true}
         i = i + 1;
     }

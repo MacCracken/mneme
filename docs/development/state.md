@@ -5,6 +5,16 @@
 
 ## Version
 
+**1.1.1** — MCP self-registration sends the tool `inputSchema` (2026-07-13). The 1.1.0 `_mcp_reg_body`
+(`src/mcp_server.cyr`) POSTed only `name`/`description`/`callback_url` to daimon, **omitting the schema**, so daimon
+advertised every `mneme_*` tool with an empty `{}` — which is not a valid Anthropic `input_schema` (`{"type":"object",…}`
+required), so an Anthropic-backed consumer (thoth→hoosh) had its whole tools request rejected (empty completion /
+502) whenever mneme was in the registry. Registration now serializes the schema (new `_mcp_schema_json`:
+`{"type":"object"}` + typed-string `properties` + `required` for a tool's required fields) and orders `callback_url`
+**before** the nested `inputSchema` (daimon's flat parser 400s otherwise). Unit-tested (`tests/mcp_server.tcyr`) +
+live-verified (daimon advertises typed `mneme_*` schemas; a thoth full-registry agentic turn completes). Consumer
+thoth also hardened (0.34.2) to tolerate any empty/typeless schema. Toolchain pin `6.4.58`.
+
 **1.1.0** — served MCP endpoint (2026-07-12): **`mneme serve [port]`** (default 8100) runs an MCP endpoint over
 the existing in-process dispatch (`src/mcp_server.cyr`; socket + HTTP wire via sandhi, tool logic via
 `mneme_mcp_handle_tool_call`) so daimon can HOST mneme (external registration) and thoth's memory seam consumes it

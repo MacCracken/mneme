@@ -2,6 +2,29 @@
 
 All notable changes to Mneme will be documented in this file.
 
+## [1.1.1] — 2026-07-13
+
+**Fix: MCP self-registration now sends each tool's `inputSchema` (it was omitted, so daimon advertised a bare `{}`).**
+
+### Fixed
+- **`_mcp_self_register` / `_mcp_reg_body` (`src/mcp_server.cyr`) omitted the tool `inputSchema`** from the
+  registration payload it POSTs to daimon (`/v1/mcp/tools`) — it sent only `name`/`description`/`callback_url`.
+  So daimon advertised every `mneme_*` tool with an **empty `{}`** schema, even though mneme defines real ones
+  (`mcp_protocol.cyr`). An empty `{}` is **not** a valid Anthropic `input_schema` (it requires `{"type":"object",…}`),
+  so an Anthropic-backed consumer (thoth → hoosh) had its **whole** tools request rejected — surfacing downstream as
+  an empty completion (streaming) or HTTP 502 (block mode), making the agentic loop unusable whenever mneme was in
+  the registry. Registration now serializes the schema via a new **`_mcp_schema_json`**: `{"type":"object"}` plus,
+  for a tool with required fields, a `properties` map (each required arg typed as a string — mneme's note-tool args
+  are all strings) and the `required` array — e.g. `mneme_create_note` →
+  `{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"}},"required":["title","content"]}`.
+  The registration body also **orders `callback_url` before the nested `inputSchema`** — daimon's registration
+  parser scans flatly for `callback_url` and returns `400 missing callback_url` if a nested object precedes it
+  (matches the field order `daimon`/`stack.sh` registrations already use; a more robust daimon parser is a separate
+  upstream nicety). Unit-tested (`tests/mcp_server.tcyr`: the schema serializer + the registration body/ordering)
+  and **live-verified** end to end — daimon now advertises typed `mneme_*` schemas and a thoth agentic turn against
+  the full registry completes (was empty / 502). See
+  `docs/development/issues/2026-07-13-mcp-tools-advertise-empty-inputschema.md`.
+
 ## [1.1.0] — 2026-07-12
 
 **Served MCP endpoint — `mneme serve` — so mneme can be HOSTED by daimon (and consumed by thoth's memory seam).**
