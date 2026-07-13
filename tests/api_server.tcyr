@@ -37,12 +37,27 @@ include "src/io_export_pdf.cyr"
 include "src/api_server.cyr"
 
 var _apin = 0;
+# remove any files a prior run left under `root` so each _app() opens an empty
+# vault (hermetic — the fixed /tmp path persists notes + db.sqlite across runs,
+# which would otherwise make POST /notes 400 on a PathConflict on re-run).
+fn _wipe(root: Str): i64 {
+    var files = vec_new();
+    dir_walk(root, files);
+    var i = 0;
+    while (i < vec_len(files)) {
+        xunlink(str_cstr(vec_get(files, i)));
+        i = i + 1;
+    }
+    return 0;
+}
 fn _app(): i64 {
     _apin = _apin + 1;
     var pb = str_builder_new();
     str_builder_add_cstr(pb, "/tmp/mneme_api");
     str_builder_add_int(pb, _apin);
-    return mneme_api_vault_state_single(str_builder_build(pb), str_from("/nonexistent"));
+    var root = str_builder_build(pb);
+    _wipe(root);
+    return mneme_api_vault_state_single(root, str_from("/nonexistent"));
 }
 fn _req(app, method, path, body): i64 { return mneme_api_handle_request(app, str_from(method), path, str_from(body)); }
 fn _reqc(app, method, path, body): i64 { return mneme_api_handle_request(app, str_from(method), str_from(path), str_from(body)); }

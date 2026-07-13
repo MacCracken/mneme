@@ -1,0 +1,231 @@
+# src/mcp_server.cyr — mneme's served MCP endpoint (1.1.0).
+#
+# Turns mneme's in-process MCP dispatch into a network service so daimon can HOST it (external tool registration,
+# callback_url) and clients (thoth) reach mneme_* through daimon like any tool — the "mneme serves + daimon
+# registers" wiring. The socket/accept/recv is sandhi's (sandhi_server_run_opts); the HTTP wire is sandhi's
+# (sandhi_server_body_offset / _content_length / _send_response); the tool logic is the EXISTING
+# mneme_mcp_handle_tool_call (mcp_tools.cyr). New here: the JSON-RPC envelope parse, a JSON-object → mneme args-vec
+# converter (the one piece the in-process path never needed), the request handler, and self-registration.
+#
+# Contract (what daimon POSTs to the callback): a JSON-RPC 2.0 `tools/call` —
+#   {"jsonrpc":"2.0","id":<id>,"method":"tools/call","params":{"name":"mneme_search","arguments":{...}}}
+# We reply with mneme's JSON-RPC result ({"jsonrpc":"2.0","id":<id>,"result":{"content":[...],"isError":..}}).
+# daimon serves tools/list from its own registry (populated at registration), so the callback only needs
+# tools/call; any other method → JSON-RPC "method not found".
+
+# _mcp_str_to_cstr: a NUL-terminated heap cstr from a Str's (data,len). bayan keys/values may point INTO the parse
+# buffer (not NUL-terminated), so a raw str_data() would over-read — copy + terminate. Used for the arg KEY, which
+# mcp_args_put_* re-wraps via str_from (a cstr contract).
+fn _mcp_str_to_cstr(s): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var c = alloc(n + 1);
+    var i = 0;
+    while (i < n) { store8(c + i, load8(d + i)); i = i + 1; }
+    store8(c + n, 0);
+    return c;
+}
+
+# _mcp_json_str_arr: a JSON array value → a vec of Strs (the ARG_ARR shape the tool handlers iterate, e.g. tags).
+fn _mcp_json_str_arr(av): i64 {
+    var out = vec_new();
+    var n = bayan_json_v_arr_len(av);
+    var i = 0;
+    while (i < n) {
+        var e = bayan_json_v_arr_get(av, i);
+        if (bayan_json_v_is_str(e) == 1) { vec_push(out, bayan_json_v_str(e)); }
+        i = i + 1;
+    }
+    return out;
+}
+
+# _mcp_json_args: a JSON `arguments` object value → mneme's typed args-vec (mcp_args_new + put_str/int/arr). Bools/
+# floats/nulls/objects are skipped (no ARG_* kind — the 8 tools only read str/int/arr args). Absent/non-object → {}.
+fn _mcp_json_args(av): i64 {
+    var args = mcp_args_new();
+    if (av == 0) { return args; }
+    if (bayan_json_v_is_obj(av) == 0) { return args; }
+    var n = bayan_json_v_obj_len(av);
+    var i = 0;
+    while (i < n) {
+        var k = bayan_json_v_obj_key(av, i);
+        var vv = bayan_json_v_obj_val(av, i);
+        if (k != 0) {
+            var kc = _mcp_str_to_cstr(k);
+            if (bayan_json_v_is_str(vv) == 1) { mcp_args_put_str(args, kc, bayan_json_v_str(vv)); }
+            elif (bayan_json_v_is_int(vv) == 1) { mcp_args_put_int(args, kc, bayan_json_v_int(vv)); }
+            elif (bayan_json_v_is_arr(vv) == 1) { mcp_args_put_arr(args, kc, _mcp_json_str_arr(vv)); }
+        }
+        i = i + 1;
+    }
+    return args;
+}
+
+# _mcp_id_raw: the JSON-RPC id as a RAW token Str for mneme_mcp_success/error (which splice it verbatim after
+# `"id":`). A number → its decimal ("1"); a string → quoted ("\"abc\""); absent/other → "null". So the response id
+# echoes the request id in the correct JSON shape.
+fn _mcp_id_raw(id_v): i64 {
+    if (id_v == 0) { return str_from("null"); }
+    if (bayan_json_v_is_int(id_v) == 1) {
+        var sb = str_builder_new();
+        str_builder_add_int(sb, bayan_json_v_int(id_v));
+        return str_builder_build(sb);
+    }
+    if (bayan_json_v_is_str(id_v) == 1) {
+        var sb = str_builder_new();
+        str_builder_add_cstr(sb, "\"");
+        _mcp_escape(sb, bayan_json_v_str(id_v));   # escape: a string id with a " or \ must not break the response JSON
+        str_builder_add_cstr(sb, "\"");
+        return str_builder_build(sb);
+    }
+    return str_from("null");
+}
+
+# _mcp_srv_send: write a Str body as a 200 application/json response.
+fn _mcp_srv_send(cfd, resp: Str): i64 {
+    sandhi_server_send_response(cfd, 200, "OK", "application/json", str_data(resp), str_len(resp), 0);
+    return 0;
+}
+
+# _mcp_srv_handle: the sandhi request handler. ctx = the vault_state {manager@0, engines@8}. Parses the JSON-RPC
+# `tools/call`, converts the args, dispatches to mneme_mcp_handle_tool_call, and writes the JSON-RPC reply. Every
+# malformed-input path replies with a JSON-RPC error (never a bare/empty body), so a strict client always parses.
+fn _mcp_srv_handle(ctx, cfd, buf, blen): i64 {
+    var bo = sandhi_server_body_offset(buf, blen);
+    var body = 0;
+    var body_len = 0;
+    if (bo >= 0) {
+        var avail = blen - bo;
+        var cl = sandhi_server_content_length(buf, blen);
+        if (cl > 0) { if (cl < avail) { avail = cl; } }
+        if (avail > 0) { body = buf + bo; body_len = avail; }
+    }
+    if (body == 0) { _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(str_from("null"), 0 - 32700, str_from("Parse error: empty body"))); return 0; }
+    var root = bayan_json_v_parse_str(body, body_len);
+    if (root == 0) { _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(str_from("null"), 0 - 32700, str_from("Parse error"))); return 0; }
+    var id_raw = _mcp_id_raw(bayan_json_v_obj_get(root, "id"));
+    # method must be a STRING — bayan_json_v_is_str returns 0 for both absent AND wrong-type, so this one guard
+    # covers both. Without the type check a non-string method (5 / true / {} / []) would make bayan_json_v_str
+    # return 0 and str_eq_cstr(0,..) → str_len(0) → SIGSEGV, killing the single-threaded serve loop (remote DoS).
+    var method_v = bayan_json_v_obj_get(root, "method");
+    if (bayan_json_v_is_str(method_v) == 0) { _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(id_raw, 0 - 32600, str_from("Invalid Request: method missing or not a string"))); return 0; }
+    var method = bayan_json_v_str(method_v);
+    if (str_eq_cstr(method, "tools/call") == 0) {
+        _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(id_raw, 0 - 32601, str_from("Method not found (this endpoint serves tools/call; tools/list is daimon's registry)")));
+        return 0;
+    }
+    var params = bayan_json_v_obj_get(root, "params");
+    if (params == 0) { _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(id_raw, 0 - 32602, str_from("Invalid params"))); return 0; }
+    # params.name must be a STRING (same reason as method: a non-string → bayan_json_v_str 0 → tool=0 → the
+    # dispatcher's str_eq_cstr(0,..) → str_len(0) → SIGSEGV). One is_str guard covers absent + wrong-type.
+    var name_v = bayan_json_v_obj_get(params, "name");
+    if (bayan_json_v_is_str(name_v) == 0) { _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(id_raw, 0 - 32602, str_from("Invalid params: tool name missing or not a string"))); return 0; }
+    var tool = bayan_json_v_str(name_v);                          # a non-NUL Str; handle_tool_call str_eq_cstr's it (len-bounded, safe)
+    var args = _mcp_json_args(bayan_json_v_obj_get(params, "arguments"));
+    var manager = load64(ctx);
+    var engines = load64(ctx + 8);
+    _mcp_srv_send(cfd, mneme_mcp_handle_tool_call(id_raw, tool, args, manager, engines));
+    return 0;
+}
+
+# _mneme_vault_dir: resolve the vault root to a WRITABLE location. `/mneme` is the AGNOS canonical mount, but a
+# normal user on a portable host cannot create dirs under `/`, so a bare launch there fails at patra open. Order:
+# MNEME_VAULT (explicit) -> $HOME/.mneme (portable default) -> /mneme (AGNOS). Shared by the TUI (main.cyr) + serve.
+fn _mneme_vault_dir(): i64 {
+    var mv = getenv("MNEME_VAULT");
+    if (mv != 0) { if (load8(mv) != 0) { return str_from(mv); } }
+    var home = getenv("HOME");
+    if (home != 0) { if (load8(home) != 0) { return path_join(str_from(home), str_from(".mneme")); } }
+    return str_from("/mneme");
+}
+
+# --- vault state (inline; no api_server dep) --------------------------------------------------------------------
+# VaultState (16): [manager@0, engines@8 (vec of [vid, search, semantic, optimizer])]. Mirrors
+# mneme_api_vault_state_single but built here so serve does not pull in api_server's AI/IO router stack.
+fn _mcp_vault_state(vault_dir: Str, models_dir: Str): i64 {
+    var manager = mneme_store_manager_single(vault_dir);
+    var engines = vec_new();
+    var ov = mneme_store_manager_active(manager);
+    if (ov != 0) {
+        var e = alloc(32);
+        store64(e, load64(mneme_store_openvault_info(ov)));
+        store64(e + 8, mneme_search_engine_in_memory());
+        store64(e + 16, mneme_search_semantic_engine_disabled());
+        store64(e + 24, mneme_search_retrieval_optimizer_new());
+        vec_push(engines, e);
+    }
+    var vs = alloc(16);
+    store64(vs, manager);
+    store64(vs + 8, engines);
+    return vs;
+}
+
+# --- daimon self-registration ----------------------------------------------------------------------------------
+# _mcp_default_callback: http://127.0.0.1:<port> — the address daimon POSTs tools/call to (mneme ignores the path).
+# Override with MNEME_MCP_CALLBACK when daimon reaches mneme on a different host/name.
+fn _mcp_default_callback(port): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "http://127.0.0.1:");
+    str_builder_add_int(sb, port);
+    return str_builder_build(sb);
+}
+
+# _mcp_reg_body: {"name","description","callback_url"} for daimon's POST /v1/mcp/tools. Escapes each field (the
+# description carries commas/periods and could carry quotes) via the mcp_protocol escaper.
+fn _mcp_reg_body(name: Str, desc: Str, cb: Str): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"name\":\"");
+    _mcp_escape(sb, name);
+    str_builder_add_cstr(sb, "\",\"description\":\"");
+    _mcp_escape(sb, desc);
+    str_builder_add_cstr(sb, "\",\"callback_url\":\"");
+    _mcp_escape(sb, cb);
+    str_builder_add_cstr(sb, "\"}");
+    return str_builder_build(sb);
+}
+
+# _mcp_self_register: POST each of mneme's tool defs to daimon so daimon advertises them. Best-effort — a daimon
+# that is down/unset just means mneme serves standalone (register later); never fatal to serving. Gated on
+# MNEME_DAIMON_URL (daimon's base, e.g. http://127.0.0.1:8090).
+fn _mcp_self_register(port): i64 {
+    var durl = getenv("MNEME_DAIMON_URL");
+    if (durl == 0) { return 0; }
+    if (load8(durl) == 0) { return 0; }
+    var cb = getenv("MNEME_MCP_CALLBACK");
+    var cbstr = 0;
+    if (cb != 0) { if (load8(cb) != 0) { cbstr = str_from(cb); } }
+    if (cbstr == 0) { cbstr = _mcp_default_callback(port); }
+    var regurl = _net_join(str_from(durl), "/v1/mcp/tools");
+    var tools = mneme_mcp_tool_definitions();
+    var i = 0;
+    while (i < vec_len(tools)) {
+        var t = vec_get(tools, i);
+        var body = _mcp_reg_body(mneme_mcp_tool_def_name(t), mneme_mcp_tool_def_description(t), cbstr);
+        mneme_net_http_post_json(regurl, body, 0);          # fire-and-forget; daimon replies 201 {"ok":true}
+        i = i + 1;
+    }
+    return 0;
+}
+
+# _mcp_parse_port: a decimal cstr → port int (digits only); non-numeric / empty / <=0 → the 8100 default.
+fn _mcp_parse_port(s): i64 {
+    var p = 0;
+    var i = 0;
+    while (load8(s + i) != 0) {
+        var c = load8(s + i);
+        if ((c >= 48) && (c <= 57)) { p = p * 10 + (c - 48); }
+        i = i + 1;
+    }
+    if (p <= 0) { return 8100; }
+    return p;
+}
+
+# mneme_mcp_serve: open the vault, self-register with daimon (if configured), and run the sandhi accept loop until
+# killed. Returns sandhi's exit status. The models dir rides the vault (matches main.cyr's TUI setup).
+fn mneme_mcp_serve(port): i64 {
+    var vault = _mneme_vault_dir();
+    var vs = _mcp_vault_state(vault, path_join(vault, str_from("models")));
+    mneme_net_wire_embeddings();                            # live daimon embeddings when reachable (degrades to FTS)
+    _mcp_self_register(port);
+    return sandhi_server_run_opts(INADDR_ANY(), port, &_mcp_srv_handle, vs, 0);
+}

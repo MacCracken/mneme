@@ -1,0 +1,69 @@
+# mneme MCP server — pure-parse unit tests (1.1.0).
+# The socket / dispatch / self-register path is live-tested (mneme serve + curl through daimon); this covers the
+# NEW pure parsing the serve path adds: the JSON-RPC id token and the JSON-arguments → mneme args-vec converter.
+# main() calls only the pure fns, so mcp_server's socket/store/net refs stay unreachable (undefined-but-unreachable
+# → warnings, not errors — same as any topical mneme test that omits the full stack).
+include "lib/patra.cyr"
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/sigil.cyr"
+include "lib/bayan.cyr"
+include "src/core_uuid.cyr"
+include "src/core_note.cyr"
+include "src/core_link.cyr"
+include "src/core_config.cyr"
+include "src/core_frontmatter.cyr"
+include "src/store_db.cyr"
+include "src/store_files.cyr"
+include "src/store_registry.cyr"
+include "src/store_vault.cyr"
+include "src/store_manager.cyr"
+include "src/search_retrieval_optimizer.cyr"
+include "src/search_vector_store.cyr"
+include "src/search_embedding_backend.cyr"
+include "src/search_semantic_engine.cyr"
+include "src/search_engine.cyr"
+include "src/ai_client.cyr"
+include "src/net_http.cyr"
+include "src/mcp_protocol.cyr"
+include "src/mcp_tools.cyr"
+include "src/mcp_server.cyr"
+
+fn _pv(s) { return bayan_json_v_parse_str(s, strlen(s)); }
+
+fn main() {
+    alloc_init();
+    test_group("mcp_server pure parse (1.1.0)");
+
+    # --- _mcp_id_raw: number → decimal, string → QUOTED+ESCAPED, absent → null ---
+    # (Compare with str_eq_cstr, which is len-aware — bayan value Strs may point into the parse buffer + not be
+    #  NUL-terminated, so a cstr-based streq/assert_streq would over-read.)
+    assert_eq(str_eq_cstr(_mcp_id_raw(bayan_json_v_obj_get(_pv("{\"id\":7}"), "id")), "7"), 1, "id number -> 7");
+    assert_eq(str_eq_cstr(_mcp_id_raw(bayan_json_v_obj_get(_pv("{}"), "id")), "null"), 1, "id absent -> null");
+    # a string id carrying a quote must come back ESCAPED so it can't break the response JSON: a"b -> "a\"b"
+    assert_eq(str_eq_cstr(_mcp_id_raw(bayan_json_v_obj_get(_pv("{\"id\":\"a\\\"b\"}"), "id")), "\"a\\\"b\""), 1, "id string is quoted + escaped");
+
+    # --- _mcp_json_args: str / int / str-array → the typed args-vec the handlers read ---
+    var av = _pv("{\"title\":\"T\",\"content\":\"C\",\"limit\":5,\"tags\":[\"x\",\"y\"]}");
+    var args = _mcp_json_args(av);
+    assert_eq(str_eq_cstr(mcp_args_get_str(args, "title"), "T"), 1, "arg str title");
+    assert_eq(str_eq_cstr(mcp_args_get_str(args, "content"), "C"), 1, "arg str content");
+    assert_eq(mcp_args_get_int(args, "limit", 0), 5, "arg int limit");
+    var tags = mcp_args_get_arr(args, "tags");
+    assert_eq(vec_len(tags), 2, "arg arr: 2 tags");
+    assert_eq(str_eq_cstr(vec_get(tags, 0), "x"), 1, "arg arr[0] = x");
+    assert_eq(str_eq_cstr(vec_get(tags, 1), "y"), 1, "arg arr[1] = y");
+    # a missing key returns 0 (the handlers treat that as "not provided")
+    assert_eq(mcp_args_get_str(args, "nope"), 0, "missing arg -> 0");
+
+    # --- edge cases: absent / non-object arguments → an empty (non-null) args-vec (never a crash) ---
+    assert_eq(vec_len(_mcp_json_args(0)), 0, "null arguments -> empty args");
+    var arrv = _pv("[1,2]");
+    assert_eq(vec_len(_mcp_json_args(arrv)), 0, "array arguments -> empty args");
+
+    # --- _mcp_json_str_arr: only string elements survive (a non-string is skipped, no crash) ---
+    var mixed = _pv("[\"a\",7,\"b\"]");
+    assert_eq(vec_len(_mcp_json_str_arr(mixed)), 2, "str-arr keeps only the 2 strings");
+
+    return 0;
+}

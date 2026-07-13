@@ -5,6 +5,14 @@
 
 ## Version
 
+**1.1.0** — served MCP endpoint (2026-07-12): **`mneme serve [port]`** (default 8100) runs an MCP endpoint over
+the existing in-process dispatch (`src/mcp_server.cyr`; socket + HTTP wire via sandhi, tool logic via
+`mneme_mcp_handle_tool_call`) so daimon can HOST mneme (external registration) and thoth's memory seam consumes it
+— mneme as a served domain like hoosh. Adds a JSON-RPC envelope parse + a JSON→args-vec converter + daimon
+self-registration (POST the 8 tool defs on start when `MNEME_DAIMON_URL` is set). Live-verified end-to-end: thoth
+`/remember` → daimon → mneme round-trips a real note. Hardened against a remote DoS (non-string method/name null
+-deref, caught in adversarial review). Toolchain pin `6.4.57` → `6.4.58`.
+
 **1.0.1** — launch repair (2026-07-12): the TUI vault root is now resolved to a
 WRITABLE location (`MNEME_VAULT` → `$HOME/.mneme` → `/mneme`) instead of the
 hardcoded `/mneme`, so a bare launch off-AGNOS no longer dies at patra open
@@ -16,7 +24,7 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
 
 ## Toolchain
 
-- **Cyrius pin**: `6.4.57` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.4.58` (in `cyrius.cyml [package].cyrius`)
 
 ## Source
 

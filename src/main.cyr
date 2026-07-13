@@ -21,27 +21,29 @@ include "src/search_vector_store.cyr"
 include "src/search_embedding_backend.cyr"
 include "src/search_semantic_engine.cyr"
 include "src/search_engine.cyr"
+include "src/search_retrieval_optimizer.cyr"
 include "src/ai_client.cyr"
 include "src/net_http.cyr"
+include "src/mcp_protocol.cyr"
+include "src/mcp_tools.cyr"
+include "src/mcp_server.cyr"
 include "src/ui_app.cyr"
 include "src/ui_render.cyr"
 include "src/ui_events.cyr"
 include "src/ui_terminal.cyr"
 
-# Resolve the vault root to a WRITABLE location. `/mneme` is the AGNOS canonical
-# mount, but a normal user on a portable host cannot create dirs under `/`, so a
-# bare launch there fails at patra open ("cannot open or create file"). Order:
-#   MNEME_VAULT (explicit) -> $HOME/.mneme (portable default) -> /mneme (AGNOS).
-fn _mneme_vault_dir(): i64 {
-    var mv = getenv("MNEME_VAULT");
-    if (mv != 0) { if (load8(mv) != 0) { return str_from(mv); } }
-    var home = getenv("HOME");
-    if (home != 0) { if (load8(home) != 0) { return path_join(str_from(home), str_from(".mneme")); } }
-    return str_from("/mneme");
-}
-
 fn main(): i64 {
     alloc_init();
+    args_init();                                          # populate argv/argc (reads /proc/self/cmdline) before the subcommand check
+    # `mneme serve [port]` (1.1.0): run the MCP endpoint (socket over the in-process dispatch) so daimon can host
+    # mneme's tools — instead of the TUI. Same binary, mirroring thoth's `gui` subcommand.
+    var a1 = argv(1);
+    if (a1 != 0) { if (streq(a1, "serve") == 1) {
+        var port = 8100;
+        var pa = argv(2);
+        if (pa != 0) { if (load8(pa) != 0) { port = _mcp_parse_port(pa); } }
+        return mneme_mcp_serve(port);
+    } }
     # live daimon embeddings when a server is reachable (degrades to full-text only)
     mneme_net_wire_embeddings();
     var vault = _mneme_vault_dir();

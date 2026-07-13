@@ -2,6 +2,39 @@
 
 All notable changes to Mneme will be documented in this file.
 
+## [1.1.0] — 2026-07-12
+
+**Served MCP endpoint — `mneme serve` — so mneme can be HOSTED by daimon (and consumed by thoth's memory seam).**
+
+Mneme's MCP tools were in-process only (no socket). This adds a network endpoint over the *existing* dispatch so
+daimon can register mneme as an external tool (callback_url) and clients reach `mneme_*` through daimon — mneme as
+a served domain, like hoosh.
+
+### Added
+- **`mneme serve [port]`** (default 8100) — a new subcommand (same binary as the TUI, resolved via `argv`) that
+  runs an MCP endpoint. `src/mcp_server.cyr`: the socket/accept/recv + HTTP wire is sandhi's
+  (`sandhi_server_run_opts` / `sandhi_server_body_offset` / `sandhi_server_send_response`); the tool logic is the
+  existing `mneme_mcp_handle_tool_call`. New: a JSON-RPC 2.0 envelope parse, a JSON-arguments → mneme args-vec
+  converter, and the request handler. Serves `tools/call`; other methods → JSON-RPC "method not found" (daimon
+  serves `tools/list` from its own registry). Vault resolved via `_mneme_vault_dir()` (moved here from `main.cyr`;
+  shared with the TUI).
+- **Self-registration with daimon** — on serve start, if `MNEME_DAIMON_URL` is set, mneme POSTs its 8 tool defs to
+  daimon `/v1/mcp/tools` with `callback_url` = `MNEME_MCP_CALLBACK` or `http://127.0.0.1:<port>`. Best-effort: a
+  daimon that is down just means mneme serves standalone.
+- Unit test `tests/mcp_server.tcyr` (the pure parse: JSON-RPC id token, the args converter, edge cases); the
+  socket/dispatch/self-register path is verified live (thoth `/remember` → daimon → mneme round-trips a real note).
+
+### Fixed
+- **`args_init()` on startup** — `main()` now calls it after `alloc_init()` so `argv`/`argc` work (without it the
+  `serve` subcommand check saw no args and fell through to the TUI).
+- **Hardened the request handler against a remote DoS** (found in adversarial review): a non-string JSON-RPC
+  `method` or `params.name` made `bayan_json_v_str` return 0, then `str_eq_cstr(0, …)` null-dereferenced and
+  SIGSEGV'd the single-threaded serve loop. Now type-guarded (`bayan_json_v_is_str`) → a clean JSON-RPC error.
+  Also: a string JSON-RPC `id` is now JSON-escaped in the echoed response.
+
+### Changed
+- **Toolchain pin `6.4.57` → `6.4.58`**; vendored `lib/` refreshed via `cyrius lib sync`.
+
 ## [1.0.1] — 2026-07-12
 
 **Launch repair.** A bare `mneme` launch off-AGNOS died immediately at patra open

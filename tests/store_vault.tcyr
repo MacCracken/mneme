@@ -13,12 +13,28 @@ include "src/store_files.cyr"
 include "src/store_vault.cyr"
 
 var _vn = 0;
+# remove any files a prior run left under `root` so each _fresh_vault() is truly
+# fresh (hermetic — the fixed /tmp path persists notes + db.sqlite across runs; on
+# re-run the first create_note would hit the PathConflict guard, return 0, and the
+# next mneme_store_nwc_note(0) would segfault).
+fn _wipe(root: Str): i64 {
+    var files = vec_new();
+    dir_walk(root, files);
+    var i = 0;
+    while (i < vec_len(files)) {
+        xunlink(str_cstr(vec_get(files, i)));
+        i = i + 1;
+    }
+    return 0;
+}
 fn _fresh_vault(): i64 {
     _vn = _vn + 1;
     var pb = str_builder_new();
     str_builder_add_cstr(pb, "/tmp/mneme_vt");
     str_builder_add_int(pb, _vn);
-    return mneme_store_vault_open(str_builder_build(pb));
+    var root = str_builder_build(pb);
+    _wipe(root);
+    return mneme_store_vault_open(root);
 }
 fn _v2(a, b): i64 { var v = vec_new(); vec_push(v, a); vec_push(v, b); return v; }
 fn _v1(a): i64 { var v = vec_new(); vec_push(v, a); return v; }
