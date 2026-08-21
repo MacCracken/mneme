@@ -17,6 +17,19 @@ fn _cstr(s: Str): i64 {
     store8(buf + n, 0);
     return buf;
 }
+# Read the decimal integer starting at byte `from` — used to check that the
+# startxref offset points exactly at the "xref" keyword.
+fn _decat(s: Str, from): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = from;
+    var v = 0;
+    while (i < n && load8(d + i) >= 48 && load8(d + i) <= 57) {
+        v = v * 10 + load8(d + i) - 48;
+        i = i + 1;
+    }
+    return v;
+}
 fn _join(a: Str, b): i64 {
     var sb = str_builder_new();
     str_builder_add(sb, a);
@@ -71,12 +84,32 @@ fn main() {
     vec_push(tags5, str_from("test"));
     vec_push(tags5, str_from("pdf"));
     var path5 = _join(d5, "test.pdf");
-    mneme_io_export_note_to_pdf(note, path5, mneme_io_pdf_options_default());
+    assert_eq(mneme_io_export_note_to_pdf(note, path5, mneme_io_pdf_options_default()), 0, "single export returns 0 on success");
     assert_eq(file_exists(_cstr(path5)), 1, "single pdf exists");
     var buf = alloc(65536);
     var rn = file_read_all(_cstr(path5), buf, 65536);
     assert_eq(rn > 100, 1, "single pdf > 100 bytes");
-    assert_eq(str_index_of_cstr(str_new(buf, rn), "%PDF") == 0, 1, "single pdf %PDF header");
+    var pdf5 = str_new(buf, rn);
+    assert_eq(str_index_of_cstr(pdf5, "%PDF") == 0, 1, "single pdf %PDF header");
+    # "exists, >100 bytes, starts with %PDF" passes for almost any garbage, so
+    # also pin the structure and the actual note text. bayan's strict validator
+    # (scripts/pdfcheck.sh) is the full gate; these are the in-process tripwires.
+    assert_eq(str_index_of_cstr(pdf5, "/Type/Catalog") > 0, 1, "single pdf has catalog");
+    assert_eq(str_index_of_cstr(pdf5, "/Type/Page") > 0, 1, "single pdf has page object");
+    assert_eq(str_index_of_cstr(pdf5, "/BaseFont/Helvetica") > 0, 1, "single pdf has font");
+    assert_eq(str_index_of_cstr(pdf5, "trailer") > 0, 1, "single pdf has trailer");
+    assert_eq(str_index_of_cstr(pdf5, "%%EOF") > 0, 1, "single pdf has EOF marker");
+    # content actually rendered, not just a well-formed empty shell
+    assert_eq(str_index_of_cstr(pdf5, "Test Note") > 0, 1, "single pdf contains title text");
+    assert_eq(str_index_of_cstr(pdf5, "code block") > 0, 1, "single pdf contains code text");
+    # Byte-accurate xref: startxref must land exactly on the "xref" keyword. An
+    # off-by-one here is invisible in poppler/mupdf, which rebuild the table by
+    # scanning for "N 0 obj" — so only an exact check catches a regression.
+    var sx = str_index_of_cstr(pdf5, "startxref");
+    assert_eq(sx > 0, 1, "single pdf has startxref");
+    var xo = _decat(pdf5, sx + 10);
+    assert_eq(xo > 0 && xo < rn, 1, "startxref offset in range");
+    assert_eq(memeq(buf + xo, "xref", 4), 1, "startxref offset points at xref keyword");
 
     # export_multiple_pdfs
     var d6 = _dir();
@@ -101,8 +134,63 @@ fn main() {
     }
     var lnote = mneme_io_pdf_note_new(str_from("Long Note"), str_builder_build(lb), vec_new());
     var lpath = _join(d7, "long.pdf");
-    mneme_io_export_note_to_pdf(lnote, lpath, mneme_io_pdf_options_default());
+    assert_eq(mneme_io_export_note_to_pdf(lnote, lpath, mneme_io_pdf_options_default()), 0, "long export returns 0 on success");
     assert_eq(file_exists(_cstr(lpath)), 1, "long pdf exists");
+
+    # ── regression: unterminated ``` fence (docs/adr/015-unterminated-code-fence.md)
+    # Input ending mid-fence used to drop code_buf entirely — every line after the
+    # stray fence vanished from the PDF with no diagnostic. rust-old has the same
+    # bug; this is a deliberate divergence.
+    var uf = mneme_io_parse_markdown_blocks(str_from("intro\n```\ncode\nmore code\nTAIL TEXT\n"));
+    assert_eq(vec_len(uf), 2, "unterminated fence keeps both blocks");
+    # gate the indexed asserts: on a regression the block is missing entirely and
+    # a bare vec_get(uf, 1) aborts the whole run instead of reporting a failure
+    if (vec_len(uf) == 2) {
+        assert_eq(mneme_io_md_block_kind(vec_get(uf, 0)), MD_PARAGRAPH, "unterminated block0 paragraph");
+        assert_eq(mneme_io_md_block_kind(vec_get(uf, 1)), MD_CODE, "unterminated tail flushed as code");
+        assert_eq(str_index_of_cstr(mneme_io_md_block_text(vec_get(uf, 1)), "TAIL TEXT") >= 0, 1, "unterminated fence keeps trailing text");
+    }
+    assert_eq(mneme_io_md_unterminated_fence(), 1, "unterminated fence is reported");
+
+    # a properly closed fence must NOT raise the diagnostic
+    mneme_io_parse_markdown_blocks(str_from("text\n```\ncode line\n```\nmore text"));
+    assert_eq(mneme_io_md_unterminated_fence(), 0, "closed fence is not reported");
+
+    # a bare trailing fence swallows no content — flagged, but no empty block
+    var bf = mneme_io_parse_markdown_blocks(str_from("only\n```"));
+    assert_eq(vec_len(bf), 1, "bare trailing fence adds no empty block");
+    assert_eq(mneme_io_md_unterminated_fence(), 1, "bare trailing fence is reported");
+
+    # ── regression: the flushed tail must reach the PDF bytes, not just the blocks
+    var d8 = _dir();
+    sys_mkdir(_cstr(d8), 493);
+    var fnote = mneme_io_pdf_note_new(str_from("Fence Note"), str_from("intro\n```\ncode\nTAIL TEXT\n"), vec_new());
+    var fpath = _join(d8, "fence.pdf");
+    assert_eq(mneme_io_export_note_to_pdf(fnote, fpath, mneme_io_pdf_options_default()), 0, "fence note exports");
+    var fbuf = alloc(65536);
+    var frn = file_read_all(_cstr(fpath), fbuf, 65536);
+    assert_eq(str_index_of_cstr(str_new(fbuf, frn), "TAIL TEXT") >= 0, 1, "fence tail present in exported PDF");
+
+    # ── regression: write failures must reach the caller, not report success
+    # A regular file cannot be a parent directory, so every path below it fails
+    # with ENOTDIR — true on every platform and even when tests run as root,
+    # unlike a permission-based or "surely-missing" path.
+    var blocker = _join(d8, "blocker");
+    file_write_all(_cstr(blocker), str_data(str_from("x")), 1);
+    var bad = mneme_io_pdf_note_new(str_from("Bad"), str_from("body"), vec_new());
+    assert_eq(mneme_io_export_note_to_pdf(bad, _join(blocker, "x.pdf"), mneme_io_pdf_options_default()) < 0, 1, "single export propagates write failure");
+    assert_eq(file_exists(_cstr(_join(blocker, "x.pdf"))), 0, "failed single export wrote nothing");
+    var bnotes = vec_new();
+    vec_push(bnotes, bad);
+    assert_eq(mneme_io_export_notes_to_pdf(bnotes, _join(blocker, "sub"), mneme_io_pdf_options_default()) < 0, 1, "batch export propagates mkdir failure");
+
+    # ── xmkdir_p (stdlib 6.5.7+) replaces a one-level sys_mkdir: nested output
+    # dirs now work, and re-exporting into an existing dir is not an error.
+    var d9 = _dir();
+    var nested = _join(d9, "a/b/c");
+    assert_eq(mneme_io_export_notes_to_pdf(notes, nested, mneme_io_pdf_options_default()), 2, "batch export creates nested dirs");
+    assert_eq(file_exists(_cstr(_join(nested, "note-one.pdf"))), 1, "nested note-one.pdf exists");
+    assert_eq(mneme_io_export_notes_to_pdf(notes, nested, mneme_io_pdf_options_default()), 2, "re-export into existing dir succeeds");
 
     return assert_summary();
 }

@@ -45,7 +45,6 @@ fn _macho_argv_base() {
     #endif
 }
 
-
 # On Linux the equivalent fn reads /proc/self/cmdline; on macOS the entry
 # landing park (arm64 x28 / x86 r15) has already captured the init stack, so
 # args_init is a no-op. Kept in the public API so caller code stays portable.

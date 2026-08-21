@@ -267,6 +267,21 @@ fn async_wait_fd(rt, fd): i64 {
     return 0;
 }
 
+# v6.5.26 — read-OR-write wait (agnos): no epoll, and reads block, so parking is a no-op
+# exactly like async_wait_fd / async_wait_writable above. Present so a consumer written
+# against the epoll backend still links and runs on agnos.
+fn async_wait_rw(rt, fd): i64 {
+    return 0;
+}
+
+# v6.5.26 — one direction of a byte relay (agnos). The blocking read IS the wait on this
+# target, so this is the epoll body minus the park. Returns bytes WRITTEN, 0 on clean EOF.
+fn async_relay_once(rt, rfd, wfd, buf, len): i64 {
+    var n = sys_read(rfd, buf, len);
+    if (n <= 0) { return n; }
+    return sys_write(wfd, buf, n);
+}
+
 # Run `fp(arg)` with a timeout. AGNOS has no fork, so there is no second
 # process to bound; run the body INLINE (serial — mirrors thread_agnos.cyr's
 # inline-body model) and return its result. `ms` is advisory / ignored here.

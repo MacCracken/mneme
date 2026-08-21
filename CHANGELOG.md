@@ -2,6 +2,71 @@
 
 All notable changes to Mneme will be documented in this file.
 
+## [1.1.2] — 2026-08-21
+
+**Fix: the PDF exporter silently lost note content — an unterminated ``` fence dropped everything after it, and
+every write failure reported success. Toolchain moved to Cyrius `6.5.33`.**
+
+### Fixed
+- **`mneme_io_parse_markdown_blocks` (`src/io_export_pdf.cyr`) dropped an unterminated code fence entirely.**
+  When the input ended while `in_code` was still 1 — a plain typo — the parse loop exited without flushing
+  `code_buf`, so **every line after the stray fence was absent from the exported PDF**: no error, no warning, and a
+  structurally valid file that opens fine. `"intro\n```\ncode\nmore code\nEVERYTHING AFTER IS LOST\n"` produced
+  exactly one block (`TEXT "intro"`) and discarded the other four lines. The parser now flushes a trailing open
+  fence as an `MD_CODE` block — the same shape a closing fence produces — so no input line can be dropped, and
+  records the malformed input in a new **`mneme_io_md_unterminated_fence()`** (module-global + accessor, bayan's
+  `bayan_json_last_error()` idiom) so callers can warn rather than accept it silently. A bare trailing ```` ``` ````
+  swallows nothing and so adds no empty block. This is a **deliberate divergence from `rust-old/`**, which has the
+  identical bug at `crates/mneme-io/src/export_pdf.rs:247-291` — see
+  [`docs/adr/015-unterminated-code-fence.md`](docs/adr/015-unterminated-code-fence.md).
+- **`mneme_io_export_note_to_pdf` reported success for every failed write.** It discarded `file_write_all`'s
+  result and returned 0 unconditionally, so a full disk, an unwritable path, and a missing directory were all
+  indistinguishable from a successful export while nothing reached disk. It now returns 0 only when the whole
+  buffer was written, else the negative errno from open/write, or `-5` (EIO) for a short write — a truncated,
+  unopenable PDF must not read as success. Rust returned `Result<(), IoError>` here.
+- **`mneme_io_export_notes_to_pdf` counted every attempt as a success.** It discarded `sys_mkdir`'s result and
+  incremented `count` per note regardless of outcome, so an uncreatable output directory reported every note as
+  exported with zero files written. It now propagates the first failure (directory creation or any note's write)
+  as a negative return, matching Rust's `?` on `create_dir_all` + `export_note_to_pdf`, and returns the count only
+  on full success. The bare one-level `sys_mkdir` is replaced by the stdlib's **`xmkdir_p`** (6.5.7+), which is
+  `create_dir_all`'s equivalent — so a **nested** output directory now works (it previously failed) and
+  re-exporting into an existing directory is not an error.
+- **`tests/mcp_server.tcyr` could not fail the build.** It ended `return 0` instead of `return assert_summary()`
+  — the only test file that did — so its 16 assertions ran but a failure was never reported to the harness.
+- **`scripts/bump-version.sh` was broken.** It sed-ed `Cargo.toml`, left over from the Rust original; no
+  `Cargo.toml` has existed since the port, so `set -euo pipefail` made the script fail outright. Rewritten for the
+  Cyrius layout, where `VERSION` is the single source of truth (`cyrius.cyml` reads `${file:VERSION}`), with
+  `major`/`minor`/`patch` bumps.
+
+### Changed
+- **Toolchain pin `6.4.58` → `6.5.33`**, and `lib/` re-resolved via `cyrius deps` (51 stdlib modules updated).
+  CI installs from the `cyrius.cyml [package].cyrius` pin, so this flows through with no workflow edit.
+- **bayan renamed `bayan_json_v_parse_str` → `bayan_json_v_parse_buf`** (bayan 1.3.0): the `X_str` suffix is
+  reserved for "the Str-taking variant of X", and a cstr+len form occupying that name was being silently
+  mis-dispatched from 1-arg `bayan_json_v_parse(someStr)` call sites across the ecosystem. Updated the two mneme
+  call sites (`src/mcp_server.cyr`, `tests/mcp_server.tcyr`); both pass a raw pointer + length, so this is a
+  straight rename with no behavior change.
+
+### Added
+- **[`docs/adr/015-unterminated-code-fence.md`](docs/adr/015-unterminated-code-fence.md)** — records the
+  deliberate divergence from the `rust-old/` parity oracle, per the "diverge only with an ADR" rule in `CLAUDE.md`.
+  The ADR index in `docs/adr/README.md` (which still read "No ADRs yet" alongside 14 committed ADRs) is now
+  populated, and its stated filename convention corrected to the three-digit form every file on disk already uses.
+- **`scripts/pdfcheck.sh`** — an acceptance gate over bayan's strict, dependency-free PDF validator
+  (`bayan/scripts/pdfcheck.py`), reused rather than vendored so both ports are gated by one oracle. Unlike
+  poppler/mupdf — which rebuild a broken xref by scanning for `N 0 obj` and so hide exactly this class of bug — it
+  checks every offset, `/Length` and `/Size` against the actual bytes. All 7 fixtures the test suite emits pass,
+  including the 5-page/13-object case. Warns and skips when bayan is not checked out; `--strict` makes that fatal.
+- **`tests/io_export_pdf.tcyr` strengthened from 21 assertions to 49.** The previous tests asserted only that the
+  file existed, exceeded 100 bytes, and began with `%PDF` — true of almost any garbage, and unable to catch either
+  bug above. Added: regression cover for both fixes (blocks, the diagnostic flag, the recovered text in the
+  exported PDF bytes, and both error-propagation paths); structural assertions (`/Type/Catalog`, `/Type/Page`,
+  font, `trailer`, `%%EOF`); the note's own text surviving into the content stream; and a **byte-accurate xref
+  check** that `startxref` points exactly at the `xref` keyword. Verified to actually catch the regressions: the
+  new suite fails 7 assertions against the pre-fix code and passes 49/49 after. Failure paths use a regular file as
+  a blocked parent (ENOTDIR on every platform, and valid even when tests run as root) rather than a
+  permission-based or presumed-missing path.
+
 ## [1.1.1] — 2026-07-13
 
 **Fix: MCP self-registration now sends each tool's `inputSchema` (it was omitted, so daimon advertised a bare `{}`).**

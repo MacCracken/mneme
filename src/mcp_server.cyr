@@ -101,7 +101,7 @@ fn _mcp_srv_handle(ctx, cfd, buf, blen): i64 {
         if (avail > 0) { body = buf + bo; body_len = avail; }
     }
     if (body == 0) { _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(str_from("null"), 0 - 32700, str_from("Parse error: empty body"))); return 0; }
-    var root = bayan_json_v_parse_str(body, body_len);
+    var root = bayan_json_v_parse_buf(body, body_len);
     if (root == 0) { _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(str_from("null"), 0 - 32700, str_from("Parse error"))); return 0; }
     var id_raw = _mcp_id_raw(bayan_json_v_obj_get(root, "id"));
     # method must be a STRING — bayan_json_v_is_str returns 0 for both absent AND wrong-type, so this one guard

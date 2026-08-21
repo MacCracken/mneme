@@ -29,7 +29,7 @@ include "src/mcp_protocol.cyr"
 include "src/mcp_tools.cyr"
 include "src/mcp_server.cyr"
 
-fn _pv(s) { return bayan_json_v_parse_str(s, strlen(s)); }
+fn _pv(s) { return bayan_json_v_parse_buf(s, strlen(s)); }
 
 fn main() {
     alloc_init();
@@ -79,5 +79,8 @@ fn main() {
     var body = _mcp_reg_body(str_from("mneme_create_note"), str_from("Create a note"), _mcp_obj(_mcp_req2("title", "content")), str_from("http://127.0.0.1:8100"));
     assert_eq(str_eq_cstr(body, "{\"name\":\"mneme_create_note\",\"description\":\"Create a note\",\"callback_url\":\"http://127.0.0.1:8100\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"title\",\"content\"]}}"), 1, "reg body: callback_url before the real inputSchema (never a bare {})");
 
-    return 0;
+    # Must be assert_summary(), not `return 0` — the summary's return value IS
+    # the failure count, and every other tests/*.tcyr uses it. With a bare 0 the
+    # assertions above still ran but a failure could never fail the build.
+    return assert_summary();
 }

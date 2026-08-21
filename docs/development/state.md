@@ -5,6 +5,22 @@
 
 ## Version
 
+**1.1.2** — PDF export silent-data-loss repair + toolchain `6.5.33` (2026-08-21). Two verified bugs in
+`src/io_export_pdf.cyr`, both silent: (a) `mneme_io_parse_markdown_blocks` never flushed an unterminated ``` fence,
+so **every line after a stray fence was dropped from the exported PDF** with no diagnostic and a valid-looking
+file — now flushed as an `MD_CODE` block plus a new `mneme_io_md_unterminated_fence()` diagnostic; a **deliberate
+divergence** from `rust-old/`, which carries the identical bug (ADR
+[`015`](../adr/015-unterminated-code-fence.md)). (b) `mneme_io_export_note_to_pdf` discarded `file_write_all`'s
+result and `mneme_io_export_notes_to_pdf` discarded `sys_mkdir`'s, so disk-full / bad-path / EACCES all reported
+success with nothing written — both now propagate, and the one-level `sys_mkdir` became the stdlib's `xmkdir_p`
+(= `create_dir_all`), so nested output dirs work and re-export is not an error. PDF tests strengthened 21 → 49
+assertions (they previously asserted only exists / >100 bytes / `%PDF`, and caught neither bug; the new suite
+fails 7 against the pre-fix code) and gated by `scripts/pdfcheck.sh` over bayan's strict validator — all 7
+fixtures pass, including 5-page/13-object. Also: `tests/mcp_server.tcyr` ended `return 0`, so its failures could
+never fail the build; `scripts/bump-version.sh` still sed-ed a `Cargo.toml` that has not existed since the port.
+Toolchain pin `6.4.58` → **`6.5.33`** with `lib/` re-resolved (51 modules) and bayan's
+`bayan_json_v_parse_str` → `bayan_json_v_parse_buf` rename applied.
+
 **1.1.1** — MCP self-registration sends the tool `inputSchema` (2026-07-13). The 1.1.0 `_mcp_reg_body`
 (`src/mcp_server.cyr`) POSTed only `name`/`description`/`callback_url` to daimon, **omitting the schema**, so daimon
 advertised every `mneme_*` tool with an empty `{}` — which is not a valid Anthropic `input_schema` (`{"type":"object",…}`
@@ -34,7 +50,7 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
 
 ## Toolchain
 
-- **Cyrius pin**: `6.4.58` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.5.33` (in `cyrius.cyml [package].cyrius`)
 
 ## Source
 
@@ -84,9 +100,13 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
   - **`mneme-io/export_pdf` — COMPLETE (hand-rolled).** `io_export_pdf` is a real
     PDF writer (catalog/pages/font objects + byte-accurate xref; markdown → text
     blocks with word-wrap + pagination; strip-inline / block-parse / wrap-text
-    helpers). All 8 export_pdf tests pass, and it backs the API `/export/pdf`.
-    Migrate to `bayan_pdf_*` when it lands (on bayan's roadmap) — same play as the
-    markdown subset.
+    helpers). Backs the API `/export/pdf`. As of 1.1.2 the writer is gated by
+    bayan's strict validator (`scripts/pdfcheck.sh`) rather than by "starts with
+    %PDF" — every xref offset, `/Length` and `/Size` is checked against the real
+    bytes, which lenient viewers hide by rebuilding the table from a scan.
+    `bayan_pdf_*` has since landed (bayan 1.5.0): **mneme keeps its markdown
+    layer and migrates only the PDF primitives**, so the unterminated-fence fix
+    (ADR 015) stays mneme's.
   - **Network + terminal bridges — WIRED (no longer deferred).**
     - `net_http` — live HTTP over **`sandhi`** (works on AGNOS via sock_connect/
       send/recv). Remote embeddings (`search_embedding_backend`'s embed hook →
@@ -109,7 +129,7 @@ Note: `search_semantic_engine`'s functions were renamed to the
 
 ## Tests
 
-**61 `.tcyr` files — all green.** The entire 21,014-LOC workspace is ported (core,
+**62 `.tcyr` files, 1,122 assertions — all green.** The entire 21,014-LOC workspace is ported (core,
 io incl. PDF, store, search, ai, mcp, full api HTTP surface, ui app), plus the
 mneme-ui `views`/`main` glue (`ui_render`, `ui_events`) and the **live network +
 terminal bridges** (`net_http` = sandhi HTTP to daimon + remote embeddings;
@@ -141,3 +161,20 @@ bridges are all done and green. Everything remaining is [`roadmap.md`](roadmap.m
 P2 backlog: local ONNX inference (lands with the ML-AI stack), `bayan_markdown`/
 `bayan_pdf` migration, and minor polish (canonical uuid string, graph layout,
 RFC3339 datetime).
+
+Carried forward from 1.1.2:
+
+- **`bayan_pdf_*` has landed** (bayan 1.5.0), so the PDF migration is now
+  actionable. Scope is the **primitives only** — the object/xref/content-stream
+  writer in `io_export_pdf.cyr`. mneme keeps its own markdown layer, so
+  `mneme_io_parse_markdown_blocks` and the ADR-015 unterminated-fence behavior do
+  **not** migrate. `scripts/pdfcheck.sh` is the shared acceptance gate on both
+  sides of that swap.
+- **Nothing consumes `mneme_io_md_unterminated_fence()` yet.** The parser records
+  a malformed fence but no caller surfaces it: the CLI export path and the API's
+  `/export/pdf` still accept the input silently (they no longer *lose* content —
+  that was the 1.1.2 fix — but they do not warn). Wiring a warning through those
+  two callers is the follow-on.
+- **`mneme_io_export_pdf`** (the `/export/pdf` wrapper) renders in-memory and has
+  no write path, so it needed no error propagation. If it ever grows one, it
+  should return the same negative-errno contract as `mneme_io_export_note_to_pdf`.

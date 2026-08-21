@@ -1,58 +1,55 @@
 #!/usr/bin/env bash
-# bump-version.sh — Update all version references consistently.
+# bump-version.sh — set the project version.
+#
+# `VERSION` at the repo root is the single source of truth: `cyrius.cyml` reads
+# it via `version = "${file:VERSION}"`, and CI reads the toolchain pin from
+# `cyrius.cyml [package].cyrius`. So a release bump is a one-file edit — there is
+# nothing to keep in sync, which is the point.
+#
+# (Before v1.1.2 this script sed-ed `Cargo.toml`, left over from the Rust
+# original. No Cargo.toml has existed since the Cyrius port, and with
+# `set -euo pipefail` the sed made this script fail outright.)
 #
 # Usage:
-#   ./scripts/bump-version.sh              # set version from VERSION file
-#   ./scripts/bump-version.sh 2026.3.18    # set specific version
-#   ./scripts/bump-version.sh patch        # bump to YYYY.M.D-N (increment N)
-#   ./scripts/bump-version.sh today        # set to today's date
-#
-# Version format: YYYY.M.D or YYYY.M.D-N for patches
+#   ./scripts/bump-version.sh           # show the current version
+#   ./scripts/bump-version.sh 1.2.0     # set an explicit version
+#   ./scripts/bump-version.sh patch     # 1.1.1 -> 1.1.2
+#   ./scripts/bump-version.sh minor     # 1.1.1 -> 1.2.0
+#   ./scripts/bump-version.sh major     # 1.1.1 -> 2.0.0
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION_FILE="VERSION"
-OLD_VERSION=$(cat "$VERSION_FILE" | tr -d '[:space:]')
+OLD_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
 
-if [[ $# -ge 1 ]]; then
-    if [[ "$1" == "patch" ]]; then
-        if [[ "$OLD_VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)$ ]]; then
-            base="${BASH_REMATCH[1]}"
-            n="${BASH_REMATCH[2]}"
-            NEW_VERSION="${base}-$((n + 1))"
-        else
-            NEW_VERSION="${OLD_VERSION}-1"
-        fi
-    elif [[ "$1" == "today" ]]; then
-        year=$(date +%Y)
-        month=$(date +%-m)
-        day=$(date +%-d)
-        NEW_VERSION="${year}.${month}.${day}"
-    else
-        NEW_VERSION="$1"
-    fi
-    echo "$NEW_VERSION" > "$VERSION_FILE"
-else
-    NEW_VERSION="$OLD_VERSION"
+if [[ $# -eq 0 ]]; then
+    echo "Current version: $OLD_VERSION"
+    exit 0
 fi
 
-VERSION=$(cat "$VERSION_FILE" | tr -d '[:space:]')
-echo "Bumping version: $OLD_VERSION → $VERSION"
+if [[ ! "$OLD_VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    echo "error: VERSION ('$OLD_VERSION') is not MAJOR.MINOR.PATCH" >&2
+    exit 1
+fi
+major="${BASH_REMATCH[1]}"; minor="${BASH_REMATCH[2]}"; patch="${BASH_REMATCH[3]}"
 
-# Update workspace version in root Cargo.toml
-sed -i "s/^version = \"$OLD_VERSION\"/version = \"$VERSION\"/" Cargo.toml
+case "$1" in
+    major) NEW_VERSION="$((major + 1)).0.0" ;;
+    minor) NEW_VERSION="${major}.$((minor + 1)).0" ;;
+    patch) NEW_VERSION="${major}.${minor}.$((patch + 1))" ;;
+    *)
+        if [[ ! "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "error: '$1' is not MAJOR.MINOR.PATCH (or major|minor|patch)" >&2
+            exit 1
+        fi
+        NEW_VERSION="$1"
+        ;;
+esac
 
-# Also update any Cargo.toml files that have hardcoded versions (safety net)
-find . -name "Cargo.toml" -not -path "*/target/*" -exec \
-    sed -i "s/version = \"$OLD_VERSION\"/version = \"$VERSION\"/g" {} \;
-
-echo ""
-echo "Updated:"
-echo "  VERSION              → $VERSION"
-echo "  Cargo.toml (all)     → $VERSION"
-echo ""
-echo "Don't forget to update CHANGELOG.md!"
-
-RELEASE_NAME=$(echo "$VERSION" | sed 's/\.//g; s/-//g')
-echo "Release filename stem: mneme-${RELEASE_NAME}"
+echo "$NEW_VERSION" > "$VERSION_FILE"
+echo "Bumped version: $OLD_VERSION -> $NEW_VERSION"
+echo
+echo "Still to do by hand (this script deliberately does not touch prose):"
+echo "  - CHANGELOG.md                  add the [$NEW_VERSION] entry"
+echo "  - docs/development/state.md     refresh Version + Toolchain + Tests"
