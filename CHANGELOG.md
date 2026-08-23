@@ -2,6 +2,58 @@
 
 All notable changes to Mneme will be documented in this file.
 
+## [1.1.3] — 2026-08-22
+
+**Toolchain and vendored stdlib refreshed: Cyrius `6.5.33` → `6.5.35`, carrying bayan `1.4.2` → `1.5.2` (eight fixed
+security/correctness defects) and patra `1.13.9` → `1.13.10`. No mneme source change was required, and the suite is
+byte-for-byte identical: 62 files, 1,122 assertions, all green.**
+
+### Changed
+- **Toolchain pin `6.5.33` → `6.5.35`.** `6.5.35` and `6.5.34` are compiler-internal — band F finally lets the
+  linear-scan register allocator time-share a register (loop-aware liveness via `RA_SCAN_LOOPS`, plus the `picked`
+  lifetime cap that was silently blocking every interval after the fifth), and band E made `CYRIUS_IR=3` agree with
+  the default backend on all 282 corpus files. mneme builds on the default backend, so the observable effect here is
+  a smaller binary, not new behavior. CI installs from the `cyrius.cyml [package].cyrius` pin, so this flows through
+  with no workflow edit.
+- **`lib/` re-resolved via `cyrius deps`.** Exactly **two** of the 73 vendored modules changed — `bayan.cyr` and
+  `patra.cyr`; the other 71 are byte-identical between `6.5.33` and `6.5.35`. Every file in `lib/` now matches the
+  `6.5.35` stdlib byte-for-byte.
+  ⚠ Use **`cyrius deps`**, not `cyrius update`. `deps` is manifest-driven and resolves only what
+  `[deps].stdlib` declares; `cyrius update` copies the toolchain's *entire* `lib/` — it adds 29 modules mneme never
+  declared (`regex`, `mabda`, `yukti`, `niyama`, `sankoch`, `unicode/`, …), silently widening the dependency surface.
+  (`cyrius update --help` is also not a recognised flag: it *performs* the update rather than printing help.)
+- **bayan `1.4.2` → `1.5.2`** (215,533 → 641,083 B), folded in by Cyrius 6.5.34. Carries real security work from
+  three upstream releases: two heap buffer overflows in `csv` (CWE-787), a one-byte remote crash in `base64`, an
+  unchecked allocation in `yaml`, an out-of-bounds read in `cyml`, a **remote memory-exhaustion DoS in `json`**,
+  dropped carries in `bigint`'s `u256_mul`, and `bayan_u64_mulmod` taking **SIGFPE on ordinary inputs**. mneme's
+  exposure is the `json` DoS: `src/mcp_server.cyr` parses JSON-RPC envelopes straight off a socket in
+  `mneme serve`, so this hardens a remote-facing path. All **19** `bayan_*` symbols mneme calls (13 `json_v_*`,
+  5 `toml_*`, `json_last_error`) are present and signature-unchanged — the `1.5.0` PDF writer/reader is additive.
+- **patra `1.13.9` → `1.13.10`.** The whole diff is one hunk: `patra_init` no longer calls
+  `sakshi_set_level(SK_WARN)`, a process-global call that reset the host's configured log level the moment it opened
+  a database. No effect on mneme, which sets no level and makes no sakshi call — but it means `mneme serve` can no
+  longer have its logging silenced by `patra_open` if a level is ever configured. All 10 `patra_*` symbols mneme
+  calls are unchanged.
+
+### Measured — the binary grew 199 KB, and that is bayan's PDF API, not the compiler
+- `build/mneme` **2,460,904 → 2,660,040 B (+199,136, +8.1 %)**. This is *not* the toolchain:
+  6.5.35's release gate records cycc itself getting 4,096 B **smaller**. It is bayan tripling —
+  unreachable functions in the link went **2,757 → 3,126 (+369)** and unreachable bytes
+  **712,764 → 865,915 (+153,151)**, which is the shape of the 152 `bayan_pdf_*` functions being
+  compiled in while mneme calls none of them.
+- ⚠ **`CYRIUS_DCE=1` does not recover it** — measured at exactly the same 2,660,040 B. DCE NOPs
+  the code but keeps `.bss`, as the compiler's own hint says. The cost is paid for as long as
+  mneme vendors bayan and does not use `bayan_pdf_*`; migrating `io_export_pdf` onto those
+  primitives (see the roadmap's P2 item, now unblocked) would turn dead weight into the code
+  actually doing the work.
+
+### Verified
+- **Build + full suite green on `6.5.35`**, and identical to the `6.5.33` baseline: all **62** `.tcyr` files report
+  the *same* per-suite pass counts before and after (**1,122 assertions**, 0 failures). The toolchain-drift warning
+  the build printed against the stale pin is gone.
+- **`scripts/pdfcheck.sh --strict` passes 7/7** against bayan `1.5.2`'s validator, including the 5-page/13-object
+  fixture — the tripled bayan did not make the strict PDF oracle reject mneme's hand-rolled writer.
+
 ## [1.1.2] — 2026-08-21
 
 **Fix: the PDF exporter silently lost note content — an unterminated ``` fence dropped everything after it, and

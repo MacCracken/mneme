@@ -77,12 +77,20 @@ Skipped intentionally during the port; revisit after v1.0 parity lands:
   `io_notion` + the `io_obsidian` fs-walk pattern.
 - **Real markdown parser via `bayan`** — currently a hand-rolled subset
   (`mneme_io_markdown_to_html`); migrate to `bayan_markdown_*` once it ships (already
-  on bayan's roadmap).
-- **Real PDF read/write via `bayan`** — `io_export_pdf` is now a hand-rolled PDF
-  writer (valid catalog/pages/font objects + xref; markdown flattened to text
-  blocks with wrapping + pagination; all 8 export_pdf tests + the API `/export/pdf`
-  pass). Migrate to `bayan_pdf_*` once it ships (added to bayan's roadmap) — that
-  brings embedded fonts, images, and a PDF *reader* (for import) the hand-roll skips.
+  on bayan's roadmap). **Still blocked as of bayan 1.5.2** — verified: zero
+  `bayan_markdown_*`/`bayan_md_*` symbols in the vendored lib.
+- **Real PDF read/write via `bayan` — ✅ UNBLOCKED, not yet done.** `bayan_pdf_*`
+  **shipped in bayan 1.5.0** and is vendored as of 1.1.3 (bayan 1.5.2): **152
+  functions** covering the object model, an xref/content-stream writer, graphics
+  ops, font metrics, deflate/inflate, and a real *reader* (`bayan_pdf_extract_text`,
+  encryption detection) the hand-roll skips. `io_export_pdf` remains a hand-rolled
+  writer (valid catalog/pages/font objects + xref; markdown flattened to text blocks
+  with wrapping + pagination; all export_pdf tests + the API `/export/pdf` pass).
+  **Scope of the migration is the PRIMITIVES only** — the object/xref/content-stream
+  writer. mneme keeps its own markdown layer, so `mneme_io_parse_markdown_blocks` and
+  the ADR-015 unterminated-fence divergence do **not** migrate.
+  `scripts/pdfcheck.sh` is the shared acceptance gate on both sides of the swap
+  (already green 7/7 against bayan 1.5.2's validator).
 - **Canonical uuid string in `core_uuid`** — `_db_uuid_to_str`/`_from_str` exist in
   store_db/store_registry; promote a `mneme_core_uuid_to_string`/`_parse` to core_uuid.
 - **`GraphLayout::from_subgraph`** — the f64 force-directed spring layout (untested by

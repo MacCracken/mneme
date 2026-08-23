@@ -5,6 +5,19 @@
 
 ## Version
 
+**1.1.3** — toolchain + vendored stdlib refresh (2026-08-22). Pin `6.5.33` → **`6.5.35`**; `lib/` re-resolved
+with `cyrius deps`. **Exactly two of the 73 vendored modules changed** — `bayan.cyr` and `patra.cyr` — the other 71
+are byte-identical across the two toolchains, and every file in `lib/` now matches the `6.5.35` stdlib byte-for-byte.
+**bayan `1.4.2` → `1.5.2`** (215,533 → 641,083 B) carries eight fixed upstream security/correctness defects (two heap overflows in `csv`, plus `base64`, `yaml`,
+`cyml`, `json`, `bigint`, `bayan_u64_mulmod`); the one that
+touches mneme is the **remote memory-exhaustion DoS in `json`**, because `_mcp_srv_handle` (`src/mcp_server.cyr:104`)
+runs `bayan_json_v_parse_buf` directly on the socket body under `mneme serve`. **patra `1.13.9` → `1.13.10`** is a
+single hunk: `patra_init` no longer calls the process-global `sakshi_set_level(SK_WARN)`. **No mneme source change
+was required** — all 19 `bayan_*` and 10 `patra_*` symbols mneme calls are present and signature-unchanged — and the
+suite is unchanged at 62 files / 1,122 assertions with *identical per-suite counts* before and after. `pdfcheck.sh
+--strict` still passes 7/7 under bayan 1.5.2's validator. ⚠ Refresh `lib/` with **`cyrius deps`** (manifest-driven),
+never `cyrius update` — the latter copies the toolchain's whole `lib/`, adding 29 modules mneme never declared.
+
 **1.1.2** — PDF export silent-data-loss repair + toolchain `6.5.33` (2026-08-21). Two verified bugs in
 `src/io_export_pdf.cyr`, both silent: (a) `mneme_io_parse_markdown_blocks` never flushed an unterminated ``` fence,
 so **every line after a stray fence was dropped from the exported PDF** with no diagnostic and a valid-looking
@@ -50,7 +63,8 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
 
 ## Toolchain
 
-- **Cyrius pin**: `6.5.33` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.5.35` (in `cyrius.cyml [package].cyrius`)
+- **Vendored stdlib**: bayan `1.5.2`, patra `1.13.10` — refresh with `cyrius deps` (never `cyrius update`)
 
 ## Source
 
@@ -161,6 +175,45 @@ bridges are all done and green. Everything remaining is [`roadmap.md`](roadmap.m
 P2 backlog: local ONNX inference (lands with the ML-AI stack), `bayan_markdown`/
 `bayan_pdf` migration, and minor polish (canonical uuid string, graph layout,
 RFC3339 datetime).
+
+New in 1.1.3 — **bayan's PDF module was shaped around auditing mneme's hand-rolled writer**, and its findings
+name defects that are still live here. `bayan/src/pdf.cyr` cites `src/io_export_pdf.cyr` seven times, and bayan
+1.5.0's CHANGELOG says the hand-roll "is superseded here, and the defects found while reading it are what this
+module is shaped around". Triaged against mneme at 1.1.3 — **none is caught by the 62-suite run or by
+`pdfcheck.sh`**, which validates *structure* (xref/`/Length`/`/Size`), not text encoding or layout:
+
+- ⛔ **LIVE — no `/Encoding` on the font dict.** `io_export_pdf.cyr:391` emits
+  `<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>`, so viewers fall back to StandardEncoding, where only 54 of
+  the 128 high codes exist: `Résumé` renders `RÃ©sumÃ©` and an em-dash disappears. A **silent content change on
+  export** — the same class as the ADR-015 fence bug. bayan ships `bayan_pdf_from_winansi` + declares
+  `/WinAnsiEncoding` (it does both, since declaring without transcoding only changes the flavour of mojibake).
+- ⛔ **LIVE — wrapping counts characters, not width.** `io_export_pdf.cyr:330,346` call
+  `mneme_io_wrap_text(..., 80)`. In a proportional face 80 characters spans a **4.26× range**: 80 `l` is 195 pt in
+  a 451 pt column, 80 `W` is 831 pt — **308 pt off a 595 pt page**. Confirmed against the live geometry
+  (`MediaBox[0 0 595 842]`, x=72, 11 pt). bayan ships `bayan_pdf_text_width` / `bayan_pdf_wrap` on real AFM metrics.
+- ⛔ **LIVE — `_pdf_esc` silently deletes newlines.** `io_export_pdf.cyr:250` is
+  `if (c != 10 && c != 13) { str_builder_putc(sb, c); }` — CR and LF are dropped with no diagnostic. bayan
+  *rejects* a newline inside show-text instead: it means "break the run", and accepting-then-dropping it is a
+  silent content change.
+- ⚠ **Brittle, correct today** — `var offset = 9;` (`:412`) predicts the first xref offset from the length of
+  `"%PDF-1.4\n"`, and object numbers use closed-form `4+2p`/`5+2p`. Both are right for the current single-line
+  header and fixed object set, and `pdfcheck.sh` passes 7/7 — but each silently becomes wrong the moment a second
+  header line, `/Info`, a second font, or an `/ID` is added. bayan measures offsets off the builder and counts
+  objects instead.
+- ✅ **Already fixed here — bayan's audit is stale on this one.** It lists "mneme ignores `file_write_all`'s
+  return and reports success on a full disk"; that was repaired in **1.1.2** (`io_export_pdf.cyr:452`).
+
+Also surfaced by the bayan fold, in a different module: **`mneme_core_vault_entry_to_toml`
+(`src/core_config.cyr:67`) writes TOML values unescaped** — `name`, `path` and `description` are interpolated
+straight between literal quotes, so a vault name containing a `"` or a newline emits malformed TOML. The bayan
+upgrade changes how that *fails*, and for the better: an unterminated basic string used to scan across newlines and
+silently swallow the following config lines into one value, and now stops at the newline instead. Both readings are
+wrong for such input; 1.5.2's is the safer failure. The writer still needs escaping — untriaged, no ticket yet.
+
+These strengthen the case for the now-unblocked `bayan_pdf_*` primitives migration in
+[`roadmap.md`](roadmap.md) — it would retire three live defects and two brittle constants at once, and would also
+recover the +199 KB of `bayan_pdf_*` currently linked in unreachable. **Not actioned in 1.1.3**, which is a
+toolchain/dependency refresh with no mneme source change.
 
 Carried forward from 1.1.2:
 
