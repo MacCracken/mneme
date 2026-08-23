@@ -40,6 +40,47 @@ fn main() {
     assert_eq(vec_len(mneme_core_config_vaults(rt)), 2, "full roundtrip vaults len 2");
     assert(str_eq(mneme_core_embedding_backend(mneme_core_config_embedding(rt)), str_from("auto")), "full roundtrip backend auto");
 
+    # ── TOML escaping ──────────────────────────────────────────────────────
+    # Before 1.1.3 these values were written raw between literal quotes, so each
+    # of them emitted malformed TOML and lost data on the way back in. Rust got
+    # this right for free via toml::to_string; the port did not.
+    #
+    # ⚠ These also pin the mneme-escapes/mneme-unescapes contract against bayan,
+    # which does NOT unescape TOML basic strings. If bayan ever starts doing so,
+    # these assertions fail — deliberately. Fix both sides together.
+    var q = mneme_core_vault_entry_new(str_from("say \"hi\""), str_from("/tmp/a\\b"), str_from("line1\nline2"), f64_parse("1.0"));
+    var qt = mneme_core_vault_entry_to_toml(q);
+    var qr = mneme_core_vault_entry_from_toml(qt);
+    assert(str_eq(mneme_core_vault_entry_name(qr), str_from("say \"hi\"")), "toml escape: quote in name roundtrips");
+    assert(str_eq(mneme_core_vault_entry_path(qr), str_from("/tmp/a\\b")), "toml escape: backslash in path roundtrips");
+    assert(str_eq(mneme_core_vault_entry_description(qr), str_from("line1\nline2")), "toml escape: newline in description roundtrips");
+
+    # The emitted TOML must actually carry the escapes, not the raw bytes —
+    # otherwise the roundtrip could pass by two cancelling bugs.
+    assert(str_contains(qt, "\\\"hi\\\""), "toml escape: emitted quote is backslash-escaped");
+    assert(str_contains(qt, "line1\\nline2"), "toml escape: emitted newline is \\n, not a literal break");
+    assert_eq(str_index_of(qt, 10) > 0, 1, "toml escape: emitted TOML still has real line breaks between pairs");
+
+    # A tab and a control byte: TOML forbids a bare control char in a basic string.
+    var ctl = mneme_core_vault_entry_new(str_from("a\tb"), str_from("/p"), 0, f64_parse("1.0"));
+    var ctlr = mneme_core_vault_entry_from_toml(mneme_core_vault_entry_to_toml(ctl));
+    assert(str_eq(mneme_core_vault_entry_name(ctlr), str_from("a\tb")), "toml escape: tab in name roundtrips");
+
+    # Non-ASCII must pass through untouched (load8 is zero-extended, so a UTF-8
+    # continuation byte must not be mistaken for a control character).
+    var u = mneme_core_vault_entry_new(str_from("Résumé — notes"), str_from("/p"), 0, f64_parse("1.0"));
+    var ur = mneme_core_vault_entry_from_toml(mneme_core_vault_entry_to_toml(u));
+    assert(str_eq(mneme_core_vault_entry_name(ur), str_from("Résumé — notes")), "toml escape: UTF-8 passes through intact");
+
+    # Whole-config roundtrip with a quote in default_vault and a vault name.
+    var ec = mneme_core_config_default();
+    store64(ec, str_from("we\"ird"));
+    vec_push(mneme_core_config_vaults(ec), mneme_core_vault_entry_new(str_from("a\"b"), str_from("/x\\y"), 0, f64_parse("1.0")));
+    var ecr = mneme_core_config_from_toml(mneme_core_config_to_toml(ec));
+    assert(str_eq(mneme_core_config_default_vault(ecr), str_from("we\"ird")), "toml escape: quote in default_vault roundtrips");
+    assert_eq(vec_len(mneme_core_config_vaults(ecr)), 1, "toml escape: escaped config still parses to 1 vault");
+    assert(str_eq(mneme_core_vault_entry_name(vec_get(mneme_core_config_vaults(ecr), 0)), str_from("a\"b")), "toml escape: quote in vault name roundtrips");
+
     return assert_summary();
 }
 

@@ -143,7 +143,7 @@ Note: `search_semantic_engine`'s functions were renamed to the
 
 ## Tests
 
-**62 `.tcyr` files, 1,122 assertions — all green.** The entire 21,014-LOC workspace is ported (core,
+**62 `.tcyr` files, 1,133 assertions — all green.** The entire 21,014-LOC workspace is ported (core,
 io incl. PDF, store, search, ai, mcp, full api HTTP surface, ui app), plus the
 mneme-ui `views`/`main` glue (`ui_render`, `ui_events`) and the **live network +
 terminal bridges** (`net_http` = sandhi HTTP to daimon + remote embeddings;
@@ -203,17 +203,25 @@ module is shaped around". Triaged against mneme at 1.1.3 — **none is caught by
 - ✅ **Already fixed here — bayan's audit is stale on this one.** It lists "mneme ignores `file_write_all`'s
   return and reports success on a full disk"; that was repaired in **1.1.2** (`io_export_pdf.cyr:452`).
 
-Also surfaced by the bayan fold, in a different module: **`mneme_core_vault_entry_to_toml`
-(`src/core_config.cyr:67`) writes TOML values unescaped** — `name`, `path` and `description` are interpolated
-straight between literal quotes, so a vault name containing a `"` or a newline emits malformed TOML. The bayan
-upgrade changes how that *fails*, and for the better: an unterminated basic string used to scan across newlines and
-silently swallow the following config lines into one value, and now stops at the newline instead. Both readings are
-wrong for such input; 1.5.2's is the safer failure. The writer still needs escaping — untriaged, no ticket yet.
+Also surfaced by the bayan fold, in a different module and **fixed in this release**: `core_config.cyr` wrote
+TOML values **unescaped** — vault `name`/`path`/`description`, `default_vault` and the embedding `backend` were
+interpolated straight between literal quotes, so a value holding a `"`, a newline or a backslash emitted malformed
+TOML and silently lost data on re-read. `rust-old` escaped correctly via `toml::to_string`, so this was a port
+regression, repaired as parity (no ADR). Values are now escaped on write, and — because **bayan does not unescape
+TOML basic strings**, returning the raw slice with backslashes intact — all 8 string-value reads go through
+`_cfg_toml_str` (`bayan_toml_get` + unescape). ⚠ **Those two halves are a matched pair**: if bayan ever grows TOML
+unescaping, mneme would double-decode. The `toml escape` assertions in `tests/core_config.tcyr` exist to fail
+loudly at that moment. Tests 13 → 24 assertions, **6 of the 11 new ones mutation-proven against the pre-fix
+writer**.
+
+The bayan upgrade independently improved how the *old* bug failed: an unterminated basic string used to scan across
+newlines and swallow the following config lines into one value, and now stops at the newline. Moot after the fix,
+but it is why the defect surfaced here.
 
 These strengthen the case for the now-unblocked `bayan_pdf_*` primitives migration in
-[`roadmap.md`](roadmap.md) — it would retire three live defects and two brittle constants at once, and would also
-recover the +199 KB of `bayan_pdf_*` currently linked in unreachable. **Not actioned in 1.1.3**, which is a
-toolchain/dependency refresh with no mneme source change.
+[`roadmap.md`](roadmap.md) — it retires three live defects and two brittle constants at once, and makes the
++199 KB of `bayan_pdf_*` the binary already carries into the code actually doing the work. **Not actioned in
+1.1.3**, which is a toolchain/dependency refresh with no mneme source change.
 
 Carried forward from 1.1.2:
 

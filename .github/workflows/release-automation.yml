@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (CalVer: YYYY.M.D or YYYY.M.D-N)'
+        description: 'Version (semver: MAJOR.MINOR.PATCH, e.g. 1.1.3)'
         required: true
         type: string
 
@@ -13,16 +13,21 @@ jobs:
     name: Create Release Tag
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pinned — CVE-21)
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Validate version format
+        # Semver, NOT CalVer. This gate read ^YYYY.M.D$ while every other moving
+        # part of the release is semver: VERSION is 1.1.x, scripts/bump-version.sh
+        # rejects anything but MAJOR.MINOR.PATCH, and release.yml triggers on the
+        # tag glob [0-9]+.[0-9]+.[0-9]+*. A CalVer input passed here and then died
+        # in bump-version.sh one step later.
         run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(-[0-9]+)?$'; then
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "Invalid version format: ${{ inputs.version }}"
-            echo "Expected: YYYY.M.D or YYYY.M.D-N"
+            echo "Expected: MAJOR.MINOR.PATCH (e.g. 1.1.3)"
             exit 1
           fi
 
@@ -40,7 +45,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add VERSION Cargo.toml Cargo.lock
+          # VERSION only. No Cargo.toml/Cargo.lock has existed since the Cyrius
+          # port -- git add on a missing path is fatal, so this step could never
+          # succeed. Same leftover v1.1.2 removed from scripts/bump-version.sh;
+          # this copy was missed. cyrius.cyml needs no edit: it reads ${file:VERSION}.
+          git add VERSION
           git commit -m "release: ${{ inputs.version }}"
           git tag -a "${{ inputs.version }}" -m "Release ${{ inputs.version }}"
 

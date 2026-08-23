@@ -5,8 +5,43 @@ All notable changes to Mneme will be documented in this file.
 ## [1.1.3] — 2026-08-22
 
 **Toolchain and vendored stdlib refreshed: Cyrius `6.5.33` → `6.5.35`, carrying bayan `1.4.2` → `1.5.2` (eight fixed
-security/correctness defects) and patra `1.13.9` → `1.13.10`. No mneme source change was required, and the suite is
-byte-for-byte identical: 62 files, 1,122 assertions, all green.**
+security/correctness defects) and patra `1.13.9` → `1.13.10`. The upgrade itself needed no mneme source change —
+every suite reported identical counts across it. Reading the fold then surfaced a port regression worth fixing:
+`core_config.cyr` wrote TOML values unescaped, where `rust-old` escaped them. Also repairs the release-tag
+workflow, which two Rust-era leftovers had made incapable of completing a release, and updates every GitHub Action.
+62 files, 1,122 → 1,133 assertions, all green.**
+
+### Fixed
+- **`mneme_core_vault_entry_to_toml` / `mneme_core_config_to_toml` wrote TOML values UNESCAPED**
+  (`src/core_config.cyr`). Five string values — vault `name`, `path`, `description`, plus `default_vault` and the
+  embedding `backend` — were interpolated straight between literal quotes, so a value holding a `"`, a newline or a
+  backslash emitted **malformed TOML that silently lost data on the way back in**. `rust-old` got this right for
+  free: it serializes with `toml::to_string` (`crates/mneme-core/src/config.rs:166,202`), which escapes basic
+  strings. This is a **parity repair, not a divergence** — no ADR needed.
+  - Values are now escaped on write (`\"`, `\\`, `\n`, `\r`, `\t`, `\b`, `\f`, and `\u00XX` for any other
+    control byte, which TOML forbids bare inside a basic string).
+  - ⚠ **The matching decoder is not optional.** bayan does **not** unescape TOML basic strings — `_toml_parse_str`
+    returns the raw slice between the quotes with the backslashes still in it (bayan's only unescape,
+    `_jp_token_unescape`, is JSON's). So mneme must decode exactly what mneme encoded; all 8 string-value read
+    sites now go through `_cfg_toml_str` (= `bayan_toml_get` + unescape, with absent-is-0 preserved). The two
+    halves must be changed together, and the new tests fail loudly if bayan ever starts unescaping.
+  - Non-ASCII is untouched: `load8` is zero-extended, so a UTF-8 lead/continuation byte (128–255) never trips the
+    `c < 32` control-character arm. Asserted directly (`Résumé — notes` round-trips).
+  - **`tests/core_config.tcyr` 13 → 24 assertions**, and mutation-proven: **6 of the 11 new ones fail against the
+    pre-fix writer**. The other 5 pin behavior that previously only *looked* right because writing raw and reading
+    raw cancelled out — the emitted file was still invalid TOML that a conforming parser (Rust's included) would
+    have read differently, so those assertions check the emitted bytes, not just the round-trip.
+
+- **`.github/workflows/release-automation.yml` could never complete a release.** Two independent defects, both
+  Rust-era leftovers the 1.1.2 sweep missed while fixing the identical bug in `scripts/bump-version.sh`:
+  - It ran `git add VERSION Cargo.toml Cargo.lock`. **No `Cargo.toml` or `Cargo.lock` has existed since the port**,
+    and `git add` on a missing path is fatal — so the job died at the commit step every time. Now `git add VERSION`
+    alone, which is all that changes: `cyrius.cyml` reads `${file:VERSION}`.
+  - Its version gate validated **CalVer** (`^YYYY.M.D$`) while every other moving part of the release is semver —
+    `VERSION` is `1.1.x`, `scripts/bump-version.sh` rejects anything but `MAJOR.MINOR.PATCH`, and `release.yml`
+    triggers on the tag glob `[0-9]+.[0-9]+.[0-9]+*`. A CalVer input passed this gate and then died one step later
+    in `bump-version.sh`; a real semver input was rejected outright. Now `^[0-9]+\.[0-9]+\.[0-9]+$`, matching the
+    tag trigger and the script.
 
 ### Changed
 - **Toolchain pin `6.5.33` → `6.5.35`.** `6.5.35` and `6.5.34` are compiler-internal — band F finally lets the
@@ -35,17 +70,25 @@ byte-for-byte identical: 62 files, 1,122 assertions, all green.**
   longer have its logging silenced by `patra_open` if a level is ever configured. All 10 `patra_*` symbols mneme
   calls are unchanged.
 
-### Measured — the binary grew 199 KB, and that is bayan's PDF API, not the compiler
-- `build/mneme` **2,460,904 → 2,660,040 B (+199,136, +8.1 %)**. This is *not* the toolchain:
-  6.5.35's release gate records cycc itself getting 4,096 B **smaller**. It is bayan tripling —
-  unreachable functions in the link went **2,757 → 3,126 (+369)** and unreachable bytes
-  **712,764 → 865,915 (+153,151)**, which is the shape of the 152 `bayan_pdf_*` functions being
-  compiled in while mneme calls none of them.
-- ⚠ **`CYRIUS_DCE=1` does not recover it** — measured at exactly the same 2,660,040 B. DCE NOPs
-  the code but keeps `.bss`, as the compiler's own hint says. The cost is paid for as long as
-  mneme vendors bayan and does not use `bayan_pdf_*`; migrating `io_export_pdf` onto those
-  primitives (see the roadmap's P2 item, now unblocked) would turn dead weight into the code
-  actually doing the work.
+- **GitHub Actions updated and consistently SHA-pinned.** `actions/checkout` **v4 → v7.0.1**,
+  `softprops/action-gh-release` **v2 → v3.0.2**, `actions/dependency-review-action` **v4 → v5.0.0**. `sbom.yml` and
+  `release-automation.yml` were tracking floating `@v4` tags while `ci.yml`/`release.yml` pinned by SHA; all six
+  references are now pinned to a verified commit SHA with the tag in a trailing comment, matching the repo's
+  existing "pinned — CVE-21" convention.
+- **Removed `.github/actions/setup-rust-env/`** — a Rust composite action (rustup, `cargo install cross`, a cache
+  keyed on `**/Cargo.lock`) left from the original workspace. Referenced by **no** workflow since the port, and it
+  pulled `dtolnay/rust-toolchain@master` — a floating, mutable ref, i.e. the one genuine supply-chain exposure in
+  `.github/`. Deleted rather than version-bumped: there is no Rust here to set up.
+
+### Measured — the binary grew 199 KB, which is the incoming PDF implementation
+- `build/mneme` **2,460,904 → 2,660,040 B (+199,136, +8.1 %)**, and it is *not* the toolchain: 6.5.35's release gate
+  records cycc itself getting 4,096 B **smaller**. It is bayan's PDF stack — unreachable functions in the link went
+  **2,757 → 3,126 (+369)**, the shape of the 152 `bayan_pdf_*` functions.
+- **Not a regression to triage.** `bayan_pdf_*` is the designated replacement for the hand-rolled writer in
+  `src/io_export_pdf.cyr` (bayan's own module was shaped around auditing it — see
+  [`roadmap.md`](docs/development/roadmap.md)'s now-unblocked P2 item). These bytes are that implementation arriving
+  ahead of its consumer; the migration makes them reachable and retires mneme's hand-roll in exchange. Recorded as a
+  measurement, not a cost.
 
 ### Verified
 - **Build + full suite green on `6.5.35`**, and identical to the `6.5.33` baseline: all **62** `.tcyr` files report
