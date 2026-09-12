@@ -39,11 +39,11 @@ fn main(): i64 {
     # mneme's tools — instead of the TUI. Same binary, mirroring thoth's `gui` subcommand.
     var a1 = argv(1);
     if (a1 != 0) { if (streq(a1, "serve") == 1) {
-        var port = 8100;
-        var pa = argv(2);
-        if (pa != 0) { if (load8(pa) != 0) { port = _mcp_parse_port(pa); } }
-        return mneme_mcp_serve(port);
-    } }
+            var port = 8100;
+            var pa = argv(2);
+            if (pa != 0) { if (load8(pa) != 0) { port = _mcp_parse_port(pa); } }
+            return mneme_mcp_serve(port);
+        } }
     # live daimon embeddings when a server is reachable (degrades to full-text only)
     mneme_net_wire_embeddings();
     var vault = _mneme_vault_dir();

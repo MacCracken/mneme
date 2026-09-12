@@ -11,11 +11,11 @@ fn main() {
     # NOTE: str_substr returns a non-null-terminated view, so compare with
     # str_eq (length-based) — assert_streq uses streq (cstr/null-terminated).
     assert(str_eq(mneme_core_tag_parent_path(str_from("project/agnos/core")),
-                  str_from("project/agnos")), "parent_path nested");
+        str_from("project/agnos")), "parent_path nested");
 
     # parent_path_top_level: "toplevel" -> None (empty)
     assert_eq(str_len(mneme_core_tag_parent_path(str_from("toplevel"))), 0,
-              "parent_path top-level is None");
+      "parent_path top-level is None");
 
     # ancestor_paths: "a/b/c" -> ["a", "a/b"]
     var anc = mneme_core_tag_ancestor_paths(str_from("a/b/c"));

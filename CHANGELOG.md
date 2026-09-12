@@ -470,3 +470,12 @@ test-bearing Rust module is mirrored 1:1; **61 `.tcyr` files, all green**.
 - Systemd service unit (`deploy/mneme.service`)
 - Marketplace recipe (`deploy/mneme.agnos-agent`)
 - 5 agnoshi voice/agent intents (`deploy/agnoshi-intents.toml`)
+
+## [Unreleased]
+
+## [1.1.4] - 2026-09-11
+
+### Changed
+
+- **Toolchain `6.5.35` → `6.6.2`.** No source change; the value form needed none.
+  Build, tests, and any bench/fuzz/distlib target the repo ships re-verified at the new pin.
