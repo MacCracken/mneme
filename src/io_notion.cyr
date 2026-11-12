@@ -1,7 +1,11 @@
-# mneme-io — Notion export cleanup (pure fns from rust-old/crates/mneme-io/src/import_notion.rs)
-# Zero-I/O. The async directory import (import_notion_export/collect_notion_files)
-# is DEFERRED to the fs pass; these are the string-cleaning helpers (the 4 #[test]s).
+# mneme-io — Notion export importer (ported from rust-old/crates/mneme-io/src/import_notion.rs)
+# Two halves, as in the Rust file:
+#   - the pure string cleaners (clean_notion_title / _content / _path, slug_path) — the 4 #[test]s;
+#   - the directory import (import_notion_export / import_notion_page / collect_notion_files) — the
+#     4 #[tokio::test]s, async → sync. Ported in 1.2.2.
 # Hand-implements the Rust regexes for a trailing/embedded 32-hex Notion UUID.
+# Requires (include first): core_frontmatter, io_wikilink, io_obsidian (ImportedNote + its helpers,
+# as the Rust file `use`s crate::import_obsidian::ImportedNote), plus fs/io from the stdlib.
 
 fn _ntn_is_ws(c): i64 { if (c == 32 || c == 9 || c == 10 || c == 13) { return 1; } return 0; }
 fn _ntn_is_hex(c): i64 { if ((c >= 48 && c <= 57) || (c >= 97 && c <= 102)) { return 1; } return 0; }
@@ -130,8 +134,46 @@ fn _ntn_is_uuid_link(inner: Str): i64 {
     return 1;
 }
 
-# clean_notion_content: %20 -> space, convert "[text](path <32hex>.md)" -> "[text](slug.md)"
-# (toggle-block removal is deferred — untested.)
+# Remove Notion's EMPTY toggle blocks — Rust's `<details>\s*<summary></summary>\s*</details>\n?`.
+# A toggle with any summary text or body is left alone (the regex only matches the empty shape).
+fn _ntn_skip_ws(d, i, n): i64 {
+    while (i < n && _ntn_is_ws(load8(d + i)) == 1) { i = i + 1; }
+    return i;
+}
+fn _ntn_at(d, i, n, lit): i64 {
+    var ln = strlen(lit);
+    if (i + ln > n) { return 0; }
+    return memeq(d + i, lit, ln);
+}
+fn _ntn_strip_empty_toggles(s: Str): i64 {
+    var sb = str_builder_new();
+    var n = str_len(s);
+    var d = str_data(s);
+    var i = 0;
+    while (i < n) {
+        var matched = 0;
+        if (_ntn_at(d, i, n, "<details>") == 1) {
+            var j = _ntn_skip_ws(d, i + 9, n);
+            if (_ntn_at(d, j, n, "<summary></summary>") == 1) {
+                j = _ntn_skip_ws(d, j + 19, n);
+                if (_ntn_at(d, j, n, "</details>") == 1) {
+                    j = j + 10;
+                    if (j < n && load8(d + j) == 10) { j = j + 1; }   # the optional trailing "\n"
+                    i = j;
+                    matched = 1;
+                }
+            }
+        }
+        if (matched == 0) {
+            str_builder_putc(sb, load8(d + i));
+            i = i + 1;
+        }
+    }
+    return str_builder_build(sb);
+}
+
+# clean_notion_content: %20 -> space, convert "[text](path <32hex>.md)" -> "[text](slug.md)",
+# then drop empty toggle blocks — the same three passes, in the same order, as the Rust.
 fn mneme_io_notion_clean_content(content: Str): i64 {
     var s = _ntn_replace_all(content, "%20", " ");
     var sb = str_builder_new();
@@ -164,5 +206,195 @@ fn mneme_io_notion_clean_content(content: Str): i64 {
             i = i + 1;
         }
     }
-    return str_builder_build(sb);
+    return _ntn_strip_empty_toggles(str_builder_build(sb));
+}
+
+# ---------------------------------------------------------------------------------------------------
+# Directory import — import_notion_export / import_notion_page / collect_notion_files.
+# ---------------------------------------------------------------------------------------------------
+
+# NotionImportStats (40): [pages_found@0, pages_imported@8, csv_databases_found@16,
+#                          uuid_suffixes_cleaned@24, errors@32 (vec of [path Str, message Str] pairs)]
+fn mneme_io_notion_stats_pages_found(s): i64 { return load64(s); }
+fn mneme_io_notion_stats_pages_imported(s): i64 { return load64(s + 8); }
+fn mneme_io_notion_stats_csv_databases_found(s): i64 { return load64(s + 16); }
+fn mneme_io_notion_stats_uuid_suffixes_cleaned(s): i64 { return load64(s + 24); }
+fn mneme_io_notion_stats_errors(s): i64 { return load64(s + 32); }
+fn mneme_io_notion_error_path(e): i64 { return load64(e); }
+fn mneme_io_notion_error_message(e): i64 { return load64(e + 8); }
+# The result (16) is [notes@0 (vec<ImportedNote>), stats@8] — the same layout as the Obsidian import's,
+# so `mneme_io_import_result_notes` / `_stats` read it too.
+fn mneme_io_notion_result_notes(r): i64 { return load64(r); }
+fn mneme_io_notion_result_stats(r): i64 { return load64(r + 8); }
+
+# Rust sorts the collected PathBufs, and PathBuf orders COMPONENT by component. For paths without empty
+# components that is byte order with '/' ranked below every other byte ("a/b" < "a-b"), which is what
+# this compares — a plain byte compare would put "a-b" first ('-' is 45, '/' is 47).
+fn _ntn_path_byte(c): i64 { if (c == 47) { return 0 - 1; } return c; }
+fn _ntn_path_lt(a: Str, b: Str): i64 {
+    var la = str_len(a);
+    var lb = str_len(b);
+    var da = str_data(a);
+    var db = str_data(b);
+    var n = la;
+    if (lb < la) { n = lb; }
+    var i = 0;
+    while (i < n) {
+        var ca = _ntn_path_byte(load8(da + i));
+        var cb = _ntn_path_byte(load8(db + i));
+        if (ca < cb) { return 1; }
+        if (ca > cb) { return 0; }
+        i = i + 1;
+    }
+    if (la < lb) { return 1; }
+    return 0;
+}
+fn _ntn_sort_paths(v): i64 {
+    var n = vec_len(v);
+    var i = 1;
+    while (i < n) {   # insertion sort: stable, and exports are small
+        var cur = vec_get(v, i);
+        var j = i;
+        while (j > 0 && _ntn_path_lt(cur, vec_get(v, j - 1)) == 1) {
+            vec_set(v, j, vec_get(v, j - 1));
+            j = j - 1;
+        }
+        vec_set(v, j, cur);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Rust's walker skips every ENTRY whose name starts with '.', so a hidden directory's whole subtree is
+# skipped. Over a full walk that is: drop a file when any component of its path BELOW the root starts
+# with '.'. (The root itself is never tested, as in Rust — `/tmp/.export` imports fine.)
+fn _ntn_hidden_below_root(rel: Str): i64 {
+    var n = str_len(rel);
+    var d = str_data(rel);
+    var i = 0;
+    var at_start = 1;
+    while (i < n) {
+        var c = load8(d + i);
+        if (at_start == 1 && c == 46) { return 1; }
+        if (c == 47) { at_start = 1; } else { at_start = 0; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# collect_notion_files: every non-hidden `.md` and `.csv` file under `dir`, sorted. Returns the vec, or 0
+# when any directory in the tree could not be listed (Rust: `fs::read_dir(..)?` fails the whole import).
+# The walk is the stdlib's `dir_walk_checked`, so it is depth-bounded and does not descend a symlinked
+# directory (Rust's `is_dir()` follows one). A Notion export holds no symlinks; the bound is what keeps a
+# hostile tree from looping.
+fn _ntn_collect_files(dir: Str): i64 {
+    var all = vec_new();
+    var failed = vec_new();
+    if (dir_walk_checked(dir, all, failed) != 0) { return 0; }
+    var files = vec_new();
+    var i = 0;
+    while (i < vec_len(all)) {
+        var p = vec_get(all, i);
+        if (_ntn_hidden_below_root(_imp_relative(dir, p)) == 0) {
+            if (path_has_ext(p, str_from(".md")) == 1 || path_has_ext(p, str_from(".csv")) == 1) {
+                vec_push(files, p);
+            }
+        }
+        i = i + 1;
+    }
+    _ntn_sort_paths(files);
+    return files;
+}
+
+fn _ntn_error(path: Str, rerr): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "read failed (errno ");
+    str_builder_add_int(sb, 0 - rerr);
+    str_builder_add_cstr(sb, ")");
+    var e = alloc(16);
+    store64(e, path);
+    store64(e + 8, str_builder_build(sb));
+    return e;
+}
+
+# import_notion_page → the ImportedNote, with `*cleaned_out` = 1 when the title lost a UUID suffix; or 0
+# with `*rerr_out` = the negative errno when the file could not be read. The whole file is read (`file_read_whole` grows
+# its buffer), so a large page is never cut short. One divergence: Rust's `read_to_string` rejects a file
+# that is not valid UTF-8, and this imports its bytes as they are.
+fn _ntn_import_page(export_root: Str, file_path: Str, cleaned_out, rerr_out): i64 {
+    var len = 0;
+    var buf = file_read_whole(_imp_cstr(file_path), &len);
+    if (buf == 0) { store64(rerr_out, len); return 0; }
+    var raw = str_new(buf, len);
+    var pair = mneme_core_frontmatter_split(raw);
+    var yaml = mneme_core_fm_pair_yaml(pair);
+    var body = mneme_core_fm_pair_body(pair);
+    var raw_title = 0;
+    var tags = vec_new();
+    if (yaml != 0) {
+        var fm = mneme_core_frontmatter_parse(yaml);
+        raw_title = mneme_core_fm_title(fm);
+        var ft = mneme_core_fm_tags(fm);
+        if (ft != 0) {
+            var t = 0;
+            while (t < vec_len(ft)) { vec_push(tags, vec_get(ft, t)); t = t + 1; }
+        }
+    }
+    if (raw_title == 0) {
+        raw_title = _imp_file_stem(file_path);
+        if (str_len(raw_title) == 0) { raw_title = str_from("Untitled"); }   # Rust: no file stem -> "Untitled"
+    }
+    var tp = mneme_io_notion_clean_title(raw_title);
+    store64(cleaned_out, mneme_io_notion_title_cleaned(tp));
+    var note = alloc(56);
+    store64(note, mneme_io_notion_title_str(tp));
+    store64(note + 8, mneme_io_notion_clean_content(body));
+    store64(note + 16, tags);
+    store64(note + 24, file_path);
+    store64(note + 32, mneme_io_notion_clean_path(_imp_relative(export_root, file_path)));
+    store64(note + 40, vec_new());   # Notion pages carry no [[wikilinks]]
+    store64(note + 48, 0);           # modified_at: as io_obsidian — the portable stat is not wired
+    return note;
+}
+
+# import_notion_export: import every page of a Notion export directory (an extracted zip).
+# Returns the result, or 0 when `export_path` is not a directory or a directory in it could not be listed
+# (Rust: Err(SourceNotFound) / Err(Io)). A page that cannot be read is recorded in stats.errors and the
+# import continues, as in Rust.
+fn mneme_io_import_notion_export(export_path: Str): i64 {
+    if (is_dir(export_path) == 0) { return 0; }
+    var files = _ntn_collect_files(export_path);
+    if (files == 0) { return 0; }
+    var notes = vec_new();
+    var errors = vec_new();
+    var pages_found = 0;
+    var csv_found = 0;
+    var cleaned_count = 0;
+    var i = 0;
+    while (i < vec_len(files)) {
+        var p = vec_get(files, i);
+        if (path_has_ext(p, str_from(".csv")) == 1) { csv_found = csv_found + 1; }
+        else {
+            pages_found = pages_found + 1;
+            var cleaned = 0;
+            var rerr = 0;
+            var note = _ntn_import_page(export_path, p, &cleaned, &rerr);
+            if (note == 0) { vec_push(errors, _ntn_error(p, rerr)); }
+            else {
+                if (cleaned == 1) { cleaned_count = cleaned_count + 1; }
+                vec_push(notes, note);
+            }
+        }
+        i = i + 1;
+    }
+    var stats = alloc(40);
+    store64(stats, pages_found);
+    store64(stats + 8, vec_len(notes));
+    store64(stats + 16, csv_found);
+    store64(stats + 24, cleaned_count);
+    store64(stats + 32, errors);
+    var result = alloc(16);
+    store64(result, notes);
+    store64(result + 8, stats);
+    return result;
 }

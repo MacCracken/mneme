@@ -1,10 +1,64 @@
-# mneme-io Notion cleanup tests — ported from the 4 pure #[test]s in
-# rust-old/crates/mneme-io/src/import_notion.rs (async I/O tests deferred).
+# mneme-io Notion import tests — ported from rust-old/crates/mneme-io/src/import_notion.rs:
+# the 4 pure #[test]s (string cleaners) and, since 1.2.2, the 4 #[tokio::test]s (directory import,
+# async → sync). The groups after them are mneme-only characterization: Rust has no test for hidden-entry
+# skipping, sort order, empty-toggle removal, page read errors or large pages.
+include "src/core_frontmatter.cyr"
+include "src/io_wikilink.cyr"
+include "src/io_obsidian.cyr"
 include "src/io_notion.cyr"
+
+# A fresh export dir per test: /tmp/mneme_nt<pid>_<n>. The pid keeps a re-run from reading an earlier
+# run's files.
+var _ntn_dir_n = 0;
+fn _fresh_dir(): i64 {
+    _ntn_dir_n = _ntn_dir_n + 1;
+    var pb = str_builder_new();
+    str_builder_add_cstr(pb, "/tmp/mneme_nt");
+    str_builder_add_int(pb, sys_getpid());
+    str_builder_add_cstr(pb, "_");
+    str_builder_add_int(pb, _ntn_dir_n);
+    var d = str_builder_build(pb);
+    sys_mkdir(_imp_cstr(d), 493);
+    return d;
+}
+# write `content` to dir/name, creating parent dirs (Rust's write_file helper)
+fn _write_file(dir: Str, name, content): i64 {
+    var path = path_join(dir, str_from(name));
+    var parent = path_dirname(path);
+    var n = str_len(parent);
+    var d = str_data(parent);
+    var i = 1;
+    while (i <= n) {
+        if (i == n || load8(d + i) == 47) { sys_mkdir(_imp_cstr(str_substr(parent, 0, i)), 493); }
+        i = i + 1;
+    }
+    var c = str_from(content);
+    file_write_all(_imp_cstr(path), str_data(c), str_len(c));
+    return path;
+}
+fn _any_title(notes, cstr): i64 {
+    var i = 0;
+    while (i < vec_len(notes)) {
+        if (str_eq_cstr(mneme_io_imported_note_title(vec_get(notes, i)), cstr) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _note_titled(notes, cstr): i64 {
+    var i = 0;
+    while (i < vec_len(notes)) {
+        if (str_eq_cstr(mneme_io_imported_note_title(vec_get(notes, i)), cstr) == 1) { return vec_get(notes, i); }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _rel(notes, i): i64 { return mneme_io_imported_note_relative_path(vec_get(notes, i)); }
 
 fn main() {
     alloc_init();
     test_group("io_notion");
+
+    # --- the 4 pure #[test]s ---
 
     # clean_uuid_suffix
     var p1 = mneme_io_notion_clean_title(str_from("My Page abc123def4567890abcdef1234567890"));
@@ -22,6 +76,112 @@ fn main() {
 
     # path_cleaning
     assert(str_eq(mneme_io_notion_clean_path(str_from("Projects abc123def4567890abcdef1234567890/Sub abc123def4567890abcdef1234567890.md")), str_from("Projects/Sub.md")), "path cleaned");
+
+    # --- the 4 #[tokio::test]s ---
+
+    # import_notion_directory
+    var d1 = _fresh_dir();
+    _write_file(d1, "My Note abc123def4567890abcdef1234567890.md", "# My Note\n\nSome content here.");
+    _write_file(d1, "Another abc123def4567890abcdef1234567890.md", "---\ntitle: Another Page\ntags: [notion]\n---\nMore content.");
+    var r1 = mneme_io_import_notion_export(d1);
+    assert(r1 != 0, "directory import ok");
+    var s1 = mneme_io_notion_result_stats(r1);
+    var n1 = mneme_io_notion_result_notes(r1);
+    assert_eq(mneme_io_notion_stats_pages_found(s1), 2, "pages_found 2");
+    assert_eq(mneme_io_notion_stats_pages_imported(s1), 2, "pages_imported 2");
+    assert_eq(_any_title(n1, "My Note"), 1, "a note titled My Note");
+
+    # import_notion_nested
+    var d2 = _fresh_dir();
+    _write_file(d2, "root.md", "Root page.");
+    _write_file(d2, "subdir/child.md", "Child page.");
+    var r2 = mneme_io_import_notion_export(d2);
+    assert(r2 != 0, "nested import ok");
+    assert_eq(mneme_io_notion_stats_pages_found(mneme_io_notion_result_stats(r2)), 2, "nested pages_found 2");
+    assert_eq(vec_len(mneme_io_notion_result_notes(r2)), 2, "nested notes 2");
+
+    # import_notion_nonexistent (Rust: Err(SourceNotFound))
+    assert_eq(mneme_io_import_notion_export(str_from("/nonexistent")), 0, "nonexistent -> 0");
+
+    # import_counts_csv_databases
+    var d4 = _fresh_dir();
+    _write_file(d4, "page.md", "Content.");
+    _write_file(d4, "database.csv", "col1,col2\na,b");
+    var s4 = mneme_io_notion_result_stats(mneme_io_import_notion_export(d4));
+    assert_eq(mneme_io_notion_stats_csv_databases_found(s4), 1, "csv_databases_found 1");
+    assert_eq(mneme_io_notion_stats_pages_found(s4), 1, "csv test pages_found 1");
+
+    # --- mneme-only characterization ---
+
+    # the page fields import_notion_page fills (directory test's export)
+    assert_eq(mneme_io_notion_stats_uuid_suffixes_cleaned(s1), 1, "one title lost a uuid suffix (the other has a frontmatter title)");
+    assert_eq(mneme_io_notion_stats_csv_databases_found(s1), 0, "no csv in the directory test");
+    assert_eq(vec_len(mneme_io_notion_stats_errors(s1)), 0, "no page errors");
+    var mn = _note_titled(n1, "My Note");
+    assert(str_eq_cstr(mneme_io_imported_note_relative_path(mn), "My Note.md"), "relative path has the uuid cleaned");
+    assert(str_eq_cstr(mneme_io_imported_note_content(mn), "# My Note\n\nSome content here."), "content kept as written");
+    assert_eq(vec_len(mneme_io_imported_note_wikilinks(mn)), 0, "no wikilinks");
+    var an = _note_titled(n1, "Another Page");
+    assert(an != 0, "frontmatter title wins over the file name");
+    assert_eq(vec_len(mneme_io_imported_note_tags(an)), 1, "frontmatter tags carried");
+    assert(str_eq_cstr(vec_get(mneme_io_imported_note_tags(an), 0), "notion"), "tag is notion");
+    assert(str_eq_cstr(mneme_io_imported_note_content(an), "More content."), "frontmatter split off the body");
+
+    # nested: sorted, relative paths below the root
+    var n2 = mneme_io_notion_result_notes(r2);
+    assert(str_eq_cstr(_rel(n2, 0), "root.md"), "nested[0] root.md");
+    assert(str_eq_cstr(_rel(n2, 1), "subdir/child.md"), "nested[1] subdir/child.md");
+
+    # sort is PathBuf order (component-wise): a/b.md before a-b.md, though '-' < '/' as bytes
+    var d6 = _fresh_dir();
+    _write_file(d6, "a-b.md", "dash");
+    _write_file(d6, "a/b.md", "slash");
+    var n6 = mneme_io_notion_result_notes(mneme_io_import_notion_export(d6));
+    assert_eq(vec_len(n6), 2, "sort test: 2 notes");
+    assert(str_eq_cstr(_rel(n6, 0), "a/b.md"), "component order: a/b.md first");
+    assert(str_eq_cstr(_rel(n6, 1), "a-b.md"), "component order: a-b.md second");
+
+    # hidden entries are skipped, files and whole directories alike; other extensions are not collected
+    var d7 = _fresh_dir();
+    _write_file(d7, "visible.md", "shown");
+    _write_file(d7, ".dot.md", "hidden file");
+    _write_file(d7, ".hidden/x.md", "hidden dir");
+    _write_file(d7, "sub/.git/y.md", "hidden nested dir");
+    _write_file(d7, "notes.txt", "not md or csv");
+    var s7 = mneme_io_notion_result_stats(mneme_io_import_notion_export(d7));
+    assert_eq(mneme_io_notion_stats_pages_found(s7), 1, "only visible.md is a page");
+    assert_eq(mneme_io_notion_stats_csv_databases_found(s7), 0, "no csv");
+
+    # a page that cannot be read is recorded and the import goes on (Rust: stats.errors)
+    var d8 = _fresh_dir();
+    _write_file(d8, "good.md", "fine");
+    var broken = path_join(d8, str_from("broken.md"));
+    sys_symlink("/nonexistent/mneme-notion-target.md", _imp_cstr(broken));   # dangling: ENOENT even as root
+    var r8 = mneme_io_import_notion_export(d8);
+    var s8 = mneme_io_notion_result_stats(r8);
+    assert_eq(mneme_io_notion_stats_pages_found(s8), 2, "both .md entries are pages");
+    assert_eq(mneme_io_notion_stats_pages_imported(s8), 1, "only the readable one imports");
+    assert_eq(vec_len(mneme_io_notion_stats_errors(s8)), 1, "one error recorded");
+    var e8 = vec_get(mneme_io_notion_stats_errors(s8), 0);
+    assert(str_eq(mneme_io_notion_error_path(e8), broken), "error names the page");
+    assert(str_contains(mneme_io_notion_error_message(e8), str_from("errno 2")), "error carries ENOENT");
+
+    # a page over 256 KB imports whole (no fixed read buffer)
+    var d9 = _fresh_dir();
+    var big = str_builder_new();
+    var bi = 0;
+    while (bi < 300000) { str_builder_putc(big, 97 + (bi % 26)); bi = bi + 1; }
+    var bigs = str_builder_build(big);
+    var bigp = path_join(d9, str_from("big.md"));
+    file_write_all(_imp_cstr(bigp), str_data(bigs), str_len(bigs));
+    var n9 = mneme_io_notion_result_notes(mneme_io_import_notion_export(d9));
+    assert_eq(str_len(mneme_io_imported_note_content(vec_get(n9, 0))), 300000, "300,000-byte page imported whole");
+
+    # empty toggle blocks are removed; a toggle with a summary or a body is kept
+    assert(str_eq_cstr(mneme_io_notion_clean_content(str_from("a\n<details>\n  <summary></summary>\n</details>\nb")), "a\nb"), "empty toggle removed with its newline");
+    assert(str_eq_cstr(mneme_io_notion_clean_content(str_from("<details><summary></summary></details>")), ""), "empty toggle at end of input");
+    assert(str_eq_cstr(mneme_io_notion_clean_content(str_from("<details><summary>S</summary></details>")), "<details><summary>S</summary></details>"), "toggle with a summary kept");
+    assert(str_eq_cstr(mneme_io_notion_clean_content(str_from("<details><summary></summary>body</details>")), "<details><summary></summary>body</details>"), "toggle with a body kept");
 
     return assert_summary();
 }

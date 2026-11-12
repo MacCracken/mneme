@@ -5,6 +5,17 @@
 
 ## Version
 
+**1.2.2** — quick batch (2026-11-12). Toolchain unchanged at `6.7.18`.
+- **The roadmap is reorganized** (`roadmap.md`): completed milestones and done items are out. The remaining work
+  is sequenced as 1.2.3 (P(-1) sweep), 1.3.x (document pipeline on bayan), 1.4.x (parity polish), 1.5.x
+  (performance) and a 2.0.0 backlog (local ONNX inference, dhancha GUI).
+- **The Notion directory import is ported** (`mneme_io_import_notion_export`, `src/io_notion.cyr`). This was the
+  last un-ported `mneme-io` path: its 4 `#[tokio::test]`s are now in `tests/io_notion.tcyr`, so all 45 `mneme-io`
+  Rust tests are mirrored. The release also adds the empty toggle-block removal the port had deferred in
+  `clean_notion_content`.
+- `tests/io_notion.tcyr` grew from 6 to 43 assertions. Its mneme-only checks were mutation-proven: a byte-order
+  sort, no hidden-entry filter, no toggle removal and a 256 KB read cap each fail the suite.
+
 **1.2.1** — toolchain + vendored stdlib refresh (2026-11-12). Pin `6.7.9` → **`6.7.18`**. `lib/` was re-resolved
 with `cyrius deps` after copying the two kept modules from the `6.7.18` stdlib. **Every file in `lib/` matches the
 `6.7.18` stdlib byte-for-byte**: 86 locked files, 56 changed, 23 unchanged, and 7 new under `lib/unicode/`
@@ -132,6 +143,8 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
   - **M2 `mneme-io` / `mneme-store` — COMPLETE.** `io_*` (wikilink, notion,
     web_clipper, obsidian, markdown, export_html) + `store_*` (versioning,
     sharing, registry, db [patra], files [real SHA-256], vault, manager).
+    `io_notion`'s directory import (`mneme_io_import_notion_export`) landed in
+    1.2.2, so every `mneme-io` Rust test is now mirrored.
   - **M3 `mneme-search` — COMPLETE.** All 10 modules: query_dsl,
     retrieval_optimizer, context_buffer, cross_vault, engine (inverted-index
     BM25, built from scratch — no Tantivy analog), vector_store (brute-force
@@ -199,7 +212,7 @@ Note: `search_semantic_engine`'s functions were renamed to the
 
 ## Tests
 
-**62 `.tcyr` files, 1,133 assertions — all green.** The entire 21,014-LOC workspace is ported (core,
+**62 `.tcyr` files, 1,170 assertions — all green.** The entire 21,014-LOC workspace is ported (core,
 io incl. PDF, store, search, ai, mcp, full api HTTP surface, ui app), plus the
 mneme-ui `views`/`main` glue (`ui_render`, `ui_events`) and the **live network +
 terminal bridges** (`net_http` = sandhi HTTP to daimon + remote embeddings;
@@ -226,17 +239,22 @@ tls, ws, async, atomic, sandhi, fdlopen, dynlib, mmap, freelist, process, sakshi
 
 ## Next
 
-Port complete — pure logic, the full API surface, the TUI, and the network/terminal
-bridges are all done and green. Everything remaining is [`roadmap.md`](roadmap.md)
-P2 backlog: local ONNX inference (lands with the ML-AI stack), `bayan_markdown`/
-`bayan_pdf` migration, and minor polish (canonical uuid string, graph layout,
-RFC3339 datetime).
+The port is complete. What remains is sequenced in [`roadmap.md`](roadmap.md): **1.2.3** is a P(-1) sweep (audit,
+refactor, hardening, optimization, security); **1.3.x** moves the document pipeline onto bayan (`bayan_pdf_*`, then
+`bayan_markdown_*`, which shipped in bayan 1.11.1); **1.4.x** is the remaining parity polish (RFC 3339 datetimes,
+graph layout); **1.5.x** is performance; local ONNX inference and the dhancha GUI are the **2.0.0** backlog.
 
-New in 1.1.3 — **bayan's PDF module was shaped around auditing mneme's hand-rolled writer**, and its findings
-name defects that are still live here. `bayan/src/pdf.cyr` cites `src/io_export_pdf.cyr` seven times, and bayan
-1.5.0's CHANGELOG says the hand-roll "is superseded here, and the defects found while reading it are what this
-module is shaped around". Triaged against mneme at 1.1.3 — **none is caught by the 62-suite run or by
-`pdfcheck.sh`**, which validates *structure* (xref/`/Length`/`/Size`), not text encoding or layout:
+⛔ **Top of the 1.2.3 list — silent truncation on read.** `store_files.cyr:44` reads every note through a fixed
+256 KB `file_read_all` buffer, so a larger note comes back cut short with no error, and saving it after an edit
+destroys the rest. The importers `io_obsidian.cyr:121` and `io_markdown.cyr:11` have the same 256 KB cap. Three
+1 MB caps are in the same class: `search_vector_store.cyr:286`, `ai_training_export.cyr:161` and
+`ai_multimodal.cyr:102`. The 1.2.2 Notion importer already reads through `file_read_whole`, and its test proves a
+300,000-byte page imports whole.
+
+**Live PDF-export defects — retired by the 1.3.0 `bayan_pdf_*` migration.** bayan's PDF module was shaped around
+auditing mneme's hand-rolled writer (`bayan/src/pdf.cyr` cites `src/io_export_pdf.cyr` seven times). Neither the
+suite nor `pdfcheck.sh` catches these, since `pdfcheck.sh` validates *structure* (xref, `/Length`, `/Size`), not
+text encoding or layout. Line numbers re-checked at 1.2.2:
 
 - ⛔ **LIVE — no `/Encoding` on the font dict.** `io_export_pdf.cyr:391` emits
   `<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>`, so viewers fall back to StandardEncoding, where only 54 of
@@ -259,39 +277,13 @@ module is shaped around". Triaged against mneme at 1.1.3 — **none is caught by
 - ✅ **Already fixed here — bayan's audit is stale on this one.** It lists "mneme ignores `file_write_all`'s
   return and reports success on a full disk"; that was repaired in **1.1.2** (`io_export_pdf.cyr:452`).
 
-Also surfaced by the bayan fold, in a different module and **fixed in this release**: `core_config.cyr` wrote
-TOML values **unescaped** — vault `name`/`path`/`description`, `default_vault` and the embedding `backend` were
-interpolated straight between literal quotes, so a value holding a `"`, a newline or a backslash emitted malformed
-TOML and silently lost data on re-read. `rust-old` escaped correctly via `toml::to_string`, so this was a port
-regression, repaired as parity (no ADR). Values are now escaped on write, and — because **bayan does not unescape
-TOML basic strings**, returning the raw slice with backslashes intact — all 8 string-value reads go through
-`_cfg_toml_str` (`bayan_toml_get` + unescape). ⚠ **Those two halves are a matched pair**: if bayan ever grows TOML
-unescaping, mneme would double-decode. The `toml escape` assertions in `tests/core_config.tcyr` exist to fail
-loudly at that moment. Tests 13 → 24 assertions, **6 of the 11 new ones mutation-proven against the pre-fix
-writer**.
+Also open for 1.3.0:
 
-The bayan upgrade independently improved how the *old* bug failed: an unterminated basic string used to scan across
-newlines and swallow the following config lines into one value, and now stops at the newline. Moot after the fix,
-but it is why the defect surfaced here.
-
-These strengthen the case for the now-unblocked `bayan_pdf_*` primitives migration in
-[`roadmap.md`](roadmap.md) — it retires three live defects and two brittle constants at once, and makes the
-+199 KB of `bayan_pdf_*` the binary already carries into the code actually doing the work. **Not actioned in
-1.1.3**, which is a toolchain/dependency refresh with no mneme source change.
-
-Carried forward from 1.1.2:
-
-- **`bayan_pdf_*` has landed** (bayan 1.5.0), so the PDF migration is now
-  actionable. Scope is the **primitives only** — the object/xref/content-stream
-  writer in `io_export_pdf.cyr`. mneme keeps its own markdown layer, so
-  `mneme_io_parse_markdown_blocks` and the ADR-015 unterminated-fence behavior do
-  **not** migrate. `scripts/pdfcheck.sh` is the shared acceptance gate on both
-  sides of that swap.
 - **Nothing consumes `mneme_io_md_unterminated_fence()` yet.** The parser records
-  a malformed fence but no caller surfaces it: the CLI export path and the API's
-  `/export/pdf` still accept the input silently (they no longer *lose* content —
-  that was the 1.1.2 fix — but they do not warn). Wiring a warning through those
-  two callers is the follow-on.
+  a malformed fence but no caller surfaces it: the API's `/export/pdf` and the file
+  exporters (`mneme_io_export_note_to_pdf` / `_notes_to_pdf`, which nothing in `src/`
+  calls yet) still accept the input silently. They no longer *lose* content (the 1.1.2
+  fix), but they do not warn. Wiring a warning through them is the follow-on.
 - **`mneme_io_export_pdf`** (the `/export/pdf` wrapper) renders in-memory and has
   no write path, so it needed no error propagation. If it ever grows one, it
   should return the same negative-errno contract as `mneme_io_export_note_to_pdf`.

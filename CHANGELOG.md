@@ -4,6 +4,66 @@ All notable changes to Mneme will be documented in this file.
 
 ## [Unreleased]
 
+## [1.2.2] — 2026-11-12
+
+**Quick batch: the roadmap is reorganized around the releases ahead, and the Notion directory import — the last
+un-ported `mneme-io` path — is ported with its 4 Rust tests. 62 files, 1,133 → 1,170 assertions, all green.
+Toolchain unchanged at `6.7.18`.**
+
+### Added
+- **`mneme_io_import_notion_export`** (`src/io_notion.cyr`): the directory import for a Notion export (an extracted
+  zip), ported from `import_notion.rs`'s `import_notion_export`, `import_notion_page` and `collect_notion_files`.
+  - **The walk** collects every non-hidden `.md` and `.csv` file under the root, sorted in Rust's `PathBuf` order
+    (component by component, so `a/b.md` sorts before `a-b.md`). It skips any entry whose name starts with `.`,
+    which also skips a hidden directory's whole subtree.
+  - **Each page** takes its title from the frontmatter `title` when there is one, otherwise from the file name.
+    Either way the title loses Notion's 32-hex UUID suffix (counted in `uuid_suffixes_cleaned`). The content goes
+    through `clean_notion_content`, the tags come from the frontmatter, and the relative path has its UUID
+    suffixes stripped.
+  - **Stats** report `pages_found`, `pages_imported`, `csv_databases_found`, `uuid_suffixes_cleaned` and `errors`.
+    The result has the same `[notes, stats]` layout as the Obsidian import.
+  - **Errors:** a page that cannot be read is recorded in `stats.errors` as a path and errno message, and the
+    import continues, as in Rust. A root that is not a directory, or a tree with a directory that cannot be
+    listed, returns 0, matching Rust's `Err(SourceNotFound)` and `Err(Io)`.
+  - **Pages are read whole** through `file_read_whole`, so a large page is never cut short. The test imports a
+    300,000-byte page in full.
+- **Empty toggle-block removal in `clean_notion_content`** — Rust's `<details>\s*<summary></summary>\s*</details>\n?`,
+  which the port had deferred. A toggle with summary text or a body is kept.
+
+### Divergences from `rust-old`
+These are deliberate, and none is observable in the Rust tests:
+- **Symlinked directories aren't descended.** The walk is the stdlib's `dir_walk_checked`, which is depth-bounded
+  and records a symlinked directory instead of entering it; Rust's `is_dir()` follows one. A Notion export holds no
+  symlinks, and the bound is what keeps a hostile tree from looping.
+- **Invalid UTF-8 is imported as bytes.** Rust's `read_to_string` rejects such a file.
+- **`modified_at` is 0**, as in the Obsidian importer. A portable `stat` isn't wired: AGNOS's `sys_stat` takes
+  different arguments from Linux's.
+
+### Changed
+- **`docs/development/roadmap.md` rewritten.** Completed milestones (M0–M7, the v1.0 criteria, the 6.6.13 pin
+  note) are removed; they live here in the CHANGELOG. The remaining work is sequenced:
+  - **1.2.3** — the P(-1) audit / refactor / hardening / optimization / security sweep, with its known inputs
+    listed. The first is that `store_files.cyr:44` silently truncates notes over 256 KB on read.
+  - **1.3.x** — the document pipeline on bayan: `bayan_pdf_*` primitives, then `bayan_markdown_*`, which bayan
+    1.11.1 now ships.
+  - **1.4.x** — parity polish: RFC 3339 datetimes and graph layout.
+  - **1.5.x** — the ranked performance targets.
+  - **2.0.0 backlog** — local ONNX inference and the dhancha GUI.
+- **`docs/development/state.md`'s "Next" section refreshed.** It no longer calls the remaining work "P2 backlog",
+  and it drops a stale note claiming mneme unescapes TOML values itself; bayan's parser has done that since 1.5.5.
+  It also corrects "the CLI export path" to the file exporters, which nothing in `src/` calls yet.
+
+### Verified
+- `cyrius build src/main.cyr build/mneme`: OK, 2,899,832 B (unchanged; `main.cyr` doesn't include `io_notion`).
+- `cyrius test`: 62 passed, 0 failed. `io_notion` grew 6 → 43 assertions, and every other suite has the same count as
+  at 1.2.1. The warning set is unchanged.
+- **The new mneme-only assertions are mutation-proven.** Each of these fails the suite:
+  - a byte-order sort (2 failures);
+  - no hidden-entry filter (1);
+  - no toggle removal (2);
+  - a 256 KB read cap (1).
+- `scripts/pdfcheck.sh --strict`: 7/7. `tests/mneme.fcyr`: ok.
+
 ## [1.2.1] — 2026-11-12
 
 **Toolchain and vendored stdlib refreshed: Cyrius `6.7.9` → `6.7.18`, with every file in `lib/` matching the
