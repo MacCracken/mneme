@@ -4,6 +4,70 @@ All notable changes to Mneme will be documented in this file.
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-11-12
+
+**Toolchain and vendored stdlib refreshed: Cyrius `6.7.9` → `6.7.18`, with every file in `lib/` matching the
+`6.7.18` stdlib byte-for-byte. The one source edit is a rename off two newly deprecated bayan TOML names. 62 files
+/ 1,133 assertions, all green, with identical per-suite counts at both pins.**
+
+### Changed
+- **Toolchain pin `6.7.9` → `6.7.18`.** CI installs from the `cyrius.cyml [package].cyrius` pin, so this needs no
+  workflow edit.
+- **`lib/` re-resolved via `cyrius deps`.** 86 locked files: 56 changed, 23 unchanged, and 7 new under
+  `lib/unicode/` (`casefold`, `categories`, `normalize`, `_decode` and three data tables), which bayan 1.11.1
+  includes itself. Folded libs:
+  - bayan `1.5.13` → `1.11.1`
+  - patra `1.16.0` → `1.16.6`
+  - sandhi `1.10.9` → `1.13.7`
+  - sakshi `2.5.8` → `2.5.10`
+  - sigil `3.13.11` → `3.13.15`
+- **The kept modules `lib/hashmap_fast.cyr` and `lib/ws_server.cyr` were refreshed by hand from the `6.7.18`
+  stdlib.** `hashmap_fast` is byte-identical between `6.7.9` and `6.7.18`; `ws_server` changed. 6.7.18's
+  `cyrius deps` refuses to re-lock across a pin move while an undeclared `lib/` file differs from the new snapshot.
+  Its suggested fixes are to delete the file or to vendor the whole snapshot (`cyrius lib sync --full`); neither
+  was used. Copying the two modules first lets `cyrius deps` lock them and keep them as "outside the declared
+  footprint". The order is recorded in `docs/development/state.md`.
+- **`bayan_toml_get` → `bayan_toml_get_by_cstr` and `bayan_toml_get_sections` → `bayan_toml_get_sections_by_cstr`**
+  (`src/core_config.cyr`, 3 + 2 sites). bayan 1.11.0 deprecated the bare names because they don't say what kind of
+  key they take. Each forwards to its `_by_cstr` form, so this is a pure rename and changes no answers: every key is
+  a C-string literal, including the ones that pass through `_cfg_toml_str`. The build no longer prints the five
+  deprecation warnings, and the binary size is unchanged by the rename.
+- **`mneme serve` now refuses more malformed JSON** (bayan 1.11.1, no mneme source change). The JSON tree parser
+  returns 0 for a duplicate object key, a leading-zero number (`01`), a number with no digits, or an out-of-range
+  integer. The request body at `src/mcp_server.cyr:104` is mneme's only bayan JSON parse, so such a body now gets
+  the existing `-32700 Parse error` reply instead of being dispatched. No test sends one. The embedding and daimon
+  HTTP responses are parsed by hand and are unaffected.
+- **`cyrius.lock` re-locked** for the new pin: `cyrius deps --verify` reports 86 verified, 0 failed.
+
+### Checked, no change needed
+A read of cyrius's `ecosystem-migration.md` for 6.7.10–6.7.18, checked against mneme's source, found nothing else
+that applies:
+- no float literals or `: f64` annotations, so the 6.7.11–6.7.16 float-typing changes can't reach mneme;
+- no structs, closures, generics, tuples or multi-value returns;
+- no enum members separated without `;`;
+- no newly refused top-level statements;
+- no name colliding with the new stdlib names.
+
+The suite also compiles with no undefined-function or duplicate-definition warnings, and the tests that include
+`lib/bayan.cyr` by hand pick up its unicode modules without help.
+
+### Verified at the new pin
+- `cyrius build src/main.cyr build/mneme`: OK, 2,595,568 → 2,899,832 B (+304,264). The folded libs' source grew
+  (bayan +259 KB plus 353 KB of unicode tables, patra +78 KB, sandhi +67 KB, sigil +45 KB), and mneme builds
+  without dead-code elimination. The build and test warnings are the `6.7.9` set minus sigil's static-buffer
+  warning and the "large static data" warning, which no longer appear.
+- `cyrius test`: 62 passed, 0 failed (1,133 assertions), the same count in every suite as at `6.7.9`, both before
+  and after the rename.
+- `scripts/pdfcheck.sh --strict`: 7/7 under bayan 1.11.1's validator.
+- `tests/mneme.fcyr`: ok.
+- `tests/mneme.bcyr` and `benches/mneme_bench.bcyr` both run (`6.7.9` run in brackets):
+  - `core_uuid_v4` 550 ns (567)
+  - `ai_tokenize` 3.96 µs (4.00)
+  - `squared_distance_3d` 37 ns (38)
+  - `bm25_search_200docs` 309 µs (297)
+
+  These are single runs taken at different times, not an interleaved A/B.
+
 ## [1.2.0] — 2026-11-12
 
 **Toolchain onto the Cyrius 6.7.x language minor: `6.6.20` → `6.7.9`, with every file in `lib/` matching the

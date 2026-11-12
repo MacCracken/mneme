@@ -117,7 +117,7 @@ fn _cfg_toml_esc(sb, s: Str): i64 {
 }
 # Decode a TOML basic-string body. Returns `s` itself when it holds no
 # backslash — the overwhelmingly common case allocates nothing.
-# bayan_toml_get. Absent (0) passes straight through, so callers keep their
+# bayan_toml_get_by_cstr. Absent (0) passes straight through, so callers keep their
 # existing "0 means None" contract.
 #
 # ⚠ NO UNESCAPE HERE — bayan's PARSER does it (bayan 1.5.5). This used to call a
@@ -130,7 +130,7 @@ fn _cfg_toml_esc(sb, s: Str): i64 {
 # belongs in the parser, not here. The ENCODER (`_cfg_toml_esc`) stays: mneme still
 # writes its TOML by hand and must escape on the way out.
 fn _cfg_toml_str(pairs, key): i64 {
-    var v = bayan_toml_get(pairs, key);
+    var v = bayan_toml_get_by_cstr(pairs, key);
     if (v == 0) { return 0; }
     return v;
 }
@@ -158,7 +158,7 @@ fn mneme_core_vault_entry_from_toml(toml_str: Str): i64 {
     var name = _cfg_toml_str(pairs, "name");
     var path = _cfg_toml_str(pairs, "path");
     var desc = _cfg_toml_str(pairs, "description");   # 0 if absent
-    var wstr = bayan_toml_get(pairs, "search_weight");
+    var wstr = bayan_toml_get_by_cstr(pairs, "search_weight");
     var w = f64_parse("1.0");
     if (wstr != 0) { w = f64_parse(_cfg_cstr(wstr)); }
     return mneme_core_vault_entry_new(name, path, desc, w);
@@ -255,11 +255,11 @@ fn mneme_core_config_from_toml(toml_str: Str): i64 {
     store64(c + 8, 0);
     # vaults = each [[vaults]] section
     var vaults = vec_new();
-    var vsecs = bayan_toml_get_sections(sections, "vaults");
+    var vsecs = bayan_toml_get_sections_by_cstr(sections, "vaults");
     var i = 0;
     while (i < vec_len(vsecs)) {
         var pairs = bayan_toml_section_pairs(vec_get(vsecs, i));
-        var wstr = bayan_toml_get(pairs, "search_weight");
+        var wstr = bayan_toml_get_by_cstr(pairs, "search_weight");
         var w = f64_parse("1.0");
         if (wstr != 0) { w = f64_parse(_cfg_cstr(wstr)); }
         vec_push(vaults, mneme_core_vault_entry_new(_cfg_toml_str(pairs, "name"), _cfg_toml_str(pairs, "path"), _cfg_toml_str(pairs, "description"), w));
@@ -269,7 +269,7 @@ fn mneme_core_config_from_toml(toml_str: Str): i64 {
     store64(c + 24, mneme_core_context_retrieval_default());
     # embedding backend
     var emb = mneme_core_embedding_default();
-    var esecs = bayan_toml_get_sections(sections, "embedding");
+    var esecs = bayan_toml_get_sections_by_cstr(sections, "embedding");
     if (vec_len(esecs) > 0) {
         var bk = _cfg_toml_str(bayan_toml_section_pairs(vec_get(esecs, 0)), "backend");
         if (bk != 0) { store64(emb, bk); }

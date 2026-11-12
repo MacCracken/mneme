@@ -5,6 +5,25 @@
 
 ## Version
 
+**1.2.1** — toolchain + vendored stdlib refresh (2026-11-12). Pin `6.7.9` → **`6.7.18`**. `lib/` was re-resolved
+with `cyrius deps` after copying the two kept modules from the `6.7.18` stdlib. **Every file in `lib/` matches the
+`6.7.18` stdlib byte-for-byte**: 86 locked files, 56 changed, 23 unchanged, and 7 new under `lib/unicode/`
+(casefold, categories, normalize and their data tables), which bayan 1.11.1 includes itself. Folded libs: bayan
+`1.5.13` → `1.11.1`, patra `1.16.0` → `1.16.6`, sandhi `1.10.9` → `1.13.7`, sakshi `2.5.8` → `2.5.10`, sigil
+`3.13.11` → `3.13.15`. The suite is unchanged at 62 files / 1,133 assertions with **identical per-suite counts**.
+- **Source change:** bayan 1.11.0 deprecated the bare TOML lookups. `src/core_config.cyr`'s three `bayan_toml_get`
+  and two `bayan_toml_get_sections` calls now use their `_by_cstr` forms, which the old names forwarded to, so this
+  is a pure rename. Every key is a C-string literal, including the ones passed through `_cfg_toml_str`.
+- **Runtime change, no source change:** bayan 1.11.1's JSON tree parser now refuses a duplicate object key, a
+  leading-zero number (`01`), a number with no digits and an out-of-range integer. mneme's only bayan JSON parse is
+  the `mneme serve` request body (`src/mcp_server.cyr:104`), so such a body now gets the existing `-32700 Parse
+  error` reply instead of being dispatched. No test sends one.
+- **Warnings:** sigil's shared-static-buffer warning and the "large static data" warning no longer appear in the
+  build or the tests.
+- **Binary size:** `build/mneme` grew from 2,595,568 to 2,899,832 B (+304,264). The folded libs' source grew (bayan
+  +259 KB plus 353 KB of unicode tables, patra +78 KB, sandhi +67 KB, sigil +45 KB), and mneme builds without
+  dead-code elimination, so all of it is in the binary.
+
 **1.2.0** — toolchain onto the cyrius **6.7.x language minor** + vendored stdlib refresh (2026-11-12). Pin
 `6.6.20` → **`6.7.9`**; `lib/` re-resolved with `cyrius deps`, the two kept modules (`hashmap_fast`, `ws_server`)
 copied from the `6.7.9` stdlib, and `cyrius.lock` re-locked. **Every file in `lib/` matches the `6.7.9` stdlib
@@ -92,15 +111,16 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
 
 ## Toolchain
 
-- **Cyrius pin**: `6.7.9` (in `cyrius.cyml [package].cyrius`)
-- **Vendored stdlib**: bayan `1.5.13`, patra `1.16.0`, sandhi `1.10.9`, sakshi `2.5.8`, sigil `3.13.11`. Refresh
+- **Cyrius pin**: `6.7.18` (in `cyrius.cyml [package].cyrius`)
+- **Vendored stdlib**: bayan `1.11.1`, patra `1.16.6`, sandhi `1.13.7`, sakshi `2.5.10`, sigil `3.13.15`. Refresh
   with `cyrius deps` (never `cyrius update`), then `cyrius deps --verify` against `cyrius.lock`.
   ⚠ `lib/hashmap_fast.cyr` and `lib/ws_server.cyr` are **not declared** in `[deps].stdlib` and nothing includes
-  them, so `cyrius deps` never refreshes them. At 1.1.5 and again at 1.2.0 they were copied by hand from the
-  pinned stdlib and re-locked with `cyrius deps --lock`. They are **kept on purpose** (decided at 1.1.5), so every
-  pin bump has to
-  refresh them by hand: `cp ~/.cyrius/versions/<pin>/lib/{hashmap_fast,ws_server}.cyr lib/` and then
-  `cyrius deps --lock`.
+  them, so `cyrius deps` never refreshes them. They are **kept on purpose** (decided at 1.1.5), so every pin bump
+  refreshes them by hand. **Copy them FIRST, then resolve:**
+  `cp ~/.cyrius/versions/<pin>/lib/{hashmap_fast,ws_server}.cyr lib/`, then `cyrius deps`, then
+  `cyrius deps --verify`. Since 6.7.18, `cyrius deps` refuses to re-lock across a pin move while an undeclared
+  `lib/` file differs from the new snapshot. It suggests `rm` or `cyrius lib sync --full`; don't use either. Once
+  the copies match, it locks them and notes them as "outside the declared footprint".
 
 ## Source
 
