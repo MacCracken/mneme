@@ -11,24 +11,20 @@ Shipped since and recorded in the CHANGELOG:
 - **1.2.2** — the roadmap reorganisation and the Notion directory import;
 - **1.2.3** — the P(-1) audit / refactor / hardening / optimization / security sweep. Its findings and repairs are
   in [`../audit/2026-11-12-audit.md`](../audit/2026-11-12-audit.md), and the items it deferred are listed below.
+- **1.3.0** — PDF export on `bayan_pdf_*`
+  ([ADR 017](../adr/017-pdf-export-on-bayan.md)). It retired the three live defects: no `/Encoding`, wrapping by
+  character count, and CR/LF deleted. It also replaced the predicted xref offset and surfaced the unclosed-fence
+  diagnostic.
 
 ## 1.3.x — the document pipeline on bayan
 
-- **1.3.0 — `bayan_pdf_*` for the PDF primitives.** bayan 1.5.0 shipped the module, and mneme has vendored it since
-  1.1.3. Only the object, xref and content-stream writer in `io_export_pdf` migrates; mneme keeps its markdown
-  layer (`mneme_io_parse_markdown_blocks`) and the ADR-015 unterminated-fence behaviour. The migration retires
-  three live defects tracked in `state.md`:
-  - no `/Encoding`, so non-ASCII text renders as mojibake;
-  - wrapping counts characters instead of width;
-  - `_pdf_esc` silently drops CR and LF.
-
-  It also replaces the brittle `offset = 9` / closed-form object-number constants. `scripts/pdfcheck.sh` is the
-  gate on both sides of the swap. In the same release, surface `mneme_io_md_unterminated_fence()` through
-  `/export/pdf` and the file exporters (`mneme_io_export_note_to_pdf` / `_notes_to_pdf`, which nothing in `src/`
-  calls yet); nothing reports it today.
 - **1.3.1 — `bayan_markdown_*` for HTML export.** This is now unblocked: bayan 1.11.1 ships `bayan_markdown_parse`
   (to an AST) and `bayan_markdown_to_html`. It replaces the hand-rolled subset in `mneme_io_markdown_to_html`
   (`io_export_html`).
+- **When bayan's PDF gaps close** (bayan issue `2026-11-05-pdf-writer-gaps-for-a-qa-report`):
+  - adopt a wrap that breaks a word wider than the column (gap 2: a long URL still runs off the page);
+  - adopt embedded TrueType fonts (gap 3), so text outside WinAnsi stops being exported as `?`;
+  - drop mneme's own refused-run check once bayan's write refuses an errored document itself (gap 1).
 
 ## 1.4.x — remaining parity polish and robustness
 

@@ -4,6 +4,75 @@ All notable changes to Mneme will be documented in this file.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-11-12
+
+**PDF export moves onto bayan's PDF writer (`bayan_pdf_*`), which retires the three live export defects bayan's
+audit of mneme found.** mneme keeps its markdown layer and its layout; bayan owns the objects, xref, fonts, content
+streams and text encoding. The divergences from rust-old are in
+[ADR 017](docs/adr/017-pdf-export-on-bayan.md). 63 files, 1,328 → 1,358 assertions, all green.
+`scripts/pdfcheck.sh --strict` now validates 12 fixtures, up from 7, including new encoding, wide-text and
+substitution fixtures. Toolchain unchanged at `6.7.18`.
+
+### Fixed
+- **⛔ Non-ASCII text exported as mojibake.** The font dict carried no `/Encoding`, so viewers used
+  StandardEncoding and `Résumé` rendered as `RÃ©sumÃ©`, with the em dash gone. Fonts now declare
+  `/WinAnsiEncoding` and the text is transcoded: a test renders `Café, naïve and “quoted” — 50 €` and reads it back
+  exactly.
+- **⛔ Lines ran off the page.** Wrapping counted characters: 80 `W`s measure 831 pt against a 451 pt column. It is
+  now by measured width (`bayan_pdf_wrap`, real AFM metrics), for paragraphs, list items, the title, the tag line
+  and headings. A test checks that no extracted line is wider than the column, and that 149 characters of `l` fit
+  on one line where an 80-character count made two.
+- **⛔ CR and LF were deleted from text**, welding the words either side together (`alpha\rbeta` became
+  `alphabeta`). Every control character now becomes a space.
+- **The xref is measured, not predicted.** The first object's offset was the constant 9, and object numbers came
+  from formulas (`4 + 2p`); either breaks the moment the header or object set changes. bayan measures offsets off
+  its builder and re-checks them.
+- **A refused text run fails the export.** bayan still serializes a document after refusing a run (its open issue,
+  gap 1). mneme now checks the error count, so a PDF with a line missing is `-22` from the file exporters and 500
+  from `/export/pdf`, never a success.
+
+### Changed
+- **Fonts follow rust-old:** Helvetica-Bold for the title and headings, Courier for code blocks, Helvetica for
+  body text. The port had used Helvetica throughout.
+- **Text the standard fonts cannot draw is exported as `?` and reported.** That covers CJK, emoji, `✓` and malformed
+  UTF-8 bytes. Nothing is dropped. Embedded fonts are bayan's gap 3, and on the roadmap.
+- **The note title is the document title** (`/Info /Title`), as in Rust's `PdfDocument::new(&note.title, ..)`.
+- **The file is PDF-1.7** (bayan's), with one object per font used and an `/Info` dict.
+- **`mneme_io_wrap_text` (character count) stays for rust-old's `word_wrap` test only.** The renderer no longer
+  uses it.
+- **The API `Response` gains a `warning` field** (`mneme_api_response_warning`, sent as `X-Mneme-Warning` by a served
+  router). It is 0 unless a handler sets one.
+
+### Added
+- **The PDF diagnostics are surfaced.** ADR 015 recorded an unterminated ``` fence, but nothing reported it.
+  - `mneme_io_pdf_warning()` names an unclosed fence and any `?` substitutions in the last render.
+  - `mneme_io_pdf_batch_warnings()` lists `[path, warning]` per file of the last batch export.
+  - `mneme_io_pdf_substituted()` and `mneme_io_pdf_error()` give the count and the failure reason.
+  - `/export/pdf` puts the warning on its response.
+- **`docs/adr/017-pdf-export-on-bayan.md`.**
+- **Tests:** `io_export_pdf` 49 → 76 assertions, `api_server` 79 → 82. They read the rendered PDFs back through
+  bayan's own reader (`bayan_pdf_parse_buf` + `bayan_pdf_extract_text`) and cover:
+  - encoding and fonts;
+  - measured wrapping, title wrapping and page count;
+  - CR and tab handling;
+  - substitution and malformed bytes;
+  - the fence warning, per note and per batch.
+
+  Each reapplied old behaviour turns the suite red: no substitution (3 failures), a CR kept (2) and no measured
+  wrap (3).
+
+### Removed
+- **The hand-rolled writer:** `_pdf_esc`, `_pdf_op`, `_pdf_line`, `_pdf_obj`, `_pdf_pad10` and the inline
+  object/xref assembly in `mneme_io_render_pdf`.
+
+### Verified
+- `cyrius build src/main.cyr build/mneme`: OK, 1,564,240 B. No warnings in `src/`.
+- `cyrius test`: 63 passed, 0 failed (1,358 assertions).
+- `scripts/pdfcheck.sh --strict`: 12/12. `tests/mneme.fcyr`: ok. Benches run.
+- **CP1252 bytes:** the encoding fixture's content stream holds `\x97` (—), `\x93`/`\x94` (“ ”) and `\x80` (€).
+  bayan's `pdfcheck.py --text` shows those four as blanks because it decodes Latin-1; bayan's own reader extracts
+  them correctly.
+
 ## [1.2.3] — 2026-11-12
 
 **The P(-1) sweep: audit, refactor, hardening, optimization, security.** It is a full re-audit, the one the

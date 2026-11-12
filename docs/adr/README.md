@@ -37,3 +37,4 @@ Decisions about mneme — what we chose, the context, and the consequences we ac
 | [014](014-training-feedback-export.md) | Training feedback export |
 | [015](015-unterminated-code-fence.md) | Flush an unterminated code fence instead of dropping it |
 | [016](016-confine-note-paths-and-bind-loopback.md) | Confine note paths to the vault, and serve on loopback by default |
+| [017](017-pdf-export-on-bayan.md) | PDF export on bayan_pdf: measured wrapping, WinAnsi text, no silent deletions |

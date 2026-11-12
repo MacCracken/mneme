@@ -1,10 +1,9 @@
-# mneme-io — PDF export (hand-rolled, ported from rust-old/crates/mneme-io/src/export_pdf.rs).
-# Rust used the `printpdf` crate; there is no Cyrius PDF library yet, so this
-# hand-rolls a valid PDF writer (catalog/pages/font objects, per-page content
-# streams of BT..Tj..ET text ops, and a byte-accurate xref table) — the same
-# "hand-roll now, migrate to bayan later" play as the markdown renderer. A
-# `bayan_pdf_*` read/writer is on bayan's roadmap; swap to it when it lands.
-# Layout is in PDF points (A4 = 595x842); markdown is flattened to text blocks.
+# mneme-io — PDF export (ported from rust-old/crates/mneme-io/src/export_pdf.rs).
+# Rust used the `printpdf` crate. Since 1.3.0 the PDF itself is bayan's (`bayan_pdf_*`: objects, xref, fonts,
+# content streams, WinAnsi transcoding, measured word wrap); mneme keeps its own markdown layer
+# (mneme_io_parse_markdown_blocks, ADR 015) and its layout. See ADR 017.
+# Layout is in PDF points (A4 = 595x842); bayan takes milli-points (1 pt = 1000 mpt).
+# Requires (include first): lib/bayan.cyr.
 
 enum MdBlock { MD_HEADING; MD_PARAGRAPH; MD_CODE; MD_LISTITEM; MD_EMPTY; }
 
@@ -164,6 +163,9 @@ fn mneme_io_parse_markdown_blocks(md: Str): i64 {
     return blocks;
 }
 
+# Rust's wrap_text: greedy word wrap by CHARACTER COUNT. Kept for rust-old's `word_wrap` test only — since 1.3.0
+# the renderer wraps by measured width (bayan_pdf_wrap), because a character count says almost nothing about
+# how wide a line of proportional text is (ADR 017).
 fn mneme_io_wrap_text(text: Str, max_width): i64 {
     var out = vec_new();
     if (str_len(text) <= max_width) { vec_push(out, text); return out; }
@@ -240,67 +242,162 @@ fn mneme_io_pdf_note_content(n): i64 { return load64(n + 8); }
 fn mneme_io_pdf_note_tags(n): i64 { return load64(n + 16); }
 fn mneme_io_pdf_options_default(): i64 { return 0; }   # layout constants hardcoded (A4)
 
-# --- PDF assembly ---
-fn _pdf_esc(sb, s: Str): i64 {
-    var n = str_len(s);
-    var d = str_data(s);
-    var i = 0;
-    while (i < n) {
-        var c = load8(d + i);
-        if (c == 40 || c == 41 || c == 92) { str_builder_putc(sb, 92); }
-        if (c != 10 && c != 13) { str_builder_putc(sb, c); }
-        i = i + 1;
+# --- PDF assembly on bayan_pdf_* (1.3.0, ADR 017) ---------------------------------------------------------
+# Until 1.2.x this file hand-rolled the PDF: a Type1 font dict with NO /Encoding (so viewers fell back to
+# StandardEncoding and `Résumé` rendered `RÃ©sumÃ©`), wrapping by character COUNT (80 `W` ran 308 pt off an
+# A4 page), a show-text escaper that silently DELETED CR/LF (welding the words either side together), and an
+# xref built from a predicted `offset = 9` and closed-form object numbers. bayan's writer measures offsets off
+# its builder, declares /WinAnsiEncoding and transcodes, and wraps by real AFM widths.
+
+# Geometry, in points — unchanged from the hand-rolled writer.
+var _PDFM_LEFT      = 72;    # body text x
+var _PDFM_LIST_LEFT = 78;    # list items: 72 + the width of the old "  " indent (bayan's wrap drops leading spaces)
+var _PDFM_CODE_LEFT = 87;    # code x (Rust: margin + 5 mm)
+var _PDFM_TOP       = 770;   # first baseline of a page
+var _PDFM_BOTTOM    = 90;    # a line that would sit below this starts a new page
+var _PDFM_COLUMN    = 451;   # 595 - 72 - 72: the MEASURED wrap width
+
+# Diagnostics of the most recent render (module globals + accessors, like mneme_io_md_unterminated_fence).
+var _pdfm_substituted = 0;   # characters with no glyph in the standard fonts, exported as '?'
+var _pdfm_failed = 0;        # text runs bayan refused (0 unless this file has a bug — the text is prepared)
+var _pdfm_error = 0;         # bayan's reason when a render fails (a cstr), else 0
+fn mneme_io_pdf_substituted(): i64 { return _pdfm_substituted; }
+fn mneme_io_pdf_error(): i64 { return _pdfm_error; }
+
+# One UTF-8 sequence starting at `i` is well formed (RFC 3629: no overlongs, no surrogates, <= U+10FFFF)?
+# Returns its length, or 0.
+fn _pdfm_cont(d, i, n): i64 {
+    if (i >= n) { return 0; }
+    var c = load8(d + i);
+    if (c >= 128 && c <= 191) { return 1; }
+    return 0;
+}
+fn _pdfm_utf8_len(d, i, n): i64 {
+    var b = load8(d + i);
+    if (b < 128) { return 1; }
+    if (b >= 194 && b <= 223) { if (_pdfm_cont(d, i + 1, n) == 1) { return 2; } return 0; }
+    if (b >= 224 && b <= 239) {
+        if (i + 2 >= n) { return 0; }
+        var b1 = load8(d + i + 1);
+        if (b == 224 && (b1 < 160 || b1 > 191)) { return 0; }   # overlong
+        if (b == 237 && (b1 < 128 || b1 > 159)) { return 0; }   # UTF-16 surrogate
+        if (_pdfm_cont(d, i + 1, n) == 1 && _pdfm_cont(d, i + 2, n) == 1) { return 3; }
+        return 0;
+    }
+    if (b >= 240 && b <= 244) {
+        if (i + 3 >= n) { return 0; }
+        var c1 = load8(d + i + 1);
+        if (b == 240 && (c1 < 144 || c1 > 191)) { return 0; }   # overlong
+        if (b == 244 && (c1 < 128 || c1 > 143)) { return 0; }   # past U+10FFFF
+        if (_pdfm_cont(d, i + 1, n) == 1 && _pdfm_cont(d, i + 2, n) == 1 && _pdfm_cont(d, i + 3, n) == 1) { return 4; }
+        return 0;
     }
     return 0;
 }
-fn _pdf_op(cs, x, y, size, text: Str): i64 {
-    str_builder_add_cstr(cs, "BT /F1 ");
-    str_builder_add_int(cs, size);
-    str_builder_add_cstr(cs, " Tf ");
-    str_builder_add_int(cs, x);
-    str_builder_putc(cs, 32);
-    str_builder_add_int(cs, y);
-    str_builder_add_cstr(cs, " Td (");
-    _pdf_esc(cs, text);
-    str_builder_add_cstr(cs, ") Tj ET\n");
-    return 0;
-}
-# op record (40): [page@0, x@8, y@16, size@24, text@32]
-fn _pdf_line(ops, st, x, size, text): i64 {
-    if (load64(st + 8) < 90) { store64(st, load64(st) + 1); store64(st + 8, 770); }
-    var op = alloc(40);
-    store64(op, load64(st));
-    store64(op + 8, x);
-    store64(op + 16, load64(st + 8));
-    store64(op + 24, size);
-    store64(op + 32, text);
-    vec_push(ops, op);
-    return 0;
-}
-fn _pdf_obj(num, content: Str): i64 {
+# `s` with every C0 control and DEL turned into a space (a show-text run cannot hold a line break — bayan
+# refuses CR/LF — and has no glyph for the rest) and every malformed UTF-8 byte into '?' (counted).
+fn _pdfm_clean(s: Str): i64 {
+    var n = str_len(s);
+    var d = str_data(s);
     var sb = str_builder_new();
-    str_builder_add_int(sb, num);
-    str_builder_add_cstr(sb, " 0 obj\n");
-    str_builder_add(sb, content);
-    str_builder_add_cstr(sb, "\nendobj\n");
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c < 32 || c == 127) { str_builder_putc(sb, 32); i = i + 1; }
+        elif (c < 128) { str_builder_putc(sb, c); i = i + 1; }
+        else {
+            var k = _pdfm_utf8_len(d, i, n);
+            if (k == 0) { str_builder_putc(sb, 63); _pdfm_substituted = _pdfm_substituted + 1; i = i + 1; }
+            else {
+                var j = 0;
+                while (j < k) { str_builder_putc(sb, load8(d + i + j)); j = j + 1; }
+                i = i + k;
+            }
+        }
+    }
     return str_builder_build(sb);
 }
-fn _pdf_pad10(sb, v): i64 {
-    var digits = alloc(10);
-    var i = 9;
-    while (i >= 0) { store8(digits + i, 48 + v % 10); v = v / 10; i = i - 1; }
-    var k = 0;
-    while (k < 10) { str_builder_putc(sb, load8(digits + k)); k = k + 1; }
+# UTF-8 text -> WinAnsi bytes, ready to measure and draw. A character WinAnsi cannot name (CJK, emoji, ✓) is
+# exported as '?' and counted; nothing is dropped. If bayan still refuses the cleaned text, every non-ASCII
+# byte becomes '?' (ASCII always encodes), so a line is never lost.
+fn _pdfm_winansi(s: Str): i64 {
+    var clean = _pdfm_clean(s);
+    var st[16];
+    var wa = bayan_pdf_winansi(clean, PDF_WINANSI_SUBSTITUTE, &st);
+    if (wa != 0) {
+        _pdfm_substituted = _pdfm_substituted + load64(&st);
+        return wa;
+    }
+    var sb = str_builder_new();
+    var n = str_len(clean);
+    var d = str_data(clean);
+    var i = 0;
+    while (i < n) {
+        var c = load8(d + i);
+        if (c >= 128) { str_builder_putc(sb, 63); _pdfm_substituted = _pdfm_substituted + 1; }
+        else { str_builder_putc(sb, c); }
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+
+# Flow (24): [doc@0, page@8 (0 = none yet), y@16 (pt)]
+fn _pdfm_flow_new(doc): i64 {
+    var f = alloc(24);
+    store64(f, doc);
+    store64(f + 8, 0);
+    store64(f + 16, _PDFM_TOP);
+    return f;
+}
+fn _pdfm_y(f): i64 { return load64(f + 16); }
+fn _pdfm_down(f, pts): i64 { store64(f + 16, load64(f + 16) - pts); return 0; }
+# the page the next line goes on: a new one when there is none yet or the cursor is below the bottom margin
+fn _pdfm_room(f): i64 {
+    if (load64(f + 8) == 0 || load64(f + 16) < _PDFM_BOTTOM) {
+        var doc = load64(f);
+        store64(f + 8, bayan_pdf_add_page(doc, bayan_pdf_page_size_w(PDF_PAGE_A4), bayan_pdf_page_size_h(PDF_PAGE_A4)));
+        store64(f + 16, _PDFM_TOP);
+    }
+    return load64(f + 8);
+}
+# draw one already-WinAnsi line at the cursor (the cursor does not move)
+fn _pdfm_draw(f, font, size, x, wa_line: Str): i64 {
+    var pg = _pdfm_room(f);
+    if (pg == 0) { _pdfm_failed = _pdfm_failed + 1; return 0 - 1; }
+    # text_at takes UTF-8 and re-encodes it STRICTLY; the line is WinAnsi-clean, so decode it back first.
+    if (bayan_pdf_text_at(pg, font, size * 1000, x * 1000, load64(f + 16) * 1000, bayan_pdf_from_winansi(wa_line)) != 0) {
+        _pdfm_failed = _pdfm_failed + 1;
+        return 0 - 1;
+    }
     return 0;
+}
+# `text` (UTF-8) wrapped by MEASURED width into `width` points: each line drawn, the cursor moving `lead`
+# points after every line. Returns the number of lines.
+fn _pdfm_para(f, font, size, x, width, lead, text: Str): i64 {
+    var lines = bayan_pdf_wrap(font, size * 1000, width * 1000, _pdfm_winansi(text));
+    var i = 0;
+    while (i < vec_len(lines)) {
+        _pdfm_draw(f, font, size, x, vec_get(lines, i));
+        _pdfm_down(f, lead);
+        i = i + 1;
+    }
+    return vec_len(lines);
 }
 
 fn mneme_io_render_pdf(note): i64 {
-    var ops = vec_new();
-    var st = alloc(16);
-    store64(st, 0);
-    store64(st + 8, 770);
-    _pdf_line(ops, st, 72, 18, mneme_io_pdf_note_title(note));
-    store64(st + 8, load64(st + 8) - 30);
+    _pdfm_substituted = 0;
+    _pdfm_failed = 0;
+    _pdfm_error = 0;
+    var doc = bayan_pdf_new();
+    if (doc == 0) { _pdfm_error = "could not create the PDF document"; return 0; }
+    var title = mneme_io_pdf_note_title(note);
+    # the document title (Rust: PdfDocument::new(&note.title, ..)), from the same prepared text as the page
+    bayan_pdf_set_info(doc, "Title", bayan_pdf_from_winansi(_pdfm_winansi(title)));
+    var f = _pdfm_flow_new(doc);
+
+    # Title — Helvetica-Bold 18 (Rust: font_helvetica_bold). Wrapped, so a long title stays on the page.
+    _pdfm_para(f, PDF_FONT_HELVETICA_BOLD, 18, _PDFM_LEFT, _PDFM_COLUMN, 22, title);
+    _pdfm_down(f, 8);   # 22 + 8 = the old single-line title's 30 pt
     var tags = mneme_io_pdf_note_tags(note);
     if (vec_len(tags) > 0) {
         var tb = str_builder_new();
@@ -311,10 +408,10 @@ fn mneme_io_render_pdf(note): i64 {
             str_builder_add(tb, vec_get(tags, ti));
             ti = ti + 1;
         }
-        _pdf_line(ops, st, 72, 10, str_builder_build(tb));
-        store64(st + 8, load64(st + 8) - 24);
+        _pdfm_para(f, PDF_FONT_HELVETICA, 10, _PDFM_LEFT, _PDFM_COLUMN, 14, str_builder_build(tb));
+        _pdfm_down(f, 10);   # 14 + 10 = the old 24 pt
     }
-    store64(st + 8, load64(st + 8) - 8);
+    _pdfm_down(f, 8);
     var blocks = mneme_io_parse_markdown_blocks(mneme_io_pdf_note_content(note));
     var i = 0;
     while (i < vec_len(blocks)) {
@@ -324,117 +421,63 @@ fn mneme_io_render_pdf(note): i64 {
             var size = 18;
             if (mneme_io_md_block_level(b) == 2) { size = 15; }
             if (mneme_io_md_block_level(b) >= 3) { size = 13; }
-            store64(st + 8, load64(st + 8) - 8);
-            _pdf_line(ops, st, 72, size, mneme_io_md_block_text(b));
-            store64(st + 8, load64(st + 8) - (size + 6));
+            _pdfm_down(f, 8);
+            _pdfm_para(f, PDF_FONT_HELVETICA_BOLD, size, _PDFM_LEFT, _PDFM_COLUMN, size + 6, mneme_io_md_block_text(b));
         } elif (k == MD_PARAGRAPH) {
-            var plines = mneme_io_wrap_text(mneme_io_md_block_text(b), 80);
-            var pi = 0;
-            while (pi < vec_len(plines)) { _pdf_line(ops, st, 72, 11, vec_get(plines, pi)); store64(st + 8, load64(st + 8) - 16); pi = pi + 1; }
-            store64(st + 8, load64(st + 8) - 5);
+            _pdfm_para(f, PDF_FONT_HELVETICA, 11, _PDFM_LEFT, _PDFM_COLUMN, 16, mneme_io_md_block_text(b));
+            _pdfm_down(f, 5);
         } elif (k == MD_CODE) {
+            # Courier 10 (Rust: font_courier), one line per source line, not wrapped — as in Rust.
             var clines = _pdf_lines(mneme_io_md_block_text(b));
             var ci = 0;
             while (ci < vec_len(clines)) {
-                if (str_len(vec_get(clines, ci)) > 0) { _pdf_line(ops, st, 87, 10, vec_get(clines, ci)); store64(st + 8, load64(st + 8) - 16); }
+                if (str_len(vec_get(clines, ci)) > 0) {
+                    _pdfm_draw(f, PDF_FONT_COURIER, 10, _PDFM_CODE_LEFT, _pdfm_winansi(vec_get(clines, ci)));
+                    _pdfm_down(f, 16);
+                }
                 ci = ci + 1;
             }
-            store64(st + 8, load64(st + 8) - 5);
+            _pdfm_down(f, 5);
         } elif (k == MD_LISTITEM) {
             var bt = str_builder_new();
-            str_builder_add_cstr(bt, "  * ");
+            str_builder_add_cstr(bt, "* ");
             str_builder_add(bt, mneme_io_md_block_text(b));
-            var llines = mneme_io_wrap_text(str_builder_build(bt), 80);
-            var li = 0;
-            while (li < vec_len(llines)) { _pdf_line(ops, st, 72, 11, vec_get(llines, li)); store64(st + 8, load64(st + 8) - 16); li = li + 1; }
+            _pdfm_para(f, PDF_FONT_HELVETICA, 11, _PDFM_LIST_LEFT, _PDFM_COLUMN - (_PDFM_LIST_LEFT - _PDFM_LEFT), 16, str_builder_build(bt));
         } else {
-            store64(st + 8, load64(st + 8) - 8);
+            _pdfm_down(f, 8);
         }
         i = i + 1;
     }
-    # number of pages
-    var np = 1;
-    i = 0;
-    while (i < vec_len(ops)) {
-        if (load64(vec_get(ops, i)) + 1 > np) { np = load64(vec_get(ops, i)) + 1; }
-        i = i + 1;
+    _pdfm_room(f);   # a note with no text at all still gets its one page
+    # ⛔ bayan's writer still produces bytes after refusing a text run (its open issue, "gap 1"), so a refusal
+    # is checked here: a PDF with a line missing is a failed export, never a success.
+    if (_pdfm_failed > 0 || bayan_pdf_doc_error_count(doc) > 0) {
+        _pdfm_error = bayan_pdf_doc_error(doc);
+        if (_pdfm_error == 0) { _pdfm_error = "a line of the note could not be written to the PDF"; }
+        return 0;
     }
-    # per-page content streams
-    var pages = vec_new();
-    var p = 0;
-    while (p < np) {
-        var cs = str_builder_new();
-        i = 0;
-        while (i < vec_len(ops)) {
-            var op = vec_get(ops, i);
-            if (load64(op) == p) { _pdf_op(cs, load64(op + 8), load64(op + 16), load64(op + 24), load64(op + 32)); }
-            i = i + 1;
-        }
-        vec_push(pages, str_builder_build(cs));
-        p = p + 1;
+    var bytes = bayan_pdf_to_bytes(doc);
+    if (bytes == 0 || str_len(bytes) == 0) {
+        _pdfm_error = bayan_pdf_doc_error(doc);
+        if (_pdfm_error == 0) { _pdfm_error = "the PDF could not be serialized"; }
+        return 0;
     }
-    # objects
-    var objs = vec_new();
-    vec_push(objs, _pdf_obj(1, str_from("<</Type/Catalog/Pages 2 0 R>>")));
-    var kids = str_builder_new();
-    str_builder_add_cstr(kids, "<</Type/Pages/Kids [");
-    var kk = 0;
-    while (kk < np) {
-        if (kk > 0) { str_builder_putc(kids, 32); }
-        str_builder_add_int(kids, 4 + 2 * kk);
-        str_builder_add_cstr(kids, " 0 R");
-        kk = kk + 1;
+    return bytes;
+}
+
+# What a reader of the last rendered PDF should be told, or 0 when nothing: an unterminated ``` fence (the rest
+# of the note was exported as code — ADR 015) and characters exported as '?'. 1.3.0: nothing surfaced either.
+fn mneme_io_pdf_warning(): i64 {
+    var fence = mneme_io_md_unterminated_fence();
+    if (fence == 0 && _pdfm_substituted == 0) { return 0; }
+    var sb = str_builder_new();
+    if (fence == 1) { str_builder_add_cstr(sb, "the note ends inside an unclosed ``` fence; everything after it was exported as code"); }
+    if (_pdfm_substituted > 0) {
+        if (fence == 1) { str_builder_add_cstr(sb, "; "); }
+        str_builder_add_int(sb, _pdfm_substituted);
+        str_builder_add_cstr(sb, " character(s) have no glyph in the PDF's standard fonts and were exported as '?'");
     }
-    str_builder_add_cstr(kids, "]/Count ");
-    str_builder_add_int(kids, np);
-    str_builder_add_cstr(kids, ">>");
-    vec_push(objs, _pdf_obj(2, str_builder_build(kids)));
-    vec_push(objs, _pdf_obj(3, str_from("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>")));
-    p = 0;
-    while (p < np) {
-        var pd = str_builder_new();
-        str_builder_add_cstr(pd, "<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents ");
-        str_builder_add_int(pd, 5 + 2 * p);
-        str_builder_add_cstr(pd, " 0 R/Resources<</Font<</F1 3 0 R>>>>>>");
-        vec_push(objs, _pdf_obj(4 + 2 * p, str_builder_build(pd)));
-        var stream = vec_get(pages, p);
-        var cb = str_builder_new();
-        str_builder_add_cstr(cb, "<</Length ");
-        str_builder_add_int(cb, str_len(stream));
-        str_builder_add_cstr(cb, ">>\nstream\n");
-        str_builder_add(cb, stream);
-        str_builder_add_cstr(cb, "\nendstream");
-        vec_push(objs, _pdf_obj(5 + 2 * p, str_builder_build(cb)));
-        p = p + 1;
-    }
-    # assemble with xref
-    var body = str_builder_new();
-    str_builder_add_cstr(body, "%PDF-1.4\n");
-    var offset = 9;
-    var offsets = vec_new();
-    i = 0;
-    while (i < vec_len(objs)) {
-        vec_push(offsets, offset);
-        str_builder_add(body, vec_get(objs, i));
-        offset = offset + str_len(vec_get(objs, i));
-        i = i + 1;
-    }
-    var xref_off = offset;
-    str_builder_add_cstr(body, "xref\n0 ");
-    str_builder_add_int(body, vec_len(objs) + 1);
-    str_builder_add_cstr(body, "\n0000000000 65535 f \n");
-    i = 0;
-    while (i < vec_len(offsets)) {
-        _pdf_pad10(body, vec_get(offsets, i));
-        str_builder_add_cstr(body, " 00000 n \n");
-        i = i + 1;
-    }
-    str_builder_add_cstr(body, "trailer<</Size ");
-    str_builder_add_int(body, vec_len(objs) + 1);
-    str_builder_add_cstr(body, "/Root 1 0 R>>\nstartxref\n");
-    str_builder_add_int(body, xref_off);
-    str_builder_add_cstr(body, "\n%%EOF\n");
-    return str_builder_build(body);
+    return str_builder_build(sb);
 }
 
 # convenience wrapper used by the API's /export/pdf endpoint
@@ -449,6 +492,7 @@ fn mneme_io_export_pdf(title, content): i64 {
 # the note silently never landed. Rust returned Result<(), IoError> here.
 fn mneme_io_export_note_to_pdf(note, path: Str, options): i64 {
     var pdf = mneme_io_render_pdf(note);
+    if (pdf == 0) { return 0 - 22; }   # EINVAL: the note could not be rendered (mneme_io_pdf_error says why)
     var len = str_len(pdf);
     var wrote = file_write_all(_pdf_cstr(path), str_data(pdf), len);
     if (wrote < 0) { return wrote; }
@@ -465,7 +509,14 @@ fn mneme_io_export_note_to_pdf(note, path: Str, options): i64 {
 # xmkdir_p (stdlib 6.5.7+) is create_dir_all's equivalent: it builds missing
 # parents and treats an existing directory as success, where the bare sys_mkdir
 # it replaces created only one level and failed with EEXIST on a re-export.
+# The warnings of the last batch: a vec of [path@0 (Str), warning@8 (Str)], one per note that had any.
+var _pdfm_batch_warnings = 0;
+fn mneme_io_pdf_batch_warnings(): i64 {
+    if (_pdfm_batch_warnings == 0) { _pdfm_batch_warnings = vec_new(); }
+    return _pdfm_batch_warnings;
+}
 fn mneme_io_export_notes_to_pdf(notes, dir: Str, options): i64 {
+    _pdfm_batch_warnings = vec_new();
     var mk = xmkdir_p(_pdf_cstr(dir), 493);
     if (mk < 0) { return mk; }
     var count = 0;
@@ -477,8 +528,16 @@ fn mneme_io_export_notes_to_pdf(notes, dir: Str, options): i64 {
         str_builder_putc(pb, 47);
         str_builder_add(pb, mneme_io_pdf_slug(mneme_io_pdf_note_title(note)));
         str_builder_add_cstr(pb, ".pdf");
-        var wr = mneme_io_export_note_to_pdf(note, str_builder_build(pb), options);
+        var npath = str_builder_build(pb);
+        var wr = mneme_io_export_note_to_pdf(note, npath, options);
         if (wr < 0) { return wr; }
+        var warn = mneme_io_pdf_warning();
+        if (warn != 0) {
+            var wp = alloc(16);
+            store64(wp, npath);
+            store64(wp + 8, warn);
+            vec_push(_pdfm_batch_warnings, wp);
+        }
         count = count + 1;
         i = i + 1;
     }

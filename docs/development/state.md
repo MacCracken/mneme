@@ -5,6 +5,20 @@
 
 ## Version
 
+**1.3.0** — PDF export on `bayan_pdf_*` (2026-11-12). Toolchain unchanged at `6.7.18`. ADR
+[017](../adr/017-pdf-export-on-bayan.md).
+- **Kept:** mneme's markdown layer (`mneme_io_parse_markdown_blocks`, ADR 015) and its layout.
+- **bayan's:** objects, measured xref, fonts, content streams and WinAnsi transcoding.
+- **Retired defects:** no `/Encoding` (mojibake), wrapping by character count (lines off the page), CR/LF deleted
+  (welded words), and a predicted xref offset.
+- **Fonts** are rust-old's: Helvetica-Bold for title and headings, Courier for code.
+- **Characters outside WinAnsi** become `?` and are reported.
+- **A refused run** fails the export.
+- **The unclosed-fence and substitution warnings** are surfaced: `mneme_io_pdf_warning`,
+  `mneme_io_pdf_batch_warnings`, and `/export/pdf`'s response `warning`.
+- **Tests:** `io_export_pdf` 49 → 76 and `api_server` 79 → 82, reading the PDFs back through bayan's reader.
+  `pdfcheck --strict` covers 12 fixtures.
+
 **1.2.3** — the P(-1) sweep: audit, refactor, hardening, optimization, security (2026-11-12). Toolchain unchanged at
 `6.7.18`. The full findings table is [`../audit/2026-11-12-audit.md`](../audit/2026-11-12-audit.md): 39 defects
 repaired (4 critical, 15 high, 13 medium, 7 low) and 11 deferred to named releases. The headlines:
@@ -254,7 +268,7 @@ Note: `search_semantic_engine`'s functions were renamed to the
 
 ## Tests
 
-**63 `.tcyr` files, 1,328 assertions — all green.** The entire 21,014-LOC workspace is ported (core,
+**63 `.tcyr` files, 1,358 assertions — all green.** The entire 21,014-LOC workspace is ported (core,
 io incl. PDF, store, search, ai, mcp, full api HTTP surface, ui app), plus the
 mneme-ui `views`/`main` glue (`ui_render`, `ui_events`) and the **live network +
 terminal bridges** (`net_http` = sandhi HTTP to daimon + remote embeddings;
@@ -281,9 +295,9 @@ tls, ws, async, atomic, sandhi, fdlopen, dynlib, mmap, freelist, process, sakshi
 
 ## Next
 
-The port is complete, and the 1.2.3 sweep is done. What remains is sequenced in [`roadmap.md`](roadmap.md):
-- **1.3.x** moves the document pipeline onto bayan: `bayan_pdf_*`, then `bayan_markdown_*`, which shipped in bayan
-  1.11.1.
+The port is complete, the 1.2.3 sweep is done, and PDF export is on bayan (1.3.0). What remains is sequenced in [`roadmap.md`](roadmap.md):
+- **1.3.x** finishes moving the document pipeline onto bayan: PDF moved in 1.3.0, and HTML export moves to
+  `bayan_markdown_*` (shipped in bayan 1.11.1) in 1.3.1.
 - **1.4.x** is the remaining parity polish and robustness, including the sweep's deferred items:
   - Unicode text;
   - titles over 255 bytes;
@@ -293,39 +307,18 @@ The port is complete, and the 1.2.3 sweep is done. What remains is sequenced in 
 - **1.5.x** is performance.
 - **2.0.0** is the backlog: local ONNX inference and the dhancha GUI.
 
-**Live PDF-export defects — retired by the 1.3.0 `bayan_pdf_*` migration.** bayan's PDF module was shaped around
-auditing mneme's hand-rolled writer (`bayan/src/pdf.cyr` cites `src/io_export_pdf.cyr` seven times). Neither the
-suite nor `pdfcheck.sh` catches these, since `pdfcheck.sh` validates *structure* (xref, `/Length`, `/Size`), not
-text encoding or layout. Line numbers re-checked at 1.2.2:
+**PDF export is on bayan since 1.3.0** ([ADR 017](../adr/017-pdf-export-on-bayan.md)). Retired:
+- the font dict with no `/Encoding`, which turned `Résumé` into `RÃ©sumÃ©`;
+- wrapping by character count, under which 80 `W`s ran 308 pt off the page;
+- `_pdf_esc` deleting CR and LF;
+- the predicted `offset = 9` and the closed-form object numbers.
 
-- ⛔ **LIVE — no `/Encoding` on the font dict.** `io_export_pdf.cyr:391` emits
-  `<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>`, so viewers fall back to StandardEncoding, where only 54 of
-  the 128 high codes exist: `Résumé` renders `RÃ©sumÃ©` and an em-dash disappears. A **silent content change on
-  export** — the same class as the ADR-015 fence bug. bayan ships `bayan_pdf_from_winansi` + declares
-  `/WinAnsiEncoding` (it does both, since declaring without transcoding only changes the flavour of mojibake).
-- ⛔ **LIVE — wrapping counts characters, not width.** `io_export_pdf.cyr:330,346` call
-  `mneme_io_wrap_text(..., 80)`. In a proportional face 80 characters spans a **4.26× range**: 80 `l` is 195 pt in
-  a 451 pt column, 80 `W` is 831 pt — **308 pt off a 595 pt page**. Confirmed against the live geometry
-  (`MediaBox[0 0 595 842]`, x=72, 11 pt). bayan ships `bayan_pdf_text_width` / `bayan_pdf_wrap` on real AFM metrics.
-- ⛔ **LIVE — `_pdf_esc` silently deletes newlines.** `io_export_pdf.cyr:250` is
-  `if (c != 10 && c != 13) { str_builder_putc(sb, c); }` — CR and LF are dropped with no diagnostic. bayan
-  *rejects* a newline inside show-text instead: it means "break the run", and accepting-then-dropping it is a
-  silent content change.
-- ⚠ **Brittle, correct today** — `var offset = 9;` (`:412`) predicts the first xref offset from the length of
-  `"%PDF-1.4\n"`, and object numbers use closed-form `4+2p`/`5+2p`. Both are right for the current single-line
-  header and fixed object set, and `pdfcheck.sh` passes 7/7 — but each silently becomes wrong the moment a second
-  header line, `/Info`, a second font, or an `/ID` is added. bayan measures offsets off the builder and counts
-  objects instead.
-- ✅ **Already fixed here — bayan's audit is stale on this one.** It lists "mneme ignores `file_write_all`'s
-  return and reports success on a full disk"; that was repaired in **1.1.2** (`io_export_pdf.cyr:452`).
+What is left is bayan's: a word wider than the column still overflows (its gap 2), and text outside WinAnsi is
+exported as `?` (gap 3, no embedded fonts). Both are on the roadmap.
 
-Also open for 1.3.0:
+The unclosed-fence diagnostic is surfaced since 1.3.0, through `mneme_io_pdf_warning()`,
+`mneme_io_pdf_batch_warnings()` and `/export/pdf`'s response warning.
 
-- **Nothing consumes `mneme_io_md_unterminated_fence()` yet.** The parser records
-  a malformed fence but no caller surfaces it: the API's `/export/pdf` and the file
-  exporters (`mneme_io_export_note_to_pdf` / `_notes_to_pdf`, which nothing in `src/`
-  calls yet) still accept the input silently. They no longer *lose* content (the 1.1.2
-  fix), but they do not warn. Wiring a warning through them is the follow-on.
 - **`mneme_io_export_pdf`** (the `/export/pdf` wrapper) renders in-memory and has
   no write path, so it needed no error propagation. If it ever grows one, it
   should return the same negative-errno contract as `mneme_io_export_note_to_pdf`.

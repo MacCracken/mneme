@@ -1,5 +1,6 @@
 # mneme-io PDF-export tests — ported 1:1 from
 # rust-old/crates/mneme-io/src/export_pdf.rs (8 test cases).
+include "lib/bayan.cyr"        # bayan_pdf_* — the PDF writer since 1.3.0
 include "src/io_export_pdf.cyr"
 
 var _pn = 0;
@@ -36,6 +37,51 @@ fn _join(a: Str, b): i64 {
     str_builder_putc(sb, 47);
     str_builder_add_cstr(sb, b);
     return str_builder_build(sb);
+}
+
+# --- 1.3.0 helpers: read a rendered PDF back through bayan's reader ---
+fn _extract(pdf: Str): i64 {
+    if (pdf == 0) { return str_from(""); }   # a refused render: let the assertion report it, not a crash
+    var doc = bayan_pdf_parse_buf(str_data(pdf), str_len(pdf));
+    if (doc == 0) { return str_from(""); }
+    return bayan_pdf_extract_text(doc);
+}
+# the non-empty lines of extracted text
+fn _xlines(t: Str): i64 {
+    var out = vec_new();
+    var n = str_len(t);
+    var d = str_data(t);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        if (i == n || load8(d + i) == 10) {
+            if (i > start) { vec_push(out, str_substr(t, start, i)); }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+# widest extracted line, in points, measured in `font` at `size` pt
+fn _widest(lines, font, size): i64 {
+    var w = 0;
+    var i = 0;
+    while (i < vec_len(lines)) {
+        var lw = bayan_pdf_text_width(font, size * 1000, bayan_pdf_winansi(vec_get(lines, i), PDF_WINANSI_SUBSTITUTE, 0));
+        if (lw > w) { w = lw; }
+        i = i + 1;
+    }
+    return w / 1000;
+}
+fn _render(title, body): i64 { return mneme_io_render_pdf(mneme_io_pdf_note_new(str_from(title), str_from(body), vec_new())); }
+# the same, for a title and body that are already Strs (str_from wants a C string)
+fn _render_s(title: Str, body: Str): i64 { return mneme_io_render_pdf(mneme_io_pdf_note_new(title, body, vec_new())); }
+fn _save(pdf: Str, name): i64 {
+    var d = _dir();
+    sys_mkdir(_cstr(d), 493);
+    var p = _join(d, name);
+    file_write_all(_cstr(p), str_data(pdf), str_len(pdf));   # pdfcheck.sh validates every /tmp/mneme_pdf*/*.pdf
+    return p;
 }
 
 fn main() {
@@ -94,9 +140,9 @@ fn main() {
     # "exists, >100 bytes, starts with %PDF" passes for almost any garbage, so
     # also pin the structure and the actual note text. bayan's strict validator
     # (scripts/pdfcheck.sh) is the full gate; these are the in-process tripwires.
-    assert_eq(str_index_of_cstr(pdf5, "/Type/Catalog") > 0, 1, "single pdf has catalog");
-    assert_eq(str_index_of_cstr(pdf5, "/Type/Page") > 0, 1, "single pdf has page object");
-    assert_eq(str_index_of_cstr(pdf5, "/BaseFont/Helvetica") > 0, 1, "single pdf has font");
+    assert_eq(str_index_of_cstr(pdf5, "/Type /Catalog") > 0, 1, "single pdf has catalog");
+    assert_eq(str_index_of_cstr(pdf5, "/Type /Page") > 0, 1, "single pdf has page object");
+    assert_eq(str_index_of_cstr(pdf5, "/BaseFont /Helvetica") > 0, 1, "single pdf has font");
     assert_eq(str_index_of_cstr(pdf5, "trailer") > 0, 1, "single pdf has trailer");
     assert_eq(str_index_of_cstr(pdf5, "%%EOF") > 0, 1, "single pdf has EOF marker");
     # content actually rendered, not just a well-formed empty shell
@@ -191,6 +237,83 @@ fn main() {
     assert_eq(mneme_io_export_notes_to_pdf(notes, nested, mneme_io_pdf_options_default()), 2, "batch export creates nested dirs");
     assert_eq(file_exists(_cstr(_join(nested, "note-one.pdf"))), 1, "nested note-one.pdf exists");
     assert_eq(mneme_io_export_notes_to_pdf(notes, nested, mneme_io_pdf_options_default()), 2, "re-export into existing dir succeeds");
+
+    # ===== 1.3.0: the PDF is bayan's (ADR 017) =====
+    # ⛔ encoding: the font dict declares WinAnsiEncoding and the text is transcoded, so non-ASCII text reads
+    # back as written. The hand-rolled writer had no /Encoding: `Résumé` rendered `RÃ©sumÃ©`, `—` vanished.
+    var penc = _render("Résumé — notes", "Café, naïve and “quoted” — 50 €");
+    assert(penc != 0, "accented note renders");
+    _save(penc, "encoding.pdf");
+    assert_eq(str_index_of_cstr(penc, "/Encoding /WinAnsiEncoding") > 0, 1, "fonts declare WinAnsiEncoding");
+    var tenc = _extract(penc);
+    assert_eq(str_index_of_cstr(tenc, "Résumé — notes") >= 0, 1, "accented title reads back exactly");
+    assert_eq(str_index_of_cstr(tenc, "Café, naïve and “quoted” — 50 €") >= 0, 1, "accents, curly quotes, dash and euro read back");
+    assert_eq(mneme_io_pdf_substituted(), 0, "nothing substituted: all of it is WinAnsi");
+    assert_eq(mneme_io_pdf_warning(), 0, "a clean note has no warning");
+    # fonts: title and headings Helvetica-Bold, code Courier (Rust's printpdf choices; the port used Helvetica only)
+    assert_eq(str_index_of_cstr(pdf5, "/BaseFont /Helvetica-Bold") > 0, 1, "title/headings in Helvetica-Bold");
+    assert_eq(str_index_of_cstr(pdf5, "/BaseFont /Courier") > 0, 1, "code in Courier");
+    assert_eq(str_index_of_cstr(pdf5, "/Title") > 0, 1, "the note title is the document title (/Info)");
+
+    # ⛔ measured wrapping: no line runs past the 451 pt column. By character count, 80 'W's are 831 pt — 308 pt
+    # off an A4 page — while 80 'l's are 195 pt.
+    var wb = str_builder_new();
+    var wi2 = 0;
+    while (wi2 < 40) { if (wi2 > 0) { str_builder_putc(wb, 32); } str_builder_add_cstr(wb, "WWWW"); wi2 = wi2 + 1; }
+    var pw = _render_s(str_from("Wide"), str_builder_build(wb));
+    _save(pw, "wide.pdf");
+    var wl = _xlines(_extract(pw));
+    assert_eq(_widest(wl, PDF_FONT_HELVETICA, 11) <= 451, 1, "every 'W' line fits the 451 pt column");
+    assert_eq(vec_len(wl) >= 5, 1, "199 characters of 'W' take at least 4 body lines (+ the title), not 3");
+    var nb = str_builder_new();
+    var ni = 0;
+    while (ni < 30) { if (ni > 0) { str_builder_putc(nb, 32); } str_builder_add_cstr(nb, "llll"); ni = ni + 1; }
+    var nl = _xlines(_extract(_render_s(str_from("Narrow"), str_builder_build(nb))));
+    assert_eq(vec_len(nl), 2, "149 characters of 'l' (~382 pt) fit on ONE body line (+ the title) — an 80-char count makes two");
+    # a long title wraps too, measured in its own (bold) face
+    var tbld = str_builder_new();
+    var tbi = 0;
+    while (tbi < 20) { if (tbi > 0) { str_builder_putc(tbld, 32); } str_builder_add_cstr(tbld, "Wide"); tbi = tbi + 1; }
+    var tl = _xlines(_extract(_render_s(str_builder_build(tbld), str_from("x"))));
+    assert_eq(_widest(tl, PDF_FONT_HELVETICA_BOLD, 18) <= 451, 1, "a long title wraps inside the column");
+
+    # ⛔ a CR inside a line becomes a space. The hand-rolled escaper DELETED it, welding "alpha" and "beta".
+    var tcr = _extract(_render("CR", "alpha\rbeta and one\ttab"));
+    assert_eq(str_index_of_cstr(tcr, "alpha beta") >= 0, 1, "CR becomes a space, the words stay apart");
+    assert_eq(str_index_of_cstr(tcr, "alphabeta") < 0, 1, "and are not welded together");
+    assert_eq(str_index_of_cstr(tcr, "one tab") >= 0, 1, "a tab becomes a space");
+
+    # a character the standard fonts cannot draw is exported as '?' and reported — never a lost line
+    var psub = _render("Checks", "login ✓ ok");
+    assert(psub != 0, "a note with ✓ still renders");
+    _save(psub, "substituted.pdf");
+    assert_eq(str_index_of_cstr(_extract(psub), "login ? ok") >= 0, 1, "✓ is exported as '?' and the line kept");
+    assert_eq(mneme_io_pdf_substituted(), 1, "one character substituted");
+    assert_eq(str_index_of_cstr(mneme_io_pdf_warning(), "1 character(s)") >= 0, 1, "the warning says so");
+    # malformed UTF-8 never reaches bayan (it would refuse the run): the bad byte is '?' and the line kept
+    var badb = alloc(8);
+    store8(badb, 97); store8(badb + 1, 255); store8(badb + 2, 98); store8(badb + 3, 0);
+    var pbad = mneme_io_render_pdf(mneme_io_pdf_note_new(str_from("Bytes"), str_new(badb, 3), vec_new()));
+    assert(pbad != 0, "malformed UTF-8 still renders");
+    assert_eq(str_index_of_cstr(_extract(pbad), "a?b") >= 0, 1, "the malformed byte is '?'");
+
+    # the unterminated-fence diagnostic is surfaced (ADR 015 recorded it; nothing reported it)
+    _render("Fence", "intro\n```\ncode\nTAIL");
+    assert_eq(str_index_of_cstr(mneme_io_pdf_warning(), "unclosed ``` fence") >= 0, 1, "an unclosed fence is a warning");
+    # ... per note, through the batch exporter
+    var wnotes = vec_new();
+    vec_push(wnotes, mneme_io_pdf_note_new(str_from("Clean One"), str_from("fine"), vec_new()));
+    vec_push(wnotes, mneme_io_pdf_note_new(str_from("Odd One"), str_from("mark ✓"), vec_new()));
+    var dw = _dir();
+    assert_eq(mneme_io_export_notes_to_pdf(wnotes, dw, mneme_io_pdf_options_default()), 2, "batch with a warning exports both");
+    var bw = mneme_io_pdf_batch_warnings();
+    assert_eq(vec_len(bw), 1, "one note has a warning");
+    assert_eq(str_ends_with(load64(vec_get(bw, 0)), str_from("odd-one.pdf")), 1, "and it is odd-one.pdf");
+
+    # the page break still happens, and every page is a real page (the long note above)
+    var lpdf = _render_s(str_from("Long"), mneme_io_pdf_note_content(lnote));
+    var ldoc = bayan_pdf_parse_buf(str_data(lpdf), str_len(lpdf));
+    assert_eq(bayan_pdf_page_count(ldoc) > 1, 1, "100 paragraphs span more than one page");
 
     return assert_summary();
 }

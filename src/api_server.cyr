@@ -6,16 +6,20 @@
 # bodies are hand-parsed (flat string/bool/string-array getters).
 
 # Response (24): [status@0, content_type@8(Str), body@16(Str)]
+# Response (32): [status@0, content_type@8, body@16, warning@24 (Str, 0 = none)]. The warning is what a served
+# router sends as an `X-Mneme-Warning` header; 1.3.0 adds it for /export/pdf's diagnostics.
 fn mneme_api_response_new(status, content_type, body): i64 {
-    var r = alloc(24);
+    var r = alloc(32);
     store64(r, status);
     store64(r + 8, content_type);
     store64(r + 16, body);
+    store64(r + 24, 0);
     return r;
 }
 fn mneme_api_response_status(r): i64 { return load64(r); }
 fn mneme_api_response_content_type(r): i64 { return load64(r + 8); }
 fn mneme_api_response_body(r): i64 { return load64(r + 16); }
+fn mneme_api_response_warning(r): i64 { return load64(r + 24); }
 fn _api_json(status, body): i64 { return mneme_api_response_new(status, str_from("application/json"), body); }
 fn _api_err(status, msg): i64 {
     var sb = str_builder_new();
@@ -634,7 +638,11 @@ fn _h_export_pdf(state, id_seg): i64 {
     var nwc = mneme_store_vault_get_note(_api_vault(rv), nid);
     if (nwc == 0) { return _api_err(404, "Note not found"); }
     var pdf = mneme_io_export_pdf(mneme_core_note_title(mneme_store_nwc_note(nwc)), mneme_store_nwc_content(nwc));
-    return mneme_api_response_new(200, str_from("application/pdf"), pdf);
+    if (pdf == 0) { return _api_err(500, "PDF export failed"); }   # 1.3.0: a refused render is not a 200
+    var resp = mneme_api_response_new(200, str_from("application/pdf"), pdf);
+    # 1.3.0: an unclosed ``` fence (ADR 015) or characters exported as '?' reach the caller, not just the log
+    store64(resp + 24, mneme_io_pdf_warning());
+    return resp;
 }
 fn _h_tasks_id(state, id_seg): i64 {
     var rv = _api_active(state);

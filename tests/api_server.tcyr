@@ -343,6 +343,15 @@ fn main() {
     var ctl = _mk(apps, "{\"title\":\"Tabbed\",\"content\":\"a\\tb\",\"tags\":[]}");
     assert_eq(_has(_bd(_req(apps, "GET", _notepath("/v1/notes/", ctl), "")), "a\\tb"), 1, "a tab is escaped as \\t");
 
+    # 1.3.0: /export/pdf carries the render's diagnostics (an unclosed ``` fence, '?' substitutions)
+    var appw = _app();
+    var fid = _mk(appw, "{\"title\":\"Fenced\",\"content\":\"intro\\n```\\ncode\\nTAIL\",\"tags\":[]}");
+    var fr = _req(appw, "GET", _notepath("/v1/export/pdf/", fid), "");
+    assert_eq(_st(fr), 200, "a fenced note still exports");
+    assert_eq(str_index_of_cstr(mneme_api_response_warning(fr), "unclosed ``` fence") >= 0, 1, "the response carries the fence warning");
+    var cid = _mk(appw, "{\"title\":\"Clean\",\"content\":\"plain text\",\"tags\":[]}");
+    assert_eq(mneme_api_response_warning(_req(appw, "GET", _notepath("/v1/export/pdf/", cid), "")), 0, "a clean note has no warning");
+
     return assert_summary();
 }
 
