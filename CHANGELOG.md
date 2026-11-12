@@ -4,6 +4,55 @@ All notable changes to Mneme will be documented in this file.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-11-12
+
+**Toolchain onto the Cyrius 6.7.x language minor: `6.6.20` → `6.7.9`, with every file in `lib/` matching the
+`6.7.9` stdlib byte-for-byte. No source change. 62 files / 1,133 assertions, all green, with identical per-suite
+counts at both pins.**
+
+### Changed
+- **Toolchain pin `6.6.20` → `6.7.9`.** 6.7.x is a language minor: checked traits, `bool`/`true`/`false` and a real
+  `!`, `const`, `loop`/`do … while`, tuples, default and named arguments, `dyn`, and an opt-in bounds-checked mode.
+  CI installs from the `cyrius.cyml [package].cyrius` pin, so this needs no workflow edit.
+- **`lib/` re-resolved via `cyrius deps`.** 79 modules: 54 changed, 25 unchanged, none added or removed. Folded libs:
+  - bayan `1.5.12` → `1.5.13`
+  - patra `1.15.2` → `1.16.0`
+  - sandhi `1.10.8` → `1.10.9`
+  - sakshi `2.5.7` → `2.5.8`
+  - sigil `3.13.10` → `3.13.11`
+- **`lib/hashmap_fast.cyr` and `lib/ws_server.cyr` refreshed by hand from the `6.7.9` stdlib**, as at 1.1.5. They are
+  kept on purpose and `cyrius deps` doesn't manage them. The `6.7.9` `hashmap_fast` carries the upstream `fhm_set`
+  fix: overwriting a key that is already present no longer rebuilds the table, and no longer drops the value when the
+  allocator is exhausted.
+- **`cyrius.lock` re-locked** for the new pin (79 hashes): `cyrius deps --verify` reports 79 verified, 0 failed.
+
+### Checked, no change needed
+Every 6.7.0–6.7.9 entry in cyrius's `ecosystem-migration.md` that can silently change a computed value was checked
+against mneme's source. None applies:
+- **A lone `!` was silently dropped before 6.7.3**, so `if (!ok)` ran as `if (ok)`. mneme uses no `!` operator.
+- **`self` in an `impl` is now a `*T`** (6.7.0), narrow `*p` reads and writes the element (6.7.8), and a pointer's step
+  no longer leaks through other operators (6.7.9). mneme has no `impl`, no `self` and no `*T` typed pointer.
+- **New reserved words** (`trait`, `const`, `true`, `false`, `do`, `dyn`) and **new stdlib names** (`f64_parse_n`,
+  `sock_set_nodelay`, `sys_ppoll`). mneme declares none of them.
+- **patra 1.16.0 refuses `ORDER BY` on a TEXT/BYTES chain column**, which used to sort by on-disk position. mneme
+  orders only by `notes.updated_at` (INT) and `tags.name` (STR, an inline comparable type), so both queries are
+  unaffected.
+
+### Verified at the new pin
+- `cyrius build src/main.cyr build/mneme`: OK, 2,593,824 → 2,595,568 B. The build warnings are the same set; sigil's
+  static-buffer warning only moved line (28046 → 28103).
+- `cyrius test`: 62 passed, 0 failed (1,133 assertions), the same count in every suite as at `6.6.20`.
+- `scripts/pdfcheck.sh --strict`: 7/7 under bayan 1.5.13's validator.
+- `tests/mneme.fcyr`: ok.
+- `tests/mneme.bcyr` and `benches/mneme_bench.bcyr` both run (`6.6.20` run in brackets):
+  - `core_uuid_v4` 567 ns (595)
+  - `ai_tokenize` 4.00 µs (4.43)
+  - `squared_distance_3d` 38 ns (42)
+  - `bm25_search_200docs` 297 µs (310)
+
+  These are single runs taken at different times, not an interleaved A/B, so the small gains are not a measured
+  speed-up.
+
 ## [1.1.5] — 2026-11-12
 
 **Toolchain and vendored stdlib refreshed: Cyrius `6.6.2` → `6.6.20`, and every file in `lib/` now matches the

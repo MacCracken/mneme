@@ -5,6 +5,22 @@
 
 ## Version
 
+**1.2.0** — toolchain onto the cyrius **6.7.x language minor** + vendored stdlib refresh (2026-11-12). Pin
+`6.6.20` → **`6.7.9`**; `lib/` re-resolved with `cyrius deps`, the two kept modules (`hashmap_fast`, `ws_server`)
+copied from the `6.7.9` stdlib, and `cyrius.lock` re-locked. **Every file in `lib/` matches the `6.7.9` stdlib
+byte-for-byte** (79 modules: 54 changed, 25 unchanged, none added). Folded libs: bayan `1.5.12` → `1.5.13`,
+patra `1.15.2` → `1.16.0`, sandhi `1.10.8` → `1.10.9`, sakshi `2.5.7` → `2.5.8`, sigil `3.13.10` → `3.13.11`.
+**No source change.** The suite is unchanged at 62 files / 1,133 assertions with **identical per-suite counts** at
+both pins, and the build and test warnings are the same set. Every 6.7.0–6.7.9 change in `ecosystem-migration.md`
+that can silently change a computed value was checked against mneme, and none applies:
+- `!` was silently dropped before 6.7.3; mneme has no `!` operator anywhere.
+- mneme has no `impl`, no untyped `self` and no `*T` typed pointer, so the 6.7.0 `self`, 6.7.8 narrow-`*p` and
+  6.7.9 pointer-step changes can't reach it.
+- mneme defines none of the new reserved words (`trait`, `const`, `true`, `false`, `do`, `dyn`) and none of the new
+  stdlib names (`f64_parse_n`, `sock_set_nodelay`, `sys_ppoll`).
+- patra 1.16.0 now refuses `ORDER BY` on a TEXT/BYTES chain column. mneme orders only by `notes.updated_at` (INT)
+  and `tags.name` (STR, an inline comparable type), so neither query is affected.
+
 **1.1.5** — toolchain + vendored stdlib refresh (2026-11-12). Pin `6.6.2` → **`6.6.20`**; `lib/` re-resolved
 with `cyrius deps`, and **every file in `lib/` now matches the `6.6.20` stdlib byte-for-byte** (79 modules: 70
 changed, 5 unchanged, 4 newly pulled in transitively — `alloc_cx` and `poison` via `alloc`, `sys` via `sigil`,
@@ -76,12 +92,13 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
 
 ## Toolchain
 
-- **Cyrius pin**: `6.6.20` (in `cyrius.cyml [package].cyrius`)
-- **Vendored stdlib**: bayan `1.5.12`, patra `1.15.2`, sandhi `1.10.8`, sakshi `2.5.7`, sigil `3.13.10`. Refresh
+- **Cyrius pin**: `6.7.9` (in `cyrius.cyml [package].cyrius`)
+- **Vendored stdlib**: bayan `1.5.13`, patra `1.16.0`, sandhi `1.10.9`, sakshi `2.5.8`, sigil `3.13.11`. Refresh
   with `cyrius deps` (never `cyrius update`), then `cyrius deps --verify` against `cyrius.lock`.
   ⚠ `lib/hashmap_fast.cyr` and `lib/ws_server.cyr` are **not declared** in `[deps].stdlib` and nothing includes
-  them, so `cyrius deps` never refreshes them. At 1.1.5 they were copied by hand from the `6.6.20` stdlib and
-  re-locked with `cyrius deps --lock`. They are **kept on purpose** (decided at 1.1.5), so every pin bump has to
+  them, so `cyrius deps` never refreshes them. At 1.1.5 and again at 1.2.0 they were copied by hand from the
+  pinned stdlib and re-locked with `cyrius deps --lock`. They are **kept on purpose** (decided at 1.1.5), so every
+  pin bump has to
   refresh them by hand: `cp ~/.cyrius/versions/<pin>/lib/{hashmap_fast,ws_server}.cyr lib/` and then
   `cyrius deps --lock`.
 
