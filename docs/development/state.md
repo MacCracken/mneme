@@ -5,6 +5,19 @@
 
 ## Version
 
+**1.1.5** — toolchain + vendored stdlib refresh (2026-11-12). Pin `6.6.2` → **`6.6.20`**; `lib/` re-resolved
+with `cyrius deps`, and **every file in `lib/` now matches the `6.6.20` stdlib byte-for-byte** (79 modules: 70
+changed, 5 unchanged, 4 newly pulled in transitively — `alloc_cx` and `poison` via `alloc`, `sys` via `sigil`,
+`tls_hostid` via `tls`). Folded libs: bayan `1.5.5` → `1.5.12`, patra `1.14.1` → `1.15.2`, sandhi `1.9.16` →
+`1.10.8`, sakshi `2.5.1` → `2.5.7`, sigil `3.12.16` → `3.13.10`. New **`cyrius.lock`** (79 hashes): `cyrius deps`
+now locks a stdlib-only project, and `cyrius deps --verify` checks it. The suite is unchanged at 62 files / 1,133
+assertions with **identical per-suite counts** at both pins, so the 6.6.13 correctly-rounded `f64_parse` moved no
+asserted value. One source change: bayan 1.5.10 deprecated `bayan_json_v_obj_get`, so the 8 call sites
+(`src/mcp_server.cyr` ×5, `tests/mcp_server.tcyr` ×3) now call `bayan_json_v_obj_get_by_cstr`, which the old name
+forwarded to. That is a pure rename with no behavior change: every key is a C-string literal.
+
+**1.1.4** — toolchain `6.5.35` → `6.6.2` (2026-09-11). No source change.
+
 **1.1.3** — toolchain + vendored stdlib refresh (2026-08-22). Pin `6.5.33` → **`6.5.35`**; `lib/` re-resolved
 with `cyrius deps`. **Exactly two of the 73 vendored modules changed** — `bayan.cyr` and `patra.cyr` — the other 71
 are byte-identical across the two toolchains, and every file in `lib/` now matches the `6.5.35` stdlib byte-for-byte.
@@ -63,8 +76,14 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
 
 ## Toolchain
 
-- **Cyrius pin**: `6.5.35` (in `cyrius.cyml [package].cyrius`)
-- **Vendored stdlib**: bayan `1.5.2`, patra `1.13.10` — refresh with `cyrius deps` (never `cyrius update`)
+- **Cyrius pin**: `6.6.20` (in `cyrius.cyml [package].cyrius`)
+- **Vendored stdlib**: bayan `1.5.12`, patra `1.15.2`, sandhi `1.10.8`, sakshi `2.5.7`, sigil `3.13.10`. Refresh
+  with `cyrius deps` (never `cyrius update`), then `cyrius deps --verify` against `cyrius.lock`.
+  ⚠ `lib/hashmap_fast.cyr` and `lib/ws_server.cyr` are **not declared** in `[deps].stdlib` and nothing includes
+  them, so `cyrius deps` never refreshes them. At 1.1.5 they were copied by hand from the `6.6.20` stdlib and
+  re-locked with `cyrius deps --lock`. They are **kept on purpose** (decided at 1.1.5), so every pin bump has to
+  refresh them by hand: `cp ~/.cyrius/versions/<pin>/lib/{hashmap_fast,ws_server}.cyr lib/` and then
+  `cyrius deps --lock`.
 
 ## Source
 

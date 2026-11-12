@@ -2,6 +2,66 @@
 
 All notable changes to Mneme will be documented in this file.
 
+## [Unreleased]
+
+## [1.1.5] — 2026-11-12
+
+**Toolchain and vendored stdlib refreshed: Cyrius `6.6.2` → `6.6.20`, and every file in `lib/` now matches the
+`6.6.20` stdlib byte-for-byte. The bump needed no behavioral source change. Its one source edit is a rename off a
+newly deprecated bayan name. 62 files / 1,133 assertions, all green, with identical per-suite counts at both pins.**
+
+### Changed
+- **Toolchain pin `6.6.2` → `6.6.20`.** CI installs from the `cyrius.cyml [package].cyrius` pin, so this needs no
+  workflow edit.
+- **`lib/` re-resolved via `cyrius deps`.** 79 modules: 70 changed, 5 unchanged (`alloc_agnos`, `args_macos`,
+  `args_win`, `ct`, `tls_native_keysched`), and 4 newly pulled in as transitive includes of declared leaves
+  (`alloc_cx` and `poison` via `alloc`, `sys` via `sigil`, `tls_hostid` via `tls`). Folded libs:
+  - bayan `1.5.5` → `1.5.12`
+  - patra `1.14.1` → `1.15.2`
+  - sandhi `1.9.16` → `1.10.8`
+  - sakshi `2.5.1` → `2.5.7`
+  - sigil `3.12.16` → `3.13.10`
+- **`lib/math.cyr` re-vendored in the same change, as the roadmap required for any pin ≥ 6.6.13.** 6.6.13 made
+  `f64_le`, `f64_ge` and `f64_trunc` compiler builtins (reserved names). The 6.6.2 `math.cyr` still defined all
+  three; the 6.6.20 copy defines none.
+- **`f64_parse` is correctly rounded since 6.6.13** (cyrius I4), so parsed values can move by up to 2 ulp. mneme
+  calls it in 29 files (11 src, 18 tests). No asserted value moved: every suite reports the same count at `6.6.2`
+  and `6.6.20`, so there was no golden numeric output to re-baseline.
+- **`bayan_json_v_obj_get` → `bayan_json_v_obj_get_by_cstr`** (`src/mcp_server.cyr` ×5, `tests/mcp_server.tcyr`
+  ×3). bayan 1.5.10 deprecated the old name because it does not say what kind of key it takes. It forwards to
+  `_by_cstr`, so this is a pure rename and changes no answers: every key at these sites is a C-string literal. The
+  build no longer prints the five deprecation warnings, and the binary size is unchanged (2,593,824 B).
+
+### Added
+- **`cyrius.lock`** (79 SHA-256 hashes plus the `cyrius 6.6.20` row). `cyrius deps` now writes a lock for a
+  stdlib-only project, and `cyrius deps --verify` checks every vendored file against it: 79 verified, 0 failed.
+
+### Fixed
+- **Two vendored modules had gone stale: `lib/hashmap_fast.cyr` and `lib/ws_server.cyr`.** They are not declared in
+  `[deps].stdlib` and nothing in mneme includes them, so `cyrius deps` never refreshed them. They already differed
+  from the 6.6.2 stdlib. Both were copied from the `6.6.20` stdlib and re-locked with `cyrius deps --lock`. They
+  are kept on purpose, so each pin bump refreshes them by hand (the procedure is in `docs/development/state.md`).
+
+### Verified at the new pin
+- `cyrius build src/main.cyr build/mneme`: OK.
+- `cyrius test`: 62 passed, 0 failed (1,133 assertions).
+- `scripts/pdfcheck.sh --strict`: 7/7 under bayan 1.5.12's validator.
+- `tests/mneme.fcyr`: ok.
+- `tests/mneme.bcyr` and `benches/mneme_bench.bcyr` both run:
+  - `core_uuid_v4` 595 ns
+  - `ai_tokenize` 4.43 µs
+  - `squared_distance_3d` 42 ns
+  - `bm25_search_200docs` 310 µs
+
+  These are single runs and were not compared against a `6.6.2` bench run.
+
+## [1.1.4] — 2026-09-11
+
+### Changed
+
+- **Toolchain `6.5.35` → `6.6.2`.** No source change; the value form needed none.
+  Build, tests, and any bench/fuzz/distlib target the repo ships re-verified at the new pin.
+
 ## [1.1.3] — 2026-08-22
 
 **Toolchain and vendored stdlib refreshed: Cyrius `6.5.33` → `6.5.35`, carrying bayan `1.4.2` → `1.5.2` (eight fixed
@@ -470,12 +530,3 @@ test-bearing Rust module is mirrored 1:1; **61 `.tcyr` files, all green**.
 - Systemd service unit (`deploy/mneme.service`)
 - Marketplace recipe (`deploy/mneme.agnos-agent`)
 - 5 agnoshi voice/agent intents (`deploy/agnoshi-intents.toml`)
-
-## [Unreleased]
-
-## [1.1.4] - 2026-09-11
-
-### Changed
-
-- **Toolchain `6.5.35` → `6.6.2`.** No source change; the value form needed none.
-  Build, tests, and any bench/fuzz/distlib target the repo ships re-verified at the new pin.

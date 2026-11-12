@@ -38,10 +38,10 @@ fn main() {
     # --- _mcp_id_raw: number → decimal, string → QUOTED+ESCAPED, absent → null ---
     # (Compare with str_eq_cstr, which is len-aware — bayan value Strs may point into the parse buffer + not be
     #  NUL-terminated, so a cstr-based streq/assert_streq would over-read.)
-    assert_eq(str_eq_cstr(_mcp_id_raw(bayan_json_v_obj_get(_pv("{\"id\":7}"), "id")), "7"), 1, "id number -> 7");
-    assert_eq(str_eq_cstr(_mcp_id_raw(bayan_json_v_obj_get(_pv("{}"), "id")), "null"), 1, "id absent -> null");
+    assert_eq(str_eq_cstr(_mcp_id_raw(bayan_json_v_obj_get_by_cstr(_pv("{\"id\":7}"), "id")), "7"), 1, "id number -> 7");
+    assert_eq(str_eq_cstr(_mcp_id_raw(bayan_json_v_obj_get_by_cstr(_pv("{}"), "id")), "null"), 1, "id absent -> null");
     # a string id carrying a quote must come back ESCAPED so it can't break the response JSON: a"b -> "a\"b"
-    assert_eq(str_eq_cstr(_mcp_id_raw(bayan_json_v_obj_get(_pv("{\"id\":\"a\\\"b\"}"), "id")), "\"a\\\"b\""), 1, "id string is quoted + escaped");
+    assert_eq(str_eq_cstr(_mcp_id_raw(bayan_json_v_obj_get_by_cstr(_pv("{\"id\":\"a\\\"b\"}"), "id")), "\"a\\\"b\""), 1, "id string is quoted + escaped");
 
     # --- _mcp_json_args: str / int / str-array → the typed args-vec the handlers read ---
     var av = _pv("{\"title\":\"T\",\"content\":\"C\",\"limit\":5,\"tags\":[\"x\",\"y\"]}");

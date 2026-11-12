@@ -62,9 +62,12 @@ client / event bus stay deferred (reported unavailable → local-fallback paths)
 
 ## Post-v1 / P2 backlog (deferred, non-blocking)
 
-- **At the cyrius 6.6.13 pin bump** (recorded 2026-10-02): `f64_parse` is correctly rounded (cyrius I4),
-  so parsed values can move by up to 2 ulp — mneme calls it in ~29 files: run the full CI and re-baseline
-  any golden numeric output; and re-vendor `lib/math.cyr` with `cyrius deps` in the same commit — 6.6.13 made `f64_le` / `f64_ge` / `f64_trunc` compiler builtins (reserved names), and a pre-6.6.13 vendored copy still defines them (`reserved keyword`).
+- ✅ **At the cyrius 6.6.13 pin bump — done in 1.1.5 (pin `6.6.20`).** (Recorded 2026-10-02.) `f64_parse` is
+  correctly rounded (cyrius I4), so parsed values can move by up to 2 ulp; mneme calls it in 29 files (11 src,
+  18 tests). The full suite ran at the new pin with **identical per-suite counts** (62 files / 1,133 assertions),
+  so no golden numeric output needed re-baselining. `lib/math.cyr` was re-vendored by `cyrius deps` in the same
+  change: the 6.6.2 copy defined `f64_le` / `f64_ge` / `f64_trunc`, which 6.6.13 made compiler builtins, and the
+  6.6.20 copy defines none of them.
 
 Skipped intentionally during the port; revisit after v1.0 parity lands:
 

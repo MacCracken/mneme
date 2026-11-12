@@ -103,25 +103,25 @@ fn _mcp_srv_handle(ctx, cfd, buf, blen): i64 {
     if (body == 0) { _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(str_from("null"), 0 - 32700, str_from("Parse error: empty body"))); return 0; }
     var root = bayan_json_v_parse_buf(body, body_len);
     if (root == 0) { _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(str_from("null"), 0 - 32700, str_from("Parse error"))); return 0; }
-    var id_raw = _mcp_id_raw(bayan_json_v_obj_get(root, "id"));
+    var id_raw = _mcp_id_raw(bayan_json_v_obj_get_by_cstr(root, "id"));
     # method must be a STRING — bayan_json_v_is_str returns 0 for both absent AND wrong-type, so this one guard
     # covers both. Without the type check a non-string method (5 / true / {} / []) would make bayan_json_v_str
     # return 0 and str_eq_cstr(0,..) → str_len(0) → SIGSEGV, killing the single-threaded serve loop (remote DoS).
-    var method_v = bayan_json_v_obj_get(root, "method");
+    var method_v = bayan_json_v_obj_get_by_cstr(root, "method");
     if (bayan_json_v_is_str(method_v) == 0) { _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(id_raw, 0 - 32600, str_from("Invalid Request: method missing or not a string"))); return 0; }
     var method = bayan_json_v_str(method_v);
     if (str_eq_cstr(method, "tools/call") == 0) {
         _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(id_raw, 0 - 32601, str_from("Method not found (this endpoint serves tools/call; tools/list is daimon's registry)")));
         return 0;
     }
-    var params = bayan_json_v_obj_get(root, "params");
+    var params = bayan_json_v_obj_get_by_cstr(root, "params");
     if (params == 0) { _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(id_raw, 0 - 32602, str_from("Invalid params"))); return 0; }
     # params.name must be a STRING (same reason as method: a non-string → bayan_json_v_str 0 → tool=0 → the
     # dispatcher's str_eq_cstr(0,..) → str_len(0) → SIGSEGV). One is_str guard covers absent + wrong-type.
-    var name_v = bayan_json_v_obj_get(params, "name");
+    var name_v = bayan_json_v_obj_get_by_cstr(params, "name");
     if (bayan_json_v_is_str(name_v) == 0) { _mcp_srv_send(cfd, mneme_mcp_jsonrpc_error(id_raw, 0 - 32602, str_from("Invalid params: tool name missing or not a string"))); return 0; }
     var tool = bayan_json_v_str(name_v);                          # a non-NUL Str; handle_tool_call str_eq_cstr's it (len-bounded, safe)
-    var args = _mcp_json_args(bayan_json_v_obj_get(params, "arguments"));
+    var args = _mcp_json_args(bayan_json_v_obj_get_by_cstr(params, "arguments"));
     var manager = load64(ctx);
     var engines = load64(ctx + 8);
     _mcp_srv_send(cfd, mneme_mcp_handle_tool_call(id_raw, tool, args, manager, engines));
