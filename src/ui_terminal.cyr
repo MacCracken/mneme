@@ -39,11 +39,13 @@ fn mneme_ui_decode_key(buf, n): i64 {
     return b0;
 }
 
+# stdin closed (a read of 0) or failed (negative): the session is over. Distinct from every key code.
+var MNEME_UI_KEY_EOF = 0 - 1000000;
 fn mneme_ui_term_read_key(): i64 {
-    var buf = alloc(8);
-    var n = sys_read(0, buf, 8);
-    if (n <= 0) { return 0; }
-    return mneme_ui_decode_key(buf, n);
+    var buf[8];
+    var n = sys_read(0, &buf, 8);
+    if (n <= 0) { return MNEME_UI_KEY_EOF; }
+    return mneme_ui_decode_key(&buf, n);
 }
 fn mneme_ui_term_render(app): i64 {
     _ui_clear();
@@ -61,8 +63,14 @@ fn mneme_ui_run(app): i64 {
     var done = 0;
     while (done == 0) {
         mneme_ui_term_render(app);
-        mneme_ui_handle_key(app, mneme_ui_term_read_key());
-        if (mneme_ui_app_should_quit(app) == 1) { done = 1; }
+        var key = mneme_ui_term_read_key();
+        # 1.2.3: EOF / a read error ends the loop (Rust: event::read errors and the app exits). A read of 0 was
+        # key 0, so `mneme < /dev/null` or a dropped SSH session redrew at 100% CPU forever.
+        if (key == MNEME_UI_KEY_EOF) { done = 1; }
+        else {
+            mneme_ui_handle_key(app, key);
+            if (mneme_ui_app_should_quit(app) == 1) { done = 1; }
+        }
     }
     _ui_clear();
     return 0;

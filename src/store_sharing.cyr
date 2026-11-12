@@ -1,6 +1,6 @@
 # mneme-store — vault sharing (ported from rust-old/crates/mneme-store/src/sharing.rs)
 # Zero-I/O: multi-user access, permissions, conflict detection.
-# Requires core_uuid (v4) + chrono (clock_now_ns).
+# Requires core_uuid (v4) + chrono (clock_epoch_ns).
 
 enum UserRole {
     ROLE_OWNER;
@@ -62,7 +62,7 @@ fn mneme_store_sharing_enable(c): i64 {
 
 # add a user, returns the VaultUser
 fn mneme_store_sharing_add_user(c, name: Str, role): i64 {
-    var now = clock_now_ns();
+    var now = clock_epoch_ns();
     var user = _vault_user(mneme_core_uuid_v4(), name, role, now, now);
     vec_push(load64(c + 8), user);
     return user;
@@ -152,11 +152,11 @@ fn mneme_store_sharing_config_to_json(c): i64 {
     while (i < vec_len(users)) {
         var u = vec_get(users, i);
         if (i > 0) { str_builder_add_cstr(sb, ","); }
-        str_builder_add_cstr(sb, "{\"name\":\"");
-        str_builder_add(sb, mneme_store_vault_user_name(u));
-        str_builder_add_cstr(sb, "\",\"role\":\"");
-        str_builder_add(sb, mneme_store_role_name(mneme_store_vault_user_role(u)));
-        str_builder_add_cstr(sb, "\"}");
+        str_builder_add_cstr(sb, "{\"name\":");
+        str_builder_add_json_str(sb, mneme_store_vault_user_name(u));
+        str_builder_add_cstr(sb, ",\"role\":");
+        str_builder_add_json_str(sb, mneme_store_role_name(mneme_store_vault_user_role(u)));
+        str_builder_add_cstr(sb, "}");
         i = i + 1;
     }
     str_builder_add_cstr(sb, "]}");
@@ -191,6 +191,6 @@ fn mneme_store_detect_conflict(note_id, base_hash: Str, user_a: Str, hash_a: Str
     store64(e + 24, base_hash);
     store64(e + 32, hash_a);
     store64(e + 40, hash_b);
-    store64(e + 48, clock_now_ns());
+    store64(e + 48, clock_epoch_ns());
     return e;
 }

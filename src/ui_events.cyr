@@ -33,7 +33,28 @@ fn _ui_switch_vault_by_index(app, index): i64 {
     var vaults = mneme_ui_app_vault_list(app);
     if (index < 0 || index >= vec_len(vaults)) { return 0; }
     var info = vec_get(vaults, index);
-    mneme_store_manager_switch_vault(load64(app), load64(info));
+    # Rust: on Err the status shows the error and nothing else changes; on Ok it creates the vault's engines if
+    # it has none. 1.2.3: the result was ignored and no engine was made, so search on the new vault returned
+    # silently and the previous vault's results stayed on screen.
+    if (mneme_store_manager_switch_vault(load64(app), load64(info)) == 0) {
+        var eb = str_builder_new();
+        str_builder_add_cstr(eb, "Error: could not open vault '");
+        str_builder_add(eb, load64(info + 8));
+        str_builder_putc(eb, 39);
+        mneme_ui_app_set_status_message(app, str_builder_build(eb));
+        return 0;
+    }
+    if (_ui_engines_get(load64(app + 8), load64(info)) == 0) {
+        var ov = mneme_store_manager_active(load64(app));
+        var e = alloc(24);
+        store64(e, load64(info));
+        var fte = mneme_search_engine_in_memory();
+        mneme_search_engine_index_vault(fte, mneme_store_openvault_vault(ov));
+        store64(e + 8, fte);
+        store64(e + 16, mneme_search_semantic_engine_disabled());
+        vec_push(load64(app + 8), e);
+    }
+    store64(app + 56, vec_new());   # the old vault's search results
     mneme_ui_app_set_panel(app, PANEL_NOTE_LIST);
     mneme_ui_app_load_notes(app);
     mneme_ui_app_load_tags(app);

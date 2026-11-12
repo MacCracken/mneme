@@ -39,6 +39,14 @@ fn _dir(): i64 {
     return root;
 }
 
+# a `n`-byte Str of 'a'..'z' (1.2.3 regression helper)
+fn _big(n): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < n) { str_builder_putc(sb, 97 + (i % 26)); i = i + 1; }
+    return str_builder_build(sb);
+}
+
 fn main() {
     alloc_init();
     test_group("search_vector_store");
@@ -110,6 +118,41 @@ fn main() {
     assert_eq(vec_len(rp), 1, "reload search 1");
     assert_eq(mneme_core_uuid_eq(mneme_search_semresult_note_id(vec_get(rp, 0)), idp), 1, "reload note id");
     assert(str_eq(mneme_search_semresult_title(vec_get(rp, 0)), str_from("Persisted")), "reload title");
+
+    # 1.2.3 regression: a store over 1 MB reloads every entry (the 1 MB read buffer dropped the tail)
+    var dbig = _dir();
+    var sb1 = mneme_search_vstore_open(dbig, 3);
+    var longt = _big(2000);
+    var vi = 0;
+    while (vi < 600) {
+        mneme_search_vstore_insert(sb1, mneme_core_uuid_v4(), longt, str_from("s"), _vec3("1.0", "0.0", "0.0"));
+        vi = vi + 1;
+    }
+    mneme_search_vstore_save(sb1);
+    var sb2 = mneme_search_vstore_open(dbig, 3);
+    assert(sb2 != 0, "big store reopens");
+    assert_eq(mneme_search_vstore_len(sb2), 600, "all 600 entries reload from a >1 MB meta file");
+
+    # 1.2.3 regression: an unreadable meta file fails the open (Rust: Err) instead of opening EMPTY, which
+    # the next save would have written over the file
+    var dbad = _dir();
+    sys_mkdir(str_cstr(dbad), 493);
+    sys_mkdir(str_cstr(path_join(dbad, str_from("vectors.meta.txt"))), 493);   # a directory: read fails EISDIR
+    assert_eq(mneme_search_vstore_open(dbad, 3), 0, "unreadable meta -> open fails");
+
+    # 1.2.3: a title or snippet holding a newline round-trips (it shifted every later entry on reload)
+    var dnl = _dir();
+    var snl = mneme_search_vstore_open(dnl, 3);
+    var idnl = mneme_core_uuid_v4();
+    mneme_search_vstore_insert(snl, idnl, str_from("Line\nBreak"), str_from("one\ntwo\\three"), _vec3("1.0", "0.0", "0.0"));
+    mneme_search_vstore_insert(snl, mneme_core_uuid_v4(), str_from("After"), str_from("x"), _vec3("0.0", "1.0", "0.0"));
+    assert_eq(mneme_search_vstore_save(snl), 1, "save reports success");
+    var snl2 = mneme_search_vstore_open(dnl, 3);
+    assert_eq(mneme_search_vstore_len(snl2), 2, "both entries reload");
+    var rnl = mneme_search_vstore_search(snl2, _vec3("1.0", "0.0", "0.0"), 1);
+    assert(str_eq_cstr(mneme_search_semresult_title(vec_get(rnl, 0)), "Line\nBreak"), "the newline title round-trips");
+    var rnl2 = mneme_search_vstore_search(snl2, _vec3("0.0", "1.0", "0.0"), 1);
+    assert(str_eq_cstr(mneme_search_semresult_title(vec_get(rnl2, 0)), "After"), "the entry after it is intact");
 
     return assert_summary();
 }

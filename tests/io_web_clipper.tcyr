@@ -58,6 +58,14 @@ fn main() {
     var r10 = mneme_io_wc_clip_html(str_builder_build(big), str_from("https://example.com"), opt);
     assert(str_contains(mneme_io_wc_page_content_md(r10), str_from("[...truncated]")), "truncated marker");
 
+    # 1.2.3: the clip time is the real time (it was the constant 1970-01-01 00:00)
+    var r3_bm = mneme_io_wc_clip_bookmark(str_from("https://example.com"), str_from("Example"), 0);
+    var r3_at = mneme_io_wc_page_clipped_at(r3_bm);
+    assert_eq(str_len(r3_at), 16, "clipped_at is YYYY-MM-DD HH:MM");
+    assert_eq(str_starts_with(r3_at, str_from("1970")), 0, "and not 1970");
+    assert_eq(load8(str_data(r3_at) + 4), 45, "a '-' after the year");
+    assert_eq(str_index_of_cstr(mneme_io_wc_page_content_md(r3_bm), "Saved: 1970") < 0, 1, "the Saved: line is not 1970");
+
     return assert_summary();
 }
 

@@ -1,7 +1,7 @@
 # mneme-store — note versioning (ported from rust-old/crates/mneme-store/src/versioning.rs)
 # Zero-I/O in-memory version store + line-level diff. Uses map_u64 keyed by the
 # uuid handle (tests reuse the same note_id handle, so pointer-keying is correct).
-# Requires core_uuid (v4) + chrono (clock_now_ns).
+# Requires core_uuid (v4) + chrono (clock_epoch_ns).
 
 enum ChangeKind {
     CHANGE_ADDED;
@@ -108,13 +108,13 @@ fn mneme_store_note_version_to_json(v): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "{\"version_number\":");
     str_builder_add_int(sb, mneme_store_note_version_number(v));
-    str_builder_add_cstr(sb, ",\"title\":\"");
-    str_builder_add(sb, mneme_store_note_version_title(v));
-    str_builder_add_cstr(sb, "\",\"content\":\"");
-    str_builder_add(sb, mneme_store_note_version_content(v));
-    str_builder_add_cstr(sb, "\",\"content_hash\":\"");
-    str_builder_add(sb, mneme_store_note_version_content_hash(v));
-    str_builder_add_cstr(sb, "\"}");
+    str_builder_add_cstr(sb, ",\"title\":");
+    str_builder_add_json_str(sb, mneme_store_note_version_title(v));
+    str_builder_add_cstr(sb, ",\"content\":");
+    str_builder_add_json_str(sb, mneme_store_note_version_content(v));
+    str_builder_add_cstr(sb, ",\"content_hash\":");
+    str_builder_add_json_str(sb, mneme_store_note_version_content_hash(v));
+    str_builder_add_cstr(sb, "}");
     return str_builder_build(sb);
 }
 
@@ -135,7 +135,7 @@ fn mneme_store_record_version(store, note_id, title: Str, content: Str, content_
     store64(v + 24, title);
     store64(v + 32, content);
     store64(v + 40, content_hash);
-    store64(v + 48, clock_now_ns());
+    store64(v + 48, clock_epoch_ns());
     store64(v + 56, message);
     vec_push(versions, v);
     map_u64_set(map, note_id, versions);

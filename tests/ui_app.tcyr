@@ -19,6 +19,7 @@ include "src/search_vector_store.cyr"
 include "src/search_embedding_backend.cyr"
 include "src/search_semantic_engine.cyr"
 include "src/search_engine.cyr"
+include "src/search_vault_index.cyr"
 include "src/ui_app.cyr"
 
 var _appn = 0;

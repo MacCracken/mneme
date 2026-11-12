@@ -12,15 +12,9 @@ fn _eh_cstr(s: Str): i64 {
     store8(buf + n, 0);
     return buf;
 }
+# mkdir -p: 0, or a negative errno. 1.2.3: the stdlib's xmkdir_p (this ignored every sys_mkdir result).
 fn _eh_mkdir_p(dir: Str): i64 {
-    var n = str_len(dir);
-    var d = str_data(dir);
-    var i = 1;
-    while (i <= n) {
-        if (i == n || load8(d + i) == 47) { sys_mkdir(_eh_cstr(str_substr(dir, 0, i)), 493); }
-        i = i + 1;
-    }
-    return 0;
+    return xmkdir_p(_eh_cstr(dir), 493);   # 0755
 }
 fn _eh_write(dir: Str, name: Str, content: Str): i64 {
     return file_write_all(_eh_cstr(path_join(dir, name)), str_data(content), str_len(content));
@@ -79,6 +73,44 @@ fn mneme_io_html_escape(s: Str): i64 {
 }
 
 # inline markdown -> HTML (**bold**, *italic*, `code`, [text](url))
+# 1.2.3: text is HTML-escaped and link targets are filtered, as comrak (rust-old's renderer) does by default.
+# The hand-rolled renderer wrote text, code spans and hrefs RAW: `a <!-- b` hid the rest of the page, `<script>`
+# ran, and `[x](u" onclick="..)` broke out of the href attribute.
+fn _md_putc_esc(sb, c): i64 {
+    if (c == 38) { str_builder_add_cstr(sb, "&amp;"); }
+    elif (c == 60) { str_builder_add_cstr(sb, "&lt;"); }
+    elif (c == 62) { str_builder_add_cstr(sb, "&gt;"); }
+    elif (c == 34) { str_builder_add_cstr(sb, "&quot;"); }
+    else { str_builder_putc(sb, c); }
+    return 0;
+}
+# does `url` (leading spaces skipped) start with `scheme` (lowercase, with its ':'), ignoring case?
+fn _md_has_scheme(url: Str, scheme): i64 {
+    var n = str_len(url);
+    var d = str_data(url);
+    var i = 0;
+    while (i < n && (load8(d + i) == 32 || load8(d + i) == 9)) { i = i + 1; }
+    var k = strlen(scheme);
+    if (i + k > n) { return 0; }
+    var j = 0;
+    while (j < k) {
+        var c = load8(d + i + j);
+        if (c >= 65 && c <= 90) { c = c + 32; }
+        if (c != load8(scheme + j)) { return 0; }
+        j = j + 1;
+    }
+    return 1;
+}
+# comrak's unsafe-URL rule: javascript:, vbscript:, file: and data: (except data:image/png|gif|jpeg|webp) become
+# an empty href. Whatever passes is attribute-escaped.
+fn _md_href(sb, url: Str): i64 {
+    if (_md_has_scheme(url, "javascript:") == 1 || _md_has_scheme(url, "vbscript:") == 1 || _md_has_scheme(url, "file:") == 1) { return 0; }
+    if (_md_has_scheme(url, "data:") == 1) {
+        if (_md_has_scheme(url, "data:image/png") == 0 && _md_has_scheme(url, "data:image/gif") == 0 && _md_has_scheme(url, "data:image/jpeg") == 0 && _md_has_scheme(url, "data:image/webp") == 0) { return 0; }
+    }
+    str_builder_add(sb, mneme_io_html_escape(url));
+    return 0;
+}
 fn _md_inline(s: Str): i64 {
     var sb = str_builder_new();
     var n = str_len(s);
@@ -90,26 +122,26 @@ fn _md_inline(s: Str): i64 {
             var close = _md_find2(d, i + 2, n, 42, 42);
             if (close >= 0) {
                 str_builder_add_cstr(sb, "<strong>");
-                str_builder_add(sb, str_substr(s, i + 2, close));
+                str_builder_add(sb, mneme_io_html_escape(str_substr(s, i + 2, close)));
                 str_builder_add_cstr(sb, "</strong>");
                 i = close + 2;
-            } else { str_builder_putc(sb, c); i = i + 1; }
+            } else { _md_putc_esc(sb, c); i = i + 1; }
         } elif (c == 42) {
             var e1 = _md_find1(d, i + 1, n, 42);
             if (e1 >= 0) {
                 str_builder_add_cstr(sb, "<em>");
-                str_builder_add(sb, str_substr(s, i + 1, e1));
+                str_builder_add(sb, mneme_io_html_escape(str_substr(s, i + 1, e1)));
                 str_builder_add_cstr(sb, "</em>");
                 i = e1 + 1;
-            } else { str_builder_putc(sb, c); i = i + 1; }
+            } else { _md_putc_esc(sb, c); i = i + 1; }
         } elif (c == 96) {
             var e2 = _md_find1(d, i + 1, n, 96);
             if (e2 >= 0) {
                 str_builder_add_cstr(sb, "<code>");
-                str_builder_add(sb, str_substr(s, i + 1, e2));
+                str_builder_add(sb, mneme_io_html_escape(str_substr(s, i + 1, e2)));
                 str_builder_add_cstr(sb, "</code>");
                 i = e2 + 1;
-            } else { str_builder_putc(sb, c); i = i + 1; }
+            } else { _md_putc_esc(sb, c); i = i + 1; }
         } elif (c == 91) {
             var rb = _md_find1(d, i + 1, n, 93);
             var done = 0;
@@ -117,16 +149,16 @@ fn _md_inline(s: Str): i64 {
                 var rp = _md_find1(d, rb + 2, n, 41);
                 if (rp >= 0) {
                     str_builder_add_cstr(sb, "<a href=\"");
-                    str_builder_add(sb, str_substr(s, rb + 2, rp));
+                    _md_href(sb, str_substr(s, rb + 2, rp));
                     str_builder_add_cstr(sb, "\">");
-                    str_builder_add(sb, str_substr(s, i + 1, rb));
+                    str_builder_add(sb, mneme_io_html_escape(str_substr(s, i + 1, rb)));
                     str_builder_add_cstr(sb, "</a>");
                     i = rp + 1;
                     done = 1;
                 }
             }
-            if (done == 0) { str_builder_putc(sb, c); i = i + 1; }
-        } else { str_builder_putc(sb, c); i = i + 1; }
+            if (done == 0) { _md_putc_esc(sb, c); i = i + 1; }
+        } else { _md_putc_esc(sb, c); i = i + 1; }
     }
     return str_builder_build(sb);
 }
@@ -243,19 +275,25 @@ fn _eh_render_note(note, opts): i64 {
     str_builder_add_cstr(sb, "</aside></div>\n</body>\n</html>");
     return str_builder_build(sb);
 }
-# export a static site; returns notes.len + 1 (notes + index)
+# export a static site; returns notes.len + 1 (notes + index), or the first failure's negative errno (Rust: `?`).
+# 1.2.3: every mkdir and write result was ignored and the count returned regardless — the same silent-success
+# shape 1.1.2 fixed in the PDF exporter.
 fn mneme_io_export_to_html(notes, output_dir: Str, opts): i64 {
-    _eh_mkdir_p(output_dir);
-    _eh_write(output_dir, str_from("index.html"), _eh_render_index(notes, opts));
+    var mr = _eh_mkdir_p(output_dir);
+    if (mr < 0) { return mr; }
+    var w = _eh_write(output_dir, str_from("index.html"), _eh_render_index(notes, opts));
+    if (w < 0) { return w; }
     var i = 0;
     while (i < vec_len(notes)) {
         var note = vec_get(notes, i);
         var fname = str_builder_new();
         str_builder_add(fname, mneme_io_export_note_slug(note));
         str_builder_add_cstr(fname, ".html");
-        _eh_write(output_dir, str_builder_build(fname), _eh_render_note(note, opts));
+        w = _eh_write(output_dir, str_builder_build(fname), _eh_render_note(note, opts));
+        if (w < 0) { return w; }
         i = i + 1;
     }
-    _eh_write(output_dir, str_from("style.css"), str_from(_EH_CSS));
+    w = _eh_write(output_dir, str_from("style.css"), str_from(_EH_CSS));
+    if (w < 0) { return w; }
     return vec_len(notes) + 1;
 }

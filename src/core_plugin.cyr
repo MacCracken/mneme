@@ -48,15 +48,15 @@ fn mneme_core_plugin_info_capabilities(p): i64 { return load64(p + 32); }
 # serialize to JSON (capabilities as snake_case names)
 fn mneme_core_plugin_info_to_json(p): i64 {
     var sb = str_builder_new();
-    str_builder_add_cstr(sb, "{\"name\":\"");
-    str_builder_add(sb, mneme_core_plugin_info_name(p));
-    str_builder_add_cstr(sb, "\",\"version\":\"");
-    str_builder_add(sb, mneme_core_plugin_info_version(p));
-    str_builder_add_cstr(sb, "\",\"description\":\"");
-    str_builder_add(sb, mneme_core_plugin_info_description(p));
-    str_builder_add_cstr(sb, "\",\"author\":\"");
-    str_builder_add(sb, mneme_core_plugin_info_author(p));
-    str_builder_add_cstr(sb, "\",\"capabilities\":[");
+    str_builder_add_cstr(sb, "{\"name\":");
+    str_builder_add_json_str(sb, mneme_core_plugin_info_name(p));
+    str_builder_add_cstr(sb, ",\"version\":");
+    str_builder_add_json_str(sb, mneme_core_plugin_info_version(p));
+    str_builder_add_cstr(sb, ",\"description\":");
+    str_builder_add_json_str(sb, mneme_core_plugin_info_description(p));
+    str_builder_add_cstr(sb, ",\"author\":");
+    str_builder_add_json_str(sb, mneme_core_plugin_info_author(p));
+    str_builder_add_cstr(sb, ",\"capabilities\":[");
     var caps = mneme_core_plugin_info_capabilities(p);
     var i = 0;
     while (i < vec_len(caps)) {

@@ -57,6 +57,28 @@ fn _wl_make(inner: Str): i64 {
     return w;
 }
 
+# Match Rust's `\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]` at `i` (where "[[" starts): the index of the closing
+# "]]", or -1. The target is one or more bytes that are neither ']' nor '|'; an optional "|display" is one or
+# more bytes that are not ']'; then "]]". 1.2.3: this took everything up to the first "]]", so
+# "[[Note] and see [[Other]]" became ONE link to `Note] and see [[Other` (Rust links only `Other`), and
+# "[[]]", "[[|x]]" and "[[a|]]" became links where Rust leaves the text alone.
+fn _wl_match(d, n, i): i64 {
+    var j = i + 2;
+    var t0 = j;
+    while (j < n && load8(d + j) != 93 && load8(d + j) != 124) { j = j + 1; }
+    if (j == t0) { return 0 - 1; }                         # empty target
+    if (j < n && load8(d + j) == 124) {                    # '|' display
+        var k = j + 1;
+        var k0 = k;
+        while (k < n && load8(d + k) != 93) { k = k + 1; }
+        if (k == k0) { return 0 - 1; }                     # empty display
+        if (k + 1 < n && load8(d + k + 1) == 93) { return k; }
+        return 0 - 1;
+    }
+    if (j + 1 < n && load8(d + j) == 93 && load8(d + j + 1) == 93) { return j; }
+    return 0 - 1;
+}
+
 fn mneme_io_extract_wikilinks(content: Str): i64 {
     var out = vec_new();
     var n = str_len(content);
@@ -64,12 +86,7 @@ fn mneme_io_extract_wikilinks(content: Str): i64 {
     var i = 0;
     while (i + 1 < n) {
         if (load8(d + i) == 91 && load8(d + i + 1) == 91) {   # "[["
-            var j = i + 2;
-            var close = 0 - 1;
-            while (j + 1 < n && close < 0) {
-                if (load8(d + j) == 93 && load8(d + j + 1) == 93) { close = j; }
-                j = j + 1;
-            }
+            var close = _wl_match(d, n, i);
             if (close < 0) {
                 i = i + 1;
             } else {
@@ -90,12 +107,7 @@ fn mneme_io_wikilinks_to_markdown(content: Str): i64 {
     var i = 0;
     while (i < n) {
         if (i + 1 < n && load8(d + i) == 91 && load8(d + i + 1) == 91) {
-            var j = i + 2;
-            var close = 0 - 1;
-            while (j + 1 < n && close < 0) {
-                if (load8(d + j) == 93 && load8(d + j + 1) == 93) { close = j; }
-                j = j + 1;
-            }
+            var close = _wl_match(d, n, i);
             if (close < 0) {
                 str_builder_putc(sb, load8(d + i));
                 i = i + 1;

@@ -3,7 +3,7 @@
 # as epoch-seconds (0 = None; tests only check presence). Requires chrono (clock_epoch_secs).
 
 # --- helpers ---
-fn _qd_lower(s: Str): i64 {
+fn _qd_lower(s: Str): Str {
     var n = str_len(s);
     var buf = alloc(n);
     var d = str_data(s);
@@ -36,7 +36,7 @@ fn _qd_trim_hash(w: Str): i64 {
     while (i < n && load8(str_data(w) + i) == 35) { i = i + 1; }
     return str_substr(w, i, n);
 }
-fn _qd_trim_end_s(s: Str): i64 {
+fn _qd_trim_end_s(s: Str): Str {
     var n = str_len(s);
     if (n > 0 && load8(str_data(s) + n - 1) == 115) { return str_substr(s, 0, n - 1); }
     return s;
@@ -158,7 +158,9 @@ fn mneme_search_parse_query(input_raw: Str): i64 {
             }
             if (dur_days >= 0) {
                 var tf = alloc(24);
-                store64(tf, _qd_detect_field(words, i, len));
+                # Rust bumps `i` past the unit word BEFORE detect_temporal_field(&words, i), so the ±3 window is
+                # centred one word later. 1.2.3: centred on "last", so "last 2 weeks opened" read "edited".
+                store64(tf, _qd_detect_field(words, i + skip_unit, len));
                 store64(tf + 8, clock_epoch_secs() - dur_days * 86400);
                 store64(tf + 16, 0);
                 store64(q + 16, tf);

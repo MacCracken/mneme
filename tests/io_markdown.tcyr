@@ -42,6 +42,14 @@ fn _any_rel(notes, cstr): i64 {
     return 0;
 }
 
+# a `n`-byte Str of 'a'..'z' (1.2.3 regression helper)
+fn _big(n): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < n) { str_builder_putc(sb, 97 + (i % 26)); i = i + 1; }
+    return str_builder_build(sb);
+}
+
 fn main() {
     alloc_init();
     test_group("io_markdown");
@@ -64,6 +72,28 @@ fn main() {
     var r2 = mneme_io_import_markdown_dir(d2);
     assert_eq(mneme_io_md_stats_files_found(mneme_io_import_result_stats(r2)), 3, "found 3");
     assert_eq(_any_rel(mneme_io_import_result_notes(r2), "project/sub/"), 1, "preserves structure");
+
+    # 1.2.3 regression: a file over 256 KB imports whole, and an unreadable one is an error, not an empty note
+    var d9 = _fresh_dir();
+    var big9 = _big(300000);
+    _mkfile(path_join(d9, str_from("big.md")), big9);
+    var broken9 = path_join(d9, str_from("broken.md"));
+    sys_symlink("/nonexistent/mneme-markdown-target.md", _imp_cstr(broken9));   # dangling: ENOENT even as root
+    var r9 = mneme_io_import_markdown_dir(d9);
+    var s9 = mneme_io_import_result_stats(r9);
+    assert_eq(mneme_io_md_stats_files_found(s9), 2, "both .md entries found");
+    assert_eq(mneme_io_md_stats_files_imported(s9), 1, "only the readable file imports");
+    assert_eq(vec_len(mneme_io_md_stats_errors(s9)), 1, "the unreadable file is an error");
+    assert(str_eq(mneme_io_import_error_path(vec_get(mneme_io_md_stats_errors(s9), 0)), broken9), "error names the file");
+    assert_eq(str_len(mneme_io_imported_note_content(vec_get(mneme_io_import_result_notes(r9), 0))), 300000, "300,000-byte file imported whole");
+
+    # 1.2.3: dot-entries are skipped (Rust's markdown walker); node_modules is NOT (only Obsidian's skips it)
+    var dh = _fresh_dir();
+    _mkfile(path_join(dh, str_from("visible.md")), str_from("v"));
+    _mkfile(path_join(dh, str_from(".hidden/x.md")), str_from("h"));
+    _mkfile(path_join(dh, str_from("node_modules/y.md")), str_from("n"));
+    var sh = mneme_io_import_result_stats(mneme_io_import_markdown_dir(dh));
+    assert_eq(mneme_io_md_stats_files_found(sh), 2, "visible.md and node_modules/y.md");
 
     return assert_summary();
 }

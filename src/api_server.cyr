@@ -25,19 +25,14 @@ fn _api_err(status, msg): i64 {
     return _api_json(status, str_builder_build(sb));
 }
 
+# Append `s` JSON-escaped (RFC 8259 §7), without the surrounding quotes — the caller writes those.
+# 1.2.3: delegates to the stdlib's `str_builder_add_json_str`. This escaped only `"` and `\\`, so control bytes
+# went out raw — a newline in a note made the JSON invalid (a strict parser, bayan 1.11.1's included, rejects it).
 fn _api_esc(sb, s: Str): i64 {
-    var n = str_len(s);
-    var d = str_data(s);
-    var i = 0;
-    while (i < n) {
-        var c = load8(d + i);
-        if (c == 34 || c == 92) { str_builder_putc(sb, 92); str_builder_putc(sb, c); }
-        elif (c == 10) { str_builder_add_cstr(sb, "\\n"); }
-        elif (c == 13) { str_builder_add_cstr(sb, "\\r"); }
-        elif (c == 9) { str_builder_add_cstr(sb, "\\t"); }
-        else { str_builder_putc(sb, c); }
-        i = i + 1;
-    }
+    var t = str_builder_new();
+    str_builder_add_json_str(t, s);
+    var q = str_builder_build(t);
+    str_builder_add(sb, str_substr(q, 1, str_len(q) - 1));
     return 0;
 }
 fn _api_kv_str(sb, key, val: Str): i64 {
@@ -51,7 +46,7 @@ fn _api_kv_str(sb, key, val: Str): i64 {
 # compact f64 → decimal (3 places)
 fn _api_f64_str(x): i64 {
     var sb = str_builder_new();
-    if (f64_le(x, f64_from(0)) == 1 && x != f64_from(0)) { str_builder_putc(sb, 45); x = f64_neg(x); }
+    if (f64_le(x, f64_from(0)) == 1 && x != 0) { str_builder_putc(sb, 45); x = f64_neg(x); }   # x != +0.0 (its bits are 0)
     var ip = f64_to(f64_trunc(x));
     var scaled = f64_to(f64_round(f64_mul(f64_sub(x, f64_from(ip)), f64_from(1000))));
     if (scaled >= 1000) { ip = ip + 1; scaled = scaled - 1000; }
@@ -208,12 +203,15 @@ fn _api_eng_get(engines, vault_id): i64 {
 # VaultState (16): [manager@0, engines@8 (vec of [vid, search, semantic, optimizer])]
 fn mneme_api_vault_state_single(vault_dir: Str, models_dir: Str): i64 {
     var manager = mneme_store_manager_single(vault_dir);
+    if (manager == 0) { return 0; }   # 1.2.3: the vault would not open
     var engines = vec_new();
     var ov = mneme_store_manager_active(manager);
     if (ov != 0) {
         var e = alloc(32);
         store64(e, load64(mneme_store_openvault_info(ov)));
-        store64(e + 8, mneme_search_engine_in_memory());
+        var fte = mneme_search_engine_in_memory();
+        mneme_search_engine_index_vault(fte, mneme_store_openvault_vault(ov));   # 1.2.3: seed from the vault
+        store64(e + 8, fte);
         store64(e + 16, mneme_search_semantic_engine_disabled());
         store64(e + 24, mneme_search_retrieval_optimizer_new());
         vec_push(engines, e);
@@ -243,7 +241,7 @@ fn _api_note_json(nwc): i64 {
     var note = mneme_store_nwc_note(nwc);
     var sb = str_builder_new();
     str_builder_putc(sb, 123);
-    _api_kv_str(sb, "id", mneme_store_uuid_to_string(mneme_core_note_id(note)));
+    _api_kv_str(sb, "id", mneme_core_uuid_to_string(mneme_core_note_id(note)));
     str_builder_add_cstr(sb, ",");
     _api_kv_str(sb, "title", mneme_core_note_title(note));
     str_builder_add_cstr(sb, ",");
@@ -281,12 +279,13 @@ fn _api_str_array_json(items): i64 {
 # ================= handlers =================
 fn _h_health(state): i64 {
     var count = 0;
-    var name = str_from("none");
+    var name = 0;
     var rv = _api_active(state);
     if (rv != 0) {
         count = mneme_store_vault_count_notes(_api_vault(rv));
         name = mneme_core_vault_info_name(mneme_store_openvault_info(load64(rv)));
     }
+    if (name == 0) { name = str_from("none"); }
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "{\"status\":\"ok\",\"version\":\"0.1.0\",\"notes_count\":");
     str_builder_add_int(sb, count);
@@ -313,7 +312,9 @@ fn _h_create_note(state, body): i64 {
 fn _h_get_note(state, id_seg): i64 {
     var rv = _api_active(state);
     if (rv == 0) { return _api_err(503, "No active vault"); }
-    var nwc = mneme_store_vault_get_note(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    var nid = mneme_core_uuid_parse(id_seg);
+    if (nid == 0) { return _api_err(400, "Invalid note id"); }   # Rust: Path<Uuid> rejects it (400)
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), nid);
     if (nwc == 0) { return _api_err(404, "Note not found"); }
     return _api_json(200, _api_note_json(nwc));
 }
@@ -328,7 +329,7 @@ fn _h_list_notes(state, path): i64 {
         var note = vec_get(notes, i);
         if (i > 0) { str_builder_putc(sb, 44); }
         str_builder_putc(sb, 123);
-        _api_kv_str(sb, "id", mneme_store_uuid_to_string(mneme_core_note_id(note)));
+        _api_kv_str(sb, "id", mneme_core_uuid_to_string(mneme_core_note_id(note)));
         str_builder_add_cstr(sb, ",");
         _api_kv_str(sb, "title", mneme_core_note_title(note));
         str_builder_add_cstr(sb, ",");
@@ -344,7 +345,9 @@ fn _h_update_note(state, id_seg, body): i64 {
     if (rv == 0) { return _api_err(503, "No active vault"); }
     var tags = _api_json_str_array(body, "\"tags\"");
     if (vec_len(tags) == 0) { tags = 0; }
-    var nwc = mneme_store_vault_update_note(_api_vault(rv), mneme_store_uuid_parse(id_seg), mneme_store_update_note_new(_api_json_str(body, "\"title\""), _api_json_str(body, "\"content\""), tags));
+    var nid = mneme_core_uuid_parse(id_seg);
+    if (nid == 0) { return _api_err(400, "Invalid note id"); }   # Rust: Path<Uuid> rejects it (400)
+    var nwc = mneme_store_vault_update_note(_api_vault(rv), nid, mneme_store_update_note_new(_api_json_str(body, "\"title\""), _api_json_str(body, "\"content\""), tags));
     if (nwc == 0) { return _api_err(404, "Note not found"); }
     var note = mneme_store_nwc_note(nwc);
     mneme_search_engine_index_note(load64(rv + 8), mneme_core_note_id(note), mneme_core_note_title(note), mneme_store_nwc_content(nwc), mneme_store_nwc_tags(nwc), mneme_core_note_path(note));
@@ -353,7 +356,8 @@ fn _h_update_note(state, id_seg, body): i64 {
 fn _h_delete_note(state, id_seg): i64 {
     var rv = _api_active(state);
     if (rv == 0) { return _api_err(503, "No active vault"); }
-    var id = mneme_store_uuid_parse(id_seg);
+    var id = mneme_core_uuid_parse(id_seg);
+    if (id == 0) { return _api_err(400, "Invalid note id"); }   # Rust: Path<Uuid> rejects it (400)
     if (mneme_store_vault_get_note(_api_vault(rv), id) == 0) { return _api_err(404, "Note not found"); }
     mneme_search_engine_remove_note(load64(rv + 8), id);
     mneme_search_semantic_engine_remove_note(load64(rv + 16), id);
@@ -381,7 +385,7 @@ fn _h_search(state, path): i64 {
         var r = vec_get(ft, i);
         if (i > 0) { str_builder_putc(sb, 44); }
         str_builder_putc(sb, 123);
-        _api_kv_str(sb, "note_id", mneme_store_uuid_to_string(mneme_search_result_note_id(r)));
+        _api_kv_str(sb, "note_id", mneme_core_uuid_to_string(mneme_search_result_note_id(r)));
         str_builder_add_cstr(sb, ",");
         _api_kv_str(sb, "title", mneme_search_result_title(r));
         str_builder_add_cstr(sb, ",");
@@ -407,7 +411,7 @@ fn _h_list_tags(state): i64 {
         var t = vec_get(tags, i);
         if (i > 0) { str_builder_putc(sb, 44); }
         str_builder_putc(sb, 123);
-        _api_kv_str(sb, "id", mneme_store_uuid_to_string(mneme_store_tag_id(t)));
+        _api_kv_str(sb, "id", mneme_core_uuid_to_string(mneme_store_tag_id(t)));
         str_builder_add_cstr(sb, ",");
         _api_kv_str(sb, "name", mneme_store_tag_name(t));
         str_builder_putc(sb, 125);
@@ -419,7 +423,9 @@ fn _h_list_tags(state): i64 {
 fn _h_delete_tag(state, id_seg): i64 {
     var rv = _api_active(state);
     if (rv == 0) { return _api_err(503, "No active vault"); }
-    mneme_store_vault_delete_tag(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    var tid = mneme_core_uuid_parse(id_seg);
+    if (tid == 0) { return _api_err(400, "Invalid tag id"); }   # Rust: Path<Uuid> rejects it (400)
+    mneme_store_vault_delete_tag(_api_vault(rv), tid);
     return mneme_api_response_new(204, str_from("application/json"), str_from(""));
 }
 fn _h_rag_stats(state): i64 {
@@ -428,7 +434,9 @@ fn _h_rag_stats(state): i64 {
 fn _h_concepts(state, id_seg): i64 {
     var rv = _api_active(state);
     if (rv == 0) { return _api_err(503, "No active vault"); }
-    var nwc = mneme_store_vault_get_note(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    var nid = mneme_core_uuid_parse(id_seg);
+    if (nid == 0) { return _api_err(400, "Invalid note id"); }   # Rust: Path<Uuid> rejects it (400)
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), nid);
     if (nwc == 0) { return _api_err(404, "Note not found"); }
     var concepts = mneme_ai_extract_concepts(mneme_store_nwc_content(nwc));
     if (concepts == 0) { concepts = vec_new(); }
@@ -453,7 +461,9 @@ fn _h_concepts(state, id_seg): i64 {
 fn _h_suggest_tags(state, id_seg): i64 {
     var rv = _api_active(state);
     if (rv == 0) { return _api_err(503, "No active vault"); }
-    var nwc = mneme_store_vault_get_note(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    var nid = mneme_core_uuid_parse(id_seg);
+    if (nid == 0) { return _api_err(400, "Invalid note id"); }   # Rust: Path<Uuid> rejects it (400)
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), nid);
     if (nwc == 0) { return _api_err(404, "Note not found"); }
     var suggestions = mneme_ai_suggest_tags(mneme_store_nwc_content(nwc), mneme_store_nwc_tags(nwc), 5);
     if (suggestions == 0) { suggestions = vec_new(); }
@@ -520,7 +530,9 @@ fn _h_render_template(state, body): i64 {
 fn _h_summarize(state, id_seg): i64 {
     var rv = _api_active(state);
     if (rv == 0) { return _api_err(503, "No active vault"); }
-    var nwc = mneme_store_vault_get_note(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    var nid = mneme_core_uuid_parse(id_seg);
+    if (nid == 0) { return _api_err(400, "Invalid note id"); }   # Rust: Path<Uuid> rejects it (400)
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), nid);
     if (nwc == 0) { return _api_err(404, "Note not found"); }
     var summary = mneme_ai_extractive_summary(mneme_store_nwc_content(nwc));
     var sb = str_builder_new();
@@ -569,7 +581,9 @@ fn _h_languages(state): i64 {
 fn _h_translate(state, id_seg, path): i64 {
     var rv = _api_active(state);
     if (rv == 0) { return _api_err(503, "No active vault"); }
-    var nwc = mneme_store_vault_get_note(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    var nid = mneme_core_uuid_parse(id_seg);
+    if (nid == 0) { return _api_err(400, "Invalid note id"); }   # Rust: Path<Uuid> rejects it (400)
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), nid);
     if (nwc == 0) { return _api_err(404, "Note not found"); }
     var lang = _api_query_str(path, "lang");
     if (lang == 0) { lang = str_from("en"); }
@@ -582,16 +596,27 @@ fn _h_translate(state, id_seg, path): i64 {
     str_builder_add_cstr(sb, ",\"source\":\"placeholder\"}");
     return _api_json(200, str_builder_build(sb));
 }
+# epoch nanoseconds -> the packed yyyymmdd mneme_ai_ymd uses (UTC); 1970-01-01 if the date table is unavailable
+fn _api_ns_ymd(ns): i64 {
+    var r = epoch_to_date(ns / 1000000000);
+    if (r == 0) { return mneme_ai_ymd(1970, 1, 1); }
+    return mneme_ai_ymd(load64(r), load64(r + 8), load64(r + 16));
+}
 fn _h_temporal(state): i64 {
     var rv = _api_active(state);
     if (rv == 0) { return _api_err(503, "No active vault"); }
     var notes = mneme_store_vault_list_notes(_api_vault(rv), 1000, 0);
     var snaps = vec_new();
-    var ymd = mneme_ai_ymd(2026, 1, 1);
     var i = 0;
     while (i < vec_len(notes)) {
         var note = vec_get(notes, i);
-        vec_push(snaps, mneme_ai_note_snapshot_new(mneme_core_note_title(note), str_from(""), vec_new(), ymd, ymd));
+        # Rust: a snapshot of get_note(id) — its content, tags, created_at, updated_at; a note that fails to load is
+        # skipped. 1.2.3: every snapshot had empty content, no tags and the fixed date 2026-01-01.
+        var full = mneme_store_vault_get_note(_api_vault(rv), mneme_core_note_id(note));
+        if (full != 0) {
+            var fnote = mneme_store_nwc_note(full);
+            vec_push(snaps, mneme_ai_note_snapshot_new(mneme_core_note_title(fnote), mneme_store_nwc_content(full), mneme_store_nwc_tags(full), _api_ns_ymd(mneme_core_note_created_at(fnote)), _api_ns_ymd(mneme_core_note_updated_at(fnote))));
+        }
         i = i + 1;
     }
     var report = mneme_ai_analyze_temporal(snaps);
@@ -604,7 +629,9 @@ fn _h_temporal(state): i64 {
 fn _h_export_pdf(state, id_seg): i64 {
     var rv = _api_active(state);
     if (rv == 0) { return _api_err(503, "No active vault"); }
-    var nwc = mneme_store_vault_get_note(_api_vault(rv), mneme_store_uuid_parse(id_seg));
+    var nid = mneme_core_uuid_parse(id_seg);
+    if (nid == 0) { return _api_err(400, "Invalid note id"); }   # Rust: Path<Uuid> rejects it (400)
+    var nwc = mneme_store_vault_get_note(_api_vault(rv), nid);
     if (nwc == 0) { return _api_err(404, "Note not found"); }
     var pdf = mneme_io_export_pdf(mneme_core_note_title(mneme_store_nwc_note(nwc)), mneme_store_nwc_content(nwc));
     return mneme_api_response_new(200, str_from("application/pdf"), pdf);
@@ -612,7 +639,8 @@ fn _h_export_pdf(state, id_seg): i64 {
 fn _h_tasks_id(state, id_seg): i64 {
     var rv = _api_active(state);
     if (rv == 0) { return _api_err(503, "No active vault"); }
-    var id = mneme_store_uuid_parse(id_seg);
+    var id = mneme_core_uuid_parse(id_seg);
+    if (id == 0) { return _api_err(400, "Invalid note id"); }   # Rust: Path<Uuid> rejects it (400)
     var nwc = mneme_store_vault_get_note(_api_vault(rv), id);
     if (nwc == 0) { return _api_err(404, "Note not found"); }
     var board = mneme_core_task_build_board(mneme_core_task_extract_tasks(id, mneme_store_nwc_content(nwc)));
@@ -684,7 +712,8 @@ fn _h_calendar(state, path): i64 {
 fn _h_flashcards(state, id_seg): i64 {
     var rv = _api_active(state);
     if (rv == 0) { return _api_err(503, "No active vault"); }
-    var id = mneme_store_uuid_parse(id_seg);
+    var id = mneme_core_uuid_parse(id_seg);
+    if (id == 0) { return _api_err(400, "Invalid note id"); }   # Rust: Path<Uuid> rejects it (400)
     var nwc = mneme_store_vault_get_note(_api_vault(rv), id);
     if (nwc == 0) { return _api_err(404, "Note not found"); }
     var cards = mneme_ai_extract_flashcards(id, mneme_store_nwc_content(nwc));

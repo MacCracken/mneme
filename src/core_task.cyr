@@ -91,6 +91,13 @@ fn mneme_core_task_extract_due_date(text: Str): i64 {
     var y = (load8(d + found + 1) - 48) * 1000 + (load8(d + found + 2) - 48) * 100 + (load8(d + found + 3) - 48) * 10 + (load8(d + found + 4) - 48);
     var mo = (load8(d + found + 6) - 48) * 10 + (load8(d + found + 7) - 48);
     var day = (load8(d + found + 9) - 48) * 10 + (load8(d + found + 10) - 48);
+    # Rust: an impossible date (@2026-02-30) is None and the text keeps its marker. 1.2.3: it became due date
+    # 20260230 and the marker was stripped. (mneme_core_date_valid is in core_calendar.)
+    if (mneme_core_date_valid(y, mo, day) == 0) {
+        store64(pair, text);
+        store64(pair + 8, 0 - 1);
+        return pair;
+    }
     var date = y * 10000 + mo * 100 + day;
     var before = str_substr(text, 0, found);
     var after = str_substr(text, found + 11, n);
@@ -132,8 +139,11 @@ fn _tk_try_line(tasks, note_id, line: Str, line_num): i64 {
     if (completed < 0) { return 0; }
     var pp = mneme_core_task_extract_priority(rest);
     var dp = mneme_core_task_extract_due_date(load64(pp));
+    # Rust: Uuid::new_v5(NAMESPACE_OID, "{note_id}:{line_num}"). 1.2.3: the name was "task<line>", so line N of
+    # EVERY note got the same task id and tasks from different notes collided (the API's all-tasks listing).
     var name = str_builder_new();
-    str_builder_add_cstr(name, "task");
+    str_builder_add(name, mneme_core_uuid_to_string(note_id));
+    str_builder_putc(name, 58);
     str_builder_add_int(name, line_num);
     var id = mneme_core_uuid_v5_str(str_builder_build(name));
     vec_push(tasks, mneme_core_task_new(id, note_id, load64(dp), completed, load64(pp + 8), load64(dp + 8), line_num + 1));
@@ -185,9 +195,9 @@ fn mneme_core_board_pending(b): i64 { return load64(b + 24); }
 # serialize a task to JSON (priority as snake_case name)
 fn mneme_core_task_to_json(t): i64 {
     var sb = str_builder_new();
-    str_builder_add_cstr(sb, "{\"text\":\"");
-    str_builder_add(sb, mneme_core_task_text(t));
-    str_builder_add_cstr(sb, "\",\"priority\":\"");
+    str_builder_add_cstr(sb, "{\"text\":");
+    str_builder_add_json_str(sb, mneme_core_task_text(t));
+    str_builder_add_cstr(sb, ",\"priority\":\"");
     str_builder_add_cstr(sb, mneme_core_priority_as_str(mneme_core_task_priority(t)));
     str_builder_add_cstr(sb, "\",\"line_number\":");
     str_builder_add_int(sb, mneme_core_task_line_number(t));

@@ -10,7 +10,7 @@ fn mneme_core_link_new(source_id, target_id, link_text: Str, context: Str): i64 
     store64(l + 16, target_id);
     store64(l + 24, link_text);
     store64(l + 32, context);
-    store64(l + 40, clock_now_ns());
+    store64(l + 40, clock_epoch_ns());
     return l;
 }
 fn mneme_core_link_id(l): i64 { return load64(l); }

@@ -10,10 +10,31 @@ fn mneme_io_imported_note_source_path(x): i64 { return load64(x + 24); }
 fn mneme_io_imported_note_relative_path(x): i64 { return load64(x + 32); }
 fn mneme_io_imported_note_wikilinks(x): i64 { return load64(x + 40); }
 
-# ImportStats (32): [notes_found@0, notes_imported@8, wikilinks_converted@16, errors@24]
+# ImportStats (32): [notes_found@0, notes_imported@8, wikilinks_converted@16, errors@24 (vec of import errors)]
 fn mneme_io_import_stats_notes_found(s): i64 { return load64(s); }
 fn mneme_io_import_stats_notes_imported(s): i64 { return load64(s + 8); }
 fn mneme_io_import_stats_wikilinks_converted(s): i64 { return load64(s + 16); }
+fn mneme_io_import_stats_errors(s): i64 { return load64(s + 24); }
+# An import error (16): [path@0 (Str), message@8 (Str)] — Rust's `(PathBuf, String)` in `stats.errors`.
+# Shared by the Obsidian, Markdown and Notion importers.
+fn mneme_io_import_error_path(e): i64 { return load64(e); }
+fn mneme_io_import_error_message(e): i64 { return load64(e + 8); }
+fn _imp_error(path: Str, rerr): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "read failed (errno ");
+    str_builder_add_int(sb, 0 - rerr);
+    str_builder_add_cstr(sb, ")");
+    var e = alloc(16);
+    store64(e, path);
+    store64(e + 8, str_builder_build(sb));
+    return e;
+}
+# Read a whole file for import: the buffer, with `*len_out` = its length; or 0 with `*len_out` = the
+# negative errno. 1.2.3: the importers read through a fixed 256 KB `file_read_all` buffer, so a larger note
+# was imported cut short, and a read ERROR (`n < 0`) was turned into an empty note and counted as imported.
+fn _imp_read_whole(path: Str, len_out): i64 {
+    return file_read_whole(_imp_cstr(path), len_out);
+}
 # import result (16): [notes@0 (vec<ImportedNote>), stats@8]
 fn mneme_io_import_result_notes(r): i64 { return load64(r); }
 fn mneme_io_import_result_stats(r): i64 { return load64(r + 8); }
@@ -30,7 +51,11 @@ fn _imp_is_tagchar(c): i64 {
     if ((c >= 48 && c <= 57) || (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 47 || c == 45) { return 1; }
     return 0;
 }
-fn _imp_str_lt(a: Str, b: Str): i64 {
+# Sort file paths the way Rust's `Vec<PathBuf>::sort` does: COMPONENT by component, which for paths without
+# empty components is byte order with '/' ranked below every other byte ("a/b" < "a-b"). Stable insertion
+# sort. Shared by the three importers. 1.2.3: a byte compare, so io_obsidian and io_markdown put "a-b.md" first.
+fn _imp_path_byte(c): i64 { if (c == 47) { return 0 - 1; } return c; }
+fn _imp_path_lt(a: Str, b: Str): i64 {
     var la = str_len(a);
     var lb = str_len(b);
     var da = str_data(a);
@@ -39,8 +64,10 @@ fn _imp_str_lt(a: Str, b: Str): i64 {
     if (lb < la) { n = lb; }
     var i = 0;
     while (i < n) {
-        if (load8(da + i) < load8(db + i)) { return 1; }
-        if (load8(da + i) > load8(db + i)) { return 0; }
+        var ca = _imp_path_byte(load8(da + i));
+        var cb = _imp_path_byte(load8(db + i));
+        if (ca < cb) { return 1; }
+        if (ca > cb) { return 0; }
         i = i + 1;
     }
     if (la < lb) { return 1; }
@@ -48,17 +75,15 @@ fn _imp_str_lt(a: Str, b: Str): i64 {
 }
 fn _imp_sort(v): i64 {
     var n = vec_len(v);
-    var i = 0;
+    var i = 1;
     while (i < n) {
-        var j = 0;
-        while (j + 1 + i < n) {
-            if (_imp_str_lt(vec_get(v, j + 1), vec_get(v, j)) == 1) {
-                var tmp = vec_get(v, j);
-                vec_set(v, j, vec_get(v, j + 1));
-                vec_set(v, j + 1, tmp);
-            }
-            j = j + 1;
+        var cur = vec_get(v, i);
+        var j = i;
+        while (j > 0 && _imp_path_lt(cur, vec_get(v, j - 1)) == 1) {
+            vec_set(v, j, vec_get(v, j - 1));
+            j = j - 1;
         }
+        vec_set(v, j, cur);
         i = i + 1;
     }
     return 0;
@@ -116,10 +141,45 @@ fn _imp_inline_tags(body: Str, tags): i64 {
     return 0;
 }
 
-fn _imp_single(vault_root: Str, file_path: Str, convert): i64 {
-    var buf = alloc(262144);
-    var n = file_read_all(_imp_cstr(file_path), buf, 262144);
-    if (n < 0) { n = 0; }
+# Rust's walkers skip every ENTRY whose name starts with '.' (Obsidian's also skips `node_modules`), so a
+# skipped directory's whole subtree is skipped. Over a full stdlib walk that is: drop a file when any component
+# of its path BELOW the root is skipped. The root itself is never tested, as in Rust. Shared by the three
+# importers. 1.2.3: io_obsidian and io_markdown filtered nothing, so `.trash/*.md` (deleted Obsidian notes) and
+# `.obsidian/plugins/*/README.md` were imported as notes.
+fn _imp_skipped_below_root(rel: Str, skip_node_modules): i64 {
+    var n = str_len(rel);
+    var d = str_data(rel);
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        if (i == n || load8(d + i) == 47) {
+            if (i > start && load8(d + start) == 46) { return 1; }
+            if (skip_node_modules == 1 && i - start == 12 && memeq(d + start, "node_modules", 12) == 1) { return 1; }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+# the walk's files that end in `ext` and are not skipped (see above), sorted
+fn _imp_collect(root: Str, ext, skip_node_modules): i64 {
+    var all = find_files(root, str_from(ext));
+    var out = vec_new();
+    var i = 0;
+    while (i < vec_len(all)) {
+        var p = vec_get(all, i);
+        if (_imp_skipped_below_root(_imp_relative(root, p), skip_node_modules) == 0) { vec_push(out, p); }
+        i = i + 1;
+    }
+    _imp_sort(out);
+    return out;
+}
+# One note, or 0 with `*rerr_out` = the negative errno when the file cannot be read (Rust: Err, which the
+# caller records in stats.errors).
+fn _imp_single(vault_root: Str, file_path: Str, convert, rerr_out): i64 {
+    var n = 0;
+    var buf = _imp_read_whole(file_path, &n);
+    if (buf == 0) { store64(rerr_out, n); return 0; }
     var raw = str_new(buf, n);
     var pair = mneme_core_frontmatter_split(raw);
     var yaml = mneme_core_fm_pair_yaml(pair);
@@ -155,22 +215,26 @@ fn _imp_single(vault_root: Str, file_path: Str, convert): i64 {
 # import all .md files from an Obsidian vault dir; 0 = SourceNotFound
 fn mneme_io_import_obsidian_vault(vault_path: Str, convert): i64 {
     if (is_dir(vault_path) == 0) { return 0; }
-    var md_files = find_files(vault_path, str_from(".md"));
-    _imp_sort(md_files);
+    var md_files = _imp_collect(vault_path, ".md", 1);   # Rust: skip dot-entries and node_modules
     var notes = vec_new();
+    var errors = vec_new();
     var wlconv = 0;
     var i = 0;
     while (i < vec_len(md_files)) {
-        var note = _imp_single(vault_path, vec_get(md_files, i), convert);
-        wlconv = wlconv + vec_len(mneme_io_imported_note_wikilinks(note));
-        vec_push(notes, note);
+        var rerr = 0;
+        var note = _imp_single(vault_path, vec_get(md_files, i), convert, &rerr);
+        if (note == 0) { vec_push(errors, _imp_error(vec_get(md_files, i), rerr)); }
+        else {
+            wlconv = wlconv + vec_len(mneme_io_imported_note_wikilinks(note));
+            vec_push(notes, note);
+        }
         i = i + 1;
     }
     var stats = alloc(32);
     store64(stats, vec_len(md_files));
     store64(stats + 8, vec_len(notes));
     store64(stats + 16, wlconv);
-    store64(stats + 24, vec_new());
+    store64(stats + 24, errors);
     var result = alloc(16);
     store64(result, notes);
     store64(result + 8, stats);

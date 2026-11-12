@@ -36,6 +36,12 @@ fn main() {
     var c3 = mneme_ai_source_chunk_new(str_from("data"), f64_parse("0.5"), 0, 0);
     assert_eq(str_index_of_cstr(mneme_ai_source_chunk_to_json(c3), "null") >= 0, 1, "chunk json has null");
 
+    # 1.2.3: the score is a JSON number (it was the f64's raw bit pattern, 4605831338911806259 for 0.85)
+    var ch = mneme_ai_source_chunk_new(str_from("c"), f64_parse("0.85"), 0, 0);
+    assert_eq(str_index_of_cstr(mneme_ai_source_chunk_to_json(ch), "\"score\":0.85,") >= 0, 1, "score 0.85 -> 0.85");
+    var ch1 = mneme_ai_source_chunk_new(str_from("c"), f64_parse("1.0"), 0, 0);
+    assert_eq(str_index_of_cstr(mneme_ai_source_chunk_to_json(ch1), "\"score\":1.0,") >= 0, 1, "score 1.0 -> 1.0");
+
     return assert_summary();
 }
 

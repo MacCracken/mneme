@@ -39,6 +39,14 @@ fn _any_rel_has(notes, cstr): i64 {
     return 0;
 }
 
+# a `n`-byte Str of 'a'..'z' (1.2.3 regression helper)
+fn _big(n): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < n) { str_builder_putc(sb, 97 + (i % 26)); i = i + 1; }
+    return str_builder_build(sb);
+}
+
 fn main() {
     alloc_init();
     test_group("io_obsidian");
@@ -87,6 +95,35 @@ fn main() {
 
     # import_nonexistent_dir
     assert_eq(mneme_io_import_obsidian_vault(str_from("/nonexistent"), 1), 0, "nonexistent -> 0");
+
+    # 1.2.3 regression: a note over 256 KB imports whole, and an unreadable one is an error, not an empty note
+    var d9 = _fresh_dir();
+    var big9 = _big(300000);
+    _mkfile(_join(d9, str_from("big.md")), big9);
+    var broken9 = _join(d9, str_from("broken.md"));
+    sys_symlink("/nonexistent/mneme-obsidian-target.md", _imp_cstr(broken9));   # dangling: ENOENT even as root
+    var r9 = mneme_io_import_obsidian_vault(d9, 1);
+    var s9 = mneme_io_import_result_stats(r9);
+    assert_eq(mneme_io_import_stats_notes_found(s9), 2, "both .md entries found");
+    assert_eq(mneme_io_import_stats_notes_imported(s9), 1, "only the readable note imports");
+    assert_eq(vec_len(mneme_io_import_stats_errors(s9)), 1, "the unreadable note is an error");
+    assert(str_eq(mneme_io_import_error_path(vec_get(mneme_io_import_stats_errors(s9), 0)), broken9), "error names the note");
+    assert_eq(str_len(mneme_io_imported_note_content(vec_get(mneme_io_import_result_notes(r9), 0))), 300000, "300,000-byte note imported whole");
+
+    # 1.2.3: dot-entries and node_modules are skipped (Rust), and files sort in PathBuf order
+    var dh = _fresh_dir();
+    _mkfile(_join(dh, str_from("visible.md")), str_from("v"));
+    _mkfile(_join(dh, str_from(".trash/deleted.md")), str_from("d"));
+    _mkfile(_join(dh, str_from(".obsidian/plugins/p/README.md")), str_from("r"));
+    _mkfile(_join(dh, str_from("node_modules/pkg/README.md")), str_from("n"));
+    _mkfile(_join(dh, str_from("a-b.md")), str_from("dash"));
+    _mkfile(_join(dh, str_from("a/b.md")), str_from("slash"));
+    var rh = mneme_io_import_obsidian_vault(dh, 1);
+    var sh = mneme_io_import_result_stats(rh);
+    assert_eq(mneme_io_import_stats_notes_found(sh), 3, "only visible.md, a-b.md, a/b.md are found");
+    var nh = mneme_io_import_result_notes(rh);
+    assert(str_eq_cstr(mneme_io_imported_note_relative_path(vec_get(nh, 0)), "a/b.md"), "PathBuf order: a/b.md first");
+    assert(str_eq_cstr(mneme_io_imported_note_relative_path(vec_get(nh, 1)), "a-b.md"), "then a-b.md");
 
     return assert_summary();
 }

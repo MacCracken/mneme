@@ -2,11 +2,33 @@
 # v4 = 16 random bytes (RFC 4122 version/variant bits set) → distinct values.
 # v5-style = deterministic sha1(name) → first 16 bytes (namespace omitted; ids
 # are never inspected by the Rust tests, only used for identity/distinctness).
-# Canonical 8-4-4-4-12 string formatting: TODO (serialization pass).
+# Canonical strings: mneme_core_uuid_to_string (8-4-4-4-12), _to_hex (32 hex) and _parse — the one codec (1.2.3).
 
+# Entropy is drawn 4 KB at a time and handed out 16 bytes per id. 1.2.3: one getrandom syscall per id was the
+# benchmark doc's target #5, and its result was IGNORED — a refused getrandom left the id as the bump
+# allocator's bytes, so every id would collide. Rust's Uuid::new_v4 panics when the kernel has no entropy; this
+# stops the process the same way rather than hand out a predictable id. (mneme is single-threaded and never
+# forks a worker, so a pool cannot be shared by two processes.)
+var _uuid_pool = 0;
+var _uuid_pool_pos = 4096;
+fn _uuid_entropy(dst): i64 {
+    if (_uuid_pool_pos + 16 > 4096) {
+        if (_uuid_pool == 0) { _uuid_pool = alloc(4096); }
+        if (random_bytes(_uuid_pool, 4096) != 4096) {
+            var msg = "mneme: the kernel refused random bytes (getrandom); cannot generate a uuid\n";
+            eprint(msg, strlen(msg));
+            syscall(SYS_EXIT, 70);   # EX_SOFTWARE — the same exit main.cyr uses
+        }
+        _uuid_pool_pos = 0;
+    }
+    memcpy(dst, _uuid_pool + _uuid_pool_pos, 16);
+    memset(_uuid_pool + _uuid_pool_pos, 0, 16);   # a handed-out id's bytes do not linger in the pool
+    _uuid_pool_pos = _uuid_pool_pos + 16;
+    return 0;
+}
 fn mneme_core_uuid_v4(): i64 {
     var u = alloc(16);
-    random_bytes(u, 16);
+    _uuid_entropy(u);
     store8(u + 6, (load8(u + 6) & 15) | 64);    # version 4
     store8(u + 8, (load8(u + 8) & 63) | 128);   # RFC 4122 variant
     return u;
@@ -23,7 +45,98 @@ fn mneme_core_uuid_v5_str(name: Str): i64 {
     return u;
 }
 
-# content equality (1 == equal)
+# content equality (1 == equal). A 0 handle (no uuid) equals only another 0 — it never reads address 0.
 fn mneme_core_uuid_eq(a, b): i64 {
+    if (a == 0 || b == 0) {
+        if (a == b) { return 1; }
+        return 0;
+    }
     return memeq(a, b, 16);
+}
+
+# The nil uuid (16 zero bytes) — a fresh handle.
+fn mneme_core_uuid_nil(): i64 {
+    var u = alloc(16);
+    memset(u, 0, 16);
+    return u;
+}
+
+# --- canonical strings: THE uuid codec ---------------------------------------------------------------
+# 1.2.3: mneme carried nine private copies of this (store_db, store_registry, search_vector_store and six
+# ai_* modules), with three different parsers — one strict, two that skipped non-hex bytes and never
+# failed. Every module now formats and parses through these.
+
+fn _uuid_hexc(n): i64 {
+    if (n < 10) { return 48 + n; }
+    return 87 + n;   # 'a'..'f'
+}
+# a hex digit's value (either case), or -1
+fn _uuid_hexv(c): i64 {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    if (c >= 65 && c <= 70) { return c - 55; }
+    return 0 - 1;
+}
+fn _uuid_format(u, hyphens): i64 {
+    if (u == 0) { return str_from(""); }   # no uuid -> "" (matches no row, prints as nothing)
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < 16) {
+        if (hyphens == 1 && (i == 4 || i == 6 || i == 8 || i == 10)) { str_builder_putc(sb, 45); }
+        var b = load8(u + i);
+        str_builder_putc(sb, _uuid_hexc((b >> 4) & 15));
+        str_builder_putc(sb, _uuid_hexc(b & 15));
+        i = i + 1;
+    }
+    return str_builder_build(sb);
+}
+# 8-4-4-4-12 lowercase hex — Rust's `Uuid` Display / serde form. A 0 handle formats as "".
+fn mneme_core_uuid_to_string(u): i64 { return _uuid_format(u, 1); }
+# 32 lowercase hex digits, no hyphens (Rust's `simple()` form) — what the ai/vector modules serialize.
+fn mneme_core_uuid_to_hex(u): i64 { return _uuid_format(u, 0); }
+
+# `len` bytes at `d` as a uuid: hyphenated (36, '-' at 8/13/18/23) or simple (32 hex). Fresh handle or 0.
+fn _uuid_parse_at(d, len, hyphens): i64 {
+    var u = alloc(16);
+    var pos = 0;
+    var i = 0;
+    while (i < len) {
+        if (hyphens == 1 && (i == 8 || i == 13 || i == 18 || i == 23)) {
+            if (load8(d + i) != 45) { return 0; }
+            i = i + 1;
+        } else {
+            var hi = _uuid_hexv(load8(d + i));
+            var lo = _uuid_hexv(load8(d + i + 1));
+            if (hi < 0 || lo < 0) { return 0; }
+            store8(u + pos, (hi << 4) | lo);
+            pos = pos + 1;
+            i = i + 2;
+        }
+    }
+    if (pos != 16) { return 0; }
+    return u;
+}
+# Parse a uuid string — the four forms Rust's `Uuid::parse_str` accepts:
+#   hyphenated  67e55044-10b1-426f-9247-bb680e5fe0c8        (36)
+#   simple      67e5504410b1426f9247bb680e5fe0c8            (32)
+#   braced      {67e55044-10b1-426f-9247-bb680e5fe0c8}      (38)
+#   URN         urn:uuid:67e55044-10b1-426f-9247-bb680e5fe0c8 (45)
+# Hex digits in either case. Returns a fresh 16-byte handle, or 0 when `s` is 0 or not a uuid.
+fn mneme_core_uuid_parse(s): i64 {
+    if (s == 0) { return 0; }
+    var n = str_len(s);
+    var d = str_data(s);
+    if (n == 36) { return _uuid_parse_at(d, 36, 1); }
+    if (n == 32) { return _uuid_parse_at(d, 32, 0); }
+    if (n == 38 && load8(d) == 123 && load8(d + 37) == 125) { return _uuid_parse_at(d + 1, 36, 1); }
+    if (n == 45 && memeq(d, "urn:uuid:", 9) == 1) { return _uuid_parse_at(d + 9, 36, 1); }
+    return 0;
+}
+# Parse for a value mneme wrote itself (a database column, a persisted file): the uuid, or the NIL uuid when
+# the stored text is not one — a corrupted row then yields an id that matches nothing, never a 0 handle a
+# caller would load through.
+fn mneme_core_uuid_parse_stored(s): i64 {
+    var u = mneme_core_uuid_parse(s);
+    if (u == 0) { return mneme_core_uuid_nil(); }
+    return u;
 }

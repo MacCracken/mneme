@@ -82,26 +82,43 @@ fn _mm_media_type_str(t): i64 {
 }
 fn mneme_ai_attachment_to_json(a): i64 {
     var sb = str_builder_new();
-    str_builder_add_cstr(sb, "{\"filename\":\"");
-    str_builder_add(sb, load64(a));
-    str_builder_add_cstr(sb, "\",\"media_type\":\"");
-    str_builder_add(sb, _mm_media_type_str(load64(a + 8)));
-    str_builder_add_cstr(sb, "\",\"size_bytes\":");
+    str_builder_add_cstr(sb, "{\"filename\":");
+    str_builder_add_json_str(sb, load64(a));
+    str_builder_add_cstr(sb, ",\"media_type\":");
+    str_builder_add_json_str(sb, _mm_media_type_str(load64(a + 8)));
+    str_builder_add_cstr(sb, ",\"size_bytes\":");
     str_builder_add_int(sb, load64(a + 16));
-    str_builder_add_cstr(sb, ",\"path\":\"");
-    str_builder_add(sb, load64(a + 24));
-    str_builder_add_cstr(sb, "\"}");
+    str_builder_add_cstr(sb, ",\"path\":");
+    str_builder_add_json_str(sb, load64(a + 24));
+    str_builder_add_cstr(sb, "}");
     return str_builder_build(sb);
 }
 
-# create attachment record from a file path (0 if the file does not exist)
+# The file's size in bytes, or a negative errno. Rust reads `metadata().len()`; there is no portable stat
+# here (agnos's sys_stat takes different arguments, macOS has no lseek wrapper), so this counts the bytes
+# through one fixed 64 KB chunk — constant memory, any size.
+fn _mm_file_size(pc): i64 {
+    var fd = file_open(pc, 0, 0);
+    if (fd < 0) { return fd; }
+    var chunk = alloc(65536);
+    var total = 0;
+    while (1) {
+        var n = file_read(fd, chunk, 65536);
+        if (n < 0) { file_close(fd); return n; }
+        if (n == 0) { file_close(fd); return total; }
+        total = total + n;
+    }
+    return total;
+}
+# create attachment record from a file path (0 if the file does not exist or cannot be read)
+# 1.2.3: the size is the file's real size. It was the byte count of a read into a fixed 1 MB buffer, so any
+# attachment over 1 MB reported 1,048,576 bytes, and an unreadable file reported 0.
 fn mneme_ai_create_attachment(path: Str): i64 {
     var pc = _mm_cstr(path);
     if (file_exists(pc) == 0) { return 0; }
-    var buf = alloc(1048576);
-    var rn = file_read_all(pc, buf, 1048576);
-    if (rn < 0) { rn = 0; }
-    return mneme_ai_attachment_new(_mm_basename(path), mneme_ai_detect_media_type(path), rn, path);
+    var size = _mm_file_size(pc);
+    if (size < 0) { return 0; }   # Rust: metadata() Err -> Err
+    return mneme_ai_attachment_new(_mm_basename(path), mneme_ai_detect_media_type(path), size, path);
 }
 
 # markdown embed snippet; icon prefix per media type

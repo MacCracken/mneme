@@ -81,7 +81,7 @@ fn mcp_engines_get(engines, vault_id): i64 {
 # compact f64 → decimal (up to 3 places) for score display (untested value)
 fn _mt_score_str(x): i64 {
     var sb = str_builder_new();
-    if (f64_le(x, f64_from(0)) == 1 && x != f64_from(0)) { str_builder_putc(sb, 45); x = f64_neg(x); }
+    if (f64_le(x, f64_from(0)) == 1 && x != 0) { str_builder_putc(sb, 45); x = f64_neg(x); }   # x != +0.0 (its bits are 0)
     var ip = f64_to(f64_trunc(x));
     var scaled = f64_to(f64_round(f64_mul(f64_sub(x, f64_from(ip)), f64_from(1000))));
     if (scaled >= 1000) { ip = ip + 1; scaled = scaled - 1000; }
@@ -94,24 +94,11 @@ fn _mt_score_str(x): i64 {
     }
     return str_builder_build(sb);
 }
-fn _mt_count_hex(s: Str): i64 {
-    var n = str_len(s);
-    var d = str_data(s);
-    var c = 0;
-    var i = 0;
-    while (i < n) {
-        var ch = load8(d + i);
-        if ((ch >= 48 && ch <= 57) || (ch >= 97 && ch <= 102) || (ch >= 65 && ch <= 70)) { c = c + 1; }
-        i = i + 1;
-    }
-    return c;
-}
-# parse_uuid: 0 on missing/invalid, else the 16-byte uuid
+# parse_uuid: 0 on missing/invalid, else the 16-byte uuid (Rust: Uuid::parse_str — every form it accepts).
 fn mcp_parse_uuid(args, field): i64 {
     var s = mcp_args_get_str(args, field);
     if (s == 0) { return 0; }
-    if (_mt_count_hex(s) != 32) { return 0; }
-    return mneme_store_uuid_parse(s);
+    return mneme_core_uuid_parse(s);
 }
 
 # ResolvedVault (32): [openvault@0, search@8, semantic@16, optimizer@24]; 0 on error
@@ -156,7 +143,7 @@ fn _mcp_handle_create_note(id_raw, args, manager, engines): i64 {
     str_builder_add_cstr(sb, "Created note '");
     str_builder_add(sb, mneme_core_note_title(note));
     str_builder_add_cstr(sb, "' (ID: ");
-    str_builder_add(sb, mneme_store_uuid_to_string(mneme_core_note_id(note)));
+    str_builder_add(sb, mneme_core_uuid_to_string(mneme_core_note_id(note)));
     str_builder_add_cstr(sb, ", path: ");
     str_builder_add(sb, mneme_core_note_path(note));
     str_builder_add_cstr(sb, ")");
@@ -189,7 +176,7 @@ fn _mcp_handle_search(id_raw, args, manager, engines): i64 {
         str_builder_add_cstr(sb, ". **");
         str_builder_add(sb, mneme_search_result_title(r));
         str_builder_add_cstr(sb, "** (ID: ");
-        str_builder_add(sb, mneme_store_uuid_to_string(mneme_search_result_note_id(r)));
+        str_builder_add(sb, mneme_core_uuid_to_string(mneme_search_result_note_id(r)));
         str_builder_add_cstr(sb, ", score: ");
         str_builder_add(sb, _mt_score_str(mneme_search_result_score(r)));
         str_builder_add_cstr(sb, ")\n   Path: ");
@@ -225,7 +212,7 @@ fn _mcp_handle_get_note(id_raw, args, manager, engines): i64 {
     str_builder_add_cstr(sb, "# ");
     str_builder_add(sb, mneme_core_note_title(note));
     str_builder_add_cstr(sb, "\n\nID: ");
-    str_builder_add(sb, mneme_store_uuid_to_string(mneme_core_note_id(note)));
+    str_builder_add(sb, mneme_core_uuid_to_string(mneme_core_note_id(note)));
     str_builder_add_cstr(sb, "\nPath: ");
     str_builder_add(sb, mneme_core_note_path(note));
     str_builder_add_cstr(sb, "\nTags: ");
@@ -253,7 +240,7 @@ fn _mcp_handle_update_note(id_raw, args, manager, engines): i64 {
     str_builder_add_cstr(sb, "Updated note '");
     str_builder_add(sb, mneme_core_note_title(note));
     str_builder_add_cstr(sb, "' (ID: ");
-    str_builder_add(sb, mneme_store_uuid_to_string(mneme_core_note_id(note)));
+    str_builder_add(sb, mneme_core_uuid_to_string(mneme_core_note_id(note)));
     str_builder_add_cstr(sb, ")");
     return mneme_mcp_success(id_raw, str_builder_build(sb));
 }
@@ -275,8 +262,13 @@ fn _mcp_handle_query_graph(id_raw, args, manager, engines): i64 {
     var edges = 0;
     var note_id_str = mcp_args_get_str(args, "note_id");
     var tag_filter = mcp_args_get_str(args, "tag");
-    if (note_id_str != 0 && _mt_count_hex(note_id_str) == 32) {
-        var nid = mneme_store_uuid_parse(note_id_str);
+    # Rust: `.and_then(|s| Uuid::parse_str(s).ok())` — an unparseable note_id is treated as absent.
+    # 1.2.3: this tested for 32 hex digits and then called a parser that took only the 36-character
+    # hyphenated form, so a 32-hex (simple-form) id parsed to 0 and get_note loaded through it: one
+    # tools/call killed `mneme serve`.
+    var nid = 0;
+    if (note_id_str != 0) { nid = mneme_core_uuid_parse(note_id_str); }
+    if (nid != 0) {
         var nwc = mneme_store_vault_get_note(vault, nid);
         if (nwc == 0) { return mneme_mcp_error(id_raw, str_from("Note not found")); }
         nodes = 1;
@@ -331,15 +323,27 @@ fn _mcp_handle_search_feedback(id_raw, args, engines): i64 {
     if (search_id == 0) { return mneme_mcp_error(id_raw, str_from("Missing required parameter: search_id")); }
     var note_id = mcp_args_get_str(args, "note_id");
     if (note_id == 0) { return mneme_mcp_error(id_raw, str_from("Missing required parameter: note_id")); }
-    # parse arm index from "s:<n>[:...]"
+    # parse arm index from "s:<n>[:...]" — Rust: strip_prefix("s:"), split(':').next(), parse::<usize>(),
+    # unwrap_or(0). So the field up to the next ':' must be all digits and fit, or the index is 0.
+    # 1.2.3: this accumulated digits with no bound, so "s:18446744073709551615" wrapped to -1, passed the
+    # optimizer's signed `arm_idx < len` check, and vec_get(arms, -1) aborted the process — one
+    # unauthenticated tools/call ended `mneme serve`.
     var arm_idx = 0;
     if (str_len(search_id) > 2 && load8(str_data(search_id)) == 115 && load8(str_data(search_id) + 1) == 58) {
         var d = str_data(search_id);
         var n = str_len(search_id);
         var i = 2;
         var v = 0;
-        while (i < n && load8(d + i) >= 48 && load8(d + i) <= 57) { v = v * 10 + (load8(d + i) - 48); i = i + 1; }
-        arm_idx = v;
+        var ok = 1;
+        while (i < n && load8(d + i) != 58) {
+            var c = load8(d + i);
+            if (c < 48 || c > 57) { ok = 0; }
+            elif (v > 99999999999999999) { ok = 0; }   # past 17 digits: no arm has that index; Rust's
+            else { v = v * 10 + (c - 48); }             # usize parse would overflow before i64 does
+            i = i + 1;
+        }
+        if (i == 2) { ok = 0; }   # "s:" or "s::x" — an empty field does not parse
+        if (ok == 1) { arm_idx = v; }
     }
     if (vec_len(engines) > 0) { mneme_search_retrieval_optimizer_record_feedback(load64(vec_get(engines, 0) + 24), arm_idx); }
     return mneme_mcp_success(id_raw, str_from("Feedback recorded. Thank you!"));
@@ -361,7 +365,7 @@ fn _mcp_handle_list_vaults(id_raw, manager): i64 {
         if (active_id != 0 && mneme_core_uuid_eq(active_id, load64(v)) == 1) { str_builder_add_cstr(sb, " (active)"); }
         if (load64(v + 48) != 0) { str_builder_add_cstr(sb, " [default]"); }
         str_builder_add_cstr(sb, "\n  ID: ");
-        str_builder_add(sb, mneme_store_uuid_to_string(load64(v)));
+        str_builder_add(sb, mneme_core_uuid_to_string(load64(v)));
         str_builder_add_cstr(sb, "\n  Path: ");
         str_builder_add(sb, load64(v + 16));
         str_builder_add_cstr(sb, "\n\n");
@@ -400,6 +404,6 @@ fn mneme_mcp_handle_tool_call(id_raw, tool, args, manager, engines): i64 {
     if (str_eq_cstr(tool, "mneme_switch_vault") == 1) { return _mcp_handle_switch_vault(id_raw, args, manager); }
     var eb = str_builder_new();
     str_builder_add_cstr(eb, "Unknown tool: ");
-    str_builder_add_cstr(eb, tool);
+    str_builder_add(eb, tool);   # 1.2.3: `tool` is a Str; add_cstr strlen'd its handle and sent heap bytes back
     return mneme_mcp_error(id_raw, str_builder_build(eb));
 }

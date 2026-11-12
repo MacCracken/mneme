@@ -137,14 +137,14 @@ fn mneme_search_select_result_weights(pair): i64 { return load64(pair + 8); }
 fn mneme_search_retrieval_optimizer_record_search(opt, arm_idx) {
     store64(opt + 8, load64(opt + 8) + 1);
     var arms = load64(opt);
-    if (arm_idx < vec_len(arms)) {
+    if (arm_idx >= 0 && arm_idx < vec_len(arms)) {   # Rust: usize — never negative
         mneme_search_arm_record_failure(vec_get(arms, arm_idx));
     }
 }
 # record positive feedback: undo the default failure, add a success.
 fn mneme_search_retrieval_optimizer_record_feedback(opt, arm_idx) {
     var arms = load64(opt);
-    if (arm_idx < vec_len(arms)) {
+    if (arm_idx >= 0 && arm_idx < vec_len(arms)) {   # Rust: usize — never negative
         store64(opt + 16, load64(opt + 16) + 1);
         var arm = vec_get(arms, arm_idx);
         var one = f64_from(1);

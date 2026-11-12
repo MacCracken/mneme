@@ -69,6 +69,29 @@ fn main() {
     assert_eq(str_index_of_cstr(jsonl, "\"title\":\"Test\"") >= 0, 1, "export has title Test");
     assert_eq(_lines_count(jsonl), 1, "export single line");
 
+    # 1.2.3 regression: appending to a log over 1 MB keeps every earlier line. Append used to read the log
+    # back through a 1 MB buffer and REWRITE it, destroying everything past the first megabyte.
+    var pbig = _tpath("big.jsonl");
+    var logb = mneme_ai_training_log_open(pbig);
+    mneme_ai_training_log_clear(logb);
+    var lb = str_builder_new();
+    var li = 0;
+    while (li < 20000) { str_builder_add_cstr(lb, "{\"type\":\"search_click\",\"pad\":\"0123456789012345678901234567890123\"}\n"); li = li + 1; }
+    var lbs = str_builder_build(lb);
+    file_write_all(_te_cstr(pbig), str_data(lbs), str_len(lbs));
+    assert_eq(str_len(lbs) > 1048576, 1, "seed log is over 1 MB");
+    assert_eq(mneme_ai_training_log_append(logb, mneme_ai_training_search_click(clock_epoch_secs(), str_from("q"), mneme_core_uuid_v4(), str_from("N"), str_from("balanced"), 0)), 1, "append reports success");
+    assert_eq(mneme_ai_training_log_count(logb), 20001, "all 20,000 earlier lines kept, plus the new one");
+
+    # 1.2.3: an append that cannot be written reports failure (it always returned 1)
+    var logx = mneme_ai_training_log_open(str_from("/nonexistent/mneme-dir/train.jsonl"));
+    assert_eq(mneme_ai_training_log_append(logx, mneme_ai_training_search_click(clock_epoch_secs(), str_from("q"), mneme_core_uuid_v4(), str_from("N"), str_from("balanced"), 0)), 0, "unwritable log -> append returns 0");
+
+    # 1.2.3: string fields read back decoded (a query `a"b` came back as `a\"b`)
+    var rq = mneme_ai_training_search_click(clock_epoch_secs(), str_from("a\"b\\c"), mneme_core_uuid_v4(), str_from("N"), str_from("balanced"), 0);
+    var rqp = mneme_ai_training_record_from_json(mneme_ai_training_record_to_json(rq));
+    assert(str_eq_cstr(mneme_ai_training_record_query(rqp), "a\"b\\c"), "quote and backslash round-trip");
+
     return assert_summary();
 }
 

@@ -1,7 +1,6 @@
 # mneme-io — web clipper (ported from rust-old/crates/mneme-io/src/web_clipper.rs)
 # Zero-I/O. HTML -> Markdown + metadata extraction. Hand-ports the Rust regex
-# chain (case-insensitive tag matching). Timestamp formatting is a placeholder
-# (real date formatting needs the deferred chrono civil-calendar).
+# chain (case-insensitive tag matching). Timestamps are the real UTC time (chrono epoch_to_date; 1.2.3).
 
 fn _wc_lower(c): i64 { if (c >= 65 && c <= 90) { return c + 32; } return c; }
 fn _wc_find_char(d, start, n, ch): i64 {
@@ -60,8 +59,32 @@ fn _wc_vec_has_str(v, cstr): i64 {
     while (i < vec_len(v)) { if (str_eq_cstr(vec_get(v, i), cstr) == 1) { return 1; } i = i + 1; }
     return 0;
 }
-# TODO: real timestamp needs chrono civil-calendar (deferred); untested placeholder.
-fn _wc_now_str(): i64 { return str_from("1970-01-01 00:00"); }
+# The current UTC time as Rust's `Utc::now().format("%Y-%m-%d %H:%M")`, or "%Y-%m-%d" when `with_time` is 0.
+# 1.2.3: this was the constant "1970-01-01 00:00", written into the "Clipped:" / "Saved:" line of every saved
+# clip and into clipped_at.
+fn _wc_pad2(sb, v): i64 {
+    if (v < 10) { str_builder_putc(sb, 48); }
+    str_builder_add_int(sb, v);
+    return 0;
+}
+fn _wc_now_fmt(with_time): i64 {
+    var r = epoch_to_date(clock_epoch_secs());   # [year, month, day, hour, minute, second]
+    if (r == 0) { return str_from("1970-01-01 00:00"); }
+    var sb = str_builder_new();
+    str_builder_add_int(sb, load64(r));
+    str_builder_putc(sb, 45);
+    _wc_pad2(sb, load64(r + 8));
+    str_builder_putc(sb, 45);
+    _wc_pad2(sb, load64(r + 16));
+    if (with_time == 1) {
+        str_builder_putc(sb, 32);
+        _wc_pad2(sb, load64(r + 24));
+        str_builder_putc(sb, 58);
+        _wc_pad2(sb, load64(r + 32));
+    }
+    return str_builder_build(sb);
+}
+fn _wc_now_str(): i64 { return _wc_now_fmt(1); }
 
 # wrap <tag ...>content</tag> -> pre + content + post
 fn _wc_wrap(text: Str, tag, pre, post): i64 {
@@ -399,12 +422,12 @@ fn mneme_io_wc_clip_bookmark(url: Str, title, desc): i64 {
         str_builder_add_cstr(sb, "\n\n");
     }
     str_builder_add_cstr(sb, "Saved: ");
-    str_builder_add(sb, _wc_now_str());
+    str_builder_add(sb, _wc_now_fmt(0));   # Rust: "%Y-%m-%d" — date only
     str_builder_putc(sb, 10);
     var tags = vec_new();
     vec_push(tags, str_from("bookmark"));
-    var ex = str_from("");
-    if (desc != 0) { ex = desc; }
+    var ex = desc;   # a Str (the description), or "" when there is none
+    if (ex == 0) { ex = str_from(""); }
     var p = alloc(48);
     store64(p, t);
     store64(p + 8, url);

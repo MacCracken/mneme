@@ -107,7 +107,7 @@ fn _ui_render_note_view(app, lines): i64 {
 }
 fn _ui_f64_2(x): i64 {
     var sb = str_builder_new();
-    if (f64_le(x, f64_from(0)) == 1 && x != f64_from(0)) { str_builder_putc(sb, 45); x = f64_neg(x); }
+    if (f64_le(x, f64_from(0)) == 1 && x != 0) { str_builder_putc(sb, 45); x = f64_neg(x); }   # x != +0.0 (its bits are 0)
     var ip = f64_to(f64_trunc(x));
     var scaled = f64_to(f64_round(f64_mul(f64_sub(x, f64_from(ip)), f64_from(100))));
     if (scaled >= 100) { ip = ip + 1; scaled = scaled - 100; }

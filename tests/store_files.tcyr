@@ -17,6 +17,14 @@ fn _fresh_store(): i64 {
     return fs;
 }
 
+# a `n`-byte Str of 'a'..'z' (1.2.3 regression helper)
+fn _big(n): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < n) { str_builder_putc(sb, 97 + (i % 26)); i = i + 1; }
+    return str_builder_build(sb);
+}
+
 fn main() {
     alloc_init();
     test_group("store_files");
@@ -66,6 +74,32 @@ fn main() {
     var s6 = _fresh_store();
     mneme_store_filestore_write_note(s6, str_from("subdir/nested.md"), str_from("nested content"));
     assert(str_eq(mneme_store_filestore_read_note(s6, str_from("subdir/nested.md")), str_from("nested content")), "subdir write+read");
+
+    # 1.2.3 regression: a note over 256 KB reads back whole (it was cut at 262,144 bytes)
+    var fsb = _fresh_store();
+    var bigs = _big(300000);
+    mneme_store_filestore_write_note(fsb, str_from("big.md"), bigs);
+    var back = mneme_store_filestore_read_note(fsb, str_from("big.md"));
+    assert_eq(str_len(back), 300000, "300,000-byte note reads back whole");
+    assert(str_eq(back, bigs), "and byte-identical");
+
+    # 1.2.3: a note path must stay inside the notes dir (ADR 016)
+    assert_eq(mneme_store_note_path_is_safe(str_from("a.md")), 1, "safe: flat");
+    assert_eq(mneme_store_note_path_is_safe(str_from("dir/a.md")), 1, "safe: nested");
+    assert_eq(mneme_store_note_path_is_safe(str_from("..notes/a.md")), 1, "safe: '..notes' is a name, not '..'");
+    assert_eq(mneme_store_note_path_is_safe(str_from("../x.md")), 0, "unsafe: leading ..");
+    assert_eq(mneme_store_note_path_is_safe(str_from("a/../../x.md")), 0, "unsafe: inner ..");
+    assert_eq(mneme_store_note_path_is_safe(str_from("a/..")), 0, "unsafe: trailing ..");
+    assert_eq(mneme_store_note_path_is_safe(str_from("a\\..\\x.md")), 0, "unsafe: backslash ..");
+    assert_eq(mneme_store_note_path_is_safe(str_from("/etc/passwd")), 0, "unsafe: absolute");
+    assert_eq(mneme_store_note_path_is_safe(str_from("")), 0, "unsafe: empty");
+    var nulb = alloc(4);
+    store8(nulb, 97); store8(nulb + 1, 0); store8(nulb + 2, 98); store8(nulb + 3, 0);
+    assert_eq(mneme_store_note_path_is_safe(str_new(nulb, 3)), 0, "unsafe: embedded NUL");
+    var fsx = _fresh_store();
+    assert_eq(mneme_store_filestore_write_note(fsx, str_from("../escape.md"), str_from("x")), 0 - 22, "write refuses an unsafe path");
+    assert_eq(mneme_store_filestore_read_note(fsx, str_from("../escape.md")), 0, "read refuses an unsafe path");
+    assert_eq(mneme_store_filestore_write_note(fsx, str_from("ok.md"), str_from("x")), 0, "a safe write returns 0");
 
     return assert_summary();
 }

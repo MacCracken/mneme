@@ -30,18 +30,16 @@ fn _fte_tokenize(text: Str): i64 {
     }
     return out;
 }
-fn _fte_vec_has_str(v, s: Str): i64 {
-    var i = 0;
-    while (i < vec_len(v)) { if (str_eq(vec_get(v, i), s) == 1) { return 1; } i = i + 1; }
-    return 0;
-}
+# the distinct tokens of `text`, in first-seen order. 1.2.3: a hash set; this scanned the output vec for
+# every token, O(tokens × distinct) per indexed note.
 fn _fte_unique_terms(text: Str): i64 {
     var toks = _fte_tokenize(text);
+    var seen = map_new_str();
     var out = vec_new();
     var i = 0;
     while (i < vec_len(toks)) {
         var t = vec_get(toks, i);
-        if (_fte_vec_has_str(out, t) == 0) { vec_push(out, t); }
+        if (map_has(seen, t) == 0) { map_set(seen, t, 1); vec_push(out, t); }
         i = i + 1;
     }
     return out;
@@ -61,10 +59,15 @@ fn _fte_combined(title: Str, body: Str, tags): i64 {
 }
 
 # Doc (40): [id@0, title@8, body@16, tags_joined@24, path@32]
-# SearchEngine (24): [docs@0 (map_u64 id->Doc), inverted@8 (map_str term->vec<id>), doc_ids@16 (vec<id>)]
+# SearchEngine (24): [docs@0 (map_str uuid-hex->Doc), inverted@8 (map_str term->vec<id>), doc_ids@16 (vec<id>)]
+# ⛔ 1.2.3: `docs` is keyed by the uuid's VALUE (its hex). It was a map_u64 keyed by the 16-byte handle's
+# ADDRESS, and an id parsed from a request is a fresh allocation — so remove_note through the API missed and
+# the deleted note stayed searchable, and re-indexing an updated note added a second doc instead of
+# replacing the first (search returned it twice, once with the stale title). Rust keys on `id.to_string()`.
+fn _fte_key(id): i64 { return mneme_core_uuid_to_hex(id); }
 fn mneme_search_engine_in_memory(): i64 {
     var e = alloc(24);
-    store64(e, map_u64_new());
+    store64(e, map_new_str());
     store64(e + 8, map_new_str());
     store64(e + 16, vec_new());
     return e;
@@ -72,7 +75,8 @@ fn mneme_search_engine_in_memory(): i64 {
 
 fn mneme_search_engine_remove_note(e, id): i64 {
     var docs = load64(e);
-    var doc = map_u64_get_or(docs, id, 0);
+    var key = _fte_key(id);
+    var doc = map_get_or(docs, key, 0);
     if (doc == 0) { return 0; }
     var inverted = load64(e + 8);
     var terms = _fte_unique_terms(_fte_combined_doc(doc));
@@ -91,7 +95,7 @@ fn mneme_search_engine_remove_note(e, id): i64 {
         }
         t = t + 1;
     }
-    map_u64_delete(docs, id);
+    map_delete(docs, key);
     var dids = load64(e + 16);
     var kept2 = vec_new();
     var i = 0;
@@ -115,7 +119,7 @@ fn _fte_combined_doc(doc): i64 {
 
 fn mneme_search_engine_index_note(e, id, title: Str, body: Str, tags, path: Str): i64 {
     var docs = load64(e);
-    if (map_u64_get_or(docs, id, 0) != 0) { mneme_search_engine_remove_note(e, id); }
+    if (map_get_or(docs, _fte_key(id), 0) != 0) { mneme_search_engine_remove_note(e, id); }
     var tj = str_builder_new();
     var ti = 0;
     while (ti < vec_len(tags)) {
@@ -130,7 +134,7 @@ fn mneme_search_engine_index_note(e, id, title: Str, body: Str, tags, path: Str)
     store64(doc + 16, body);
     store64(doc + 24, tags_joined);
     store64(doc + 32, path);
-    map_u64_set(docs, id, doc);
+    map_set(docs, _fte_key(id), doc);
     vec_push(load64(e + 16), id);
     var inverted = load64(e + 8);
     var terms = _fte_unique_terms(_fte_combined(title, body, tags));
@@ -145,7 +149,16 @@ fn mneme_search_engine_index_note(e, id, title: Str, body: Str, tags, path: Str)
     return 0;
 }
 
-# SearchResult (40): [note_id@0, title@8, path@16, snippet@24, score@32]
+# SearchResult (40): [note_id@0, title@8, path@16, snippet@24, score@32 (f64)] — also what search_cross_vault merges
+fn mneme_search_result_new(note_id, title: Str, path: Str, snippet: Str, score): i64 {
+    var r = alloc(40);
+    store64(r, note_id);
+    store64(r + 8, title);
+    store64(r + 16, path);
+    store64(r + 24, snippet);
+    store64(r + 32, score);
+    return r;
+}
 fn mneme_search_result_note_id(r): i64 { return load64(r); }
 fn mneme_search_result_title(r): i64 { return load64(r + 8); }
 fn mneme_search_result_path(r): i64 { return load64(r + 16); }
@@ -194,33 +207,27 @@ fn mneme_search_engine_search(e, query: Str, limit): i64 {
         }
         i = i + 1;
     }
-    # sort by score desc (stable insertion via bubble)
-    var m = vec_len(cands);
-    var a = 0;
-    while (a < m) {
-        var b = 0;
-        while (b + 1 + a < m) {
-            if (load64(vec_get(cands, b + 1) + 8) > load64(vec_get(cands, b) + 8)) {
-                var tmp = vec_get(cands, b);
-                vec_set(cands, b, vec_get(cands, b + 1));
-                vec_set(cands, b + 1, tmp);
-            }
-            b = b + 1;
+    # sort by score desc, stable. A score is a count of matched query terms (1..#terms), so this buckets by
+    # score — the same order the bubble sort it replaces produced, in O(cands × terms), not O(cands²). (1.2.3)
+    var sorted = vec_new();
+    var lvl = vec_len(qterms);
+    while (lvl >= 1) {
+        var ci = 0;
+        while (ci < vec_len(cands)) {
+            if (load64(vec_get(cands, ci) + 8) == lvl) { vec_push(sorted, vec_get(cands, ci)); }
+            ci = ci + 1;
         }
-        a = a + 1;
+        lvl = lvl - 1;
     }
+    cands = sorted;
     var results = vec_new();
     var k = 0;
     while (k < vec_len(cands) && k < limit) {
         var did2 = load64(vec_get(cands, k));
-        var doc = map_u64_get_or(docs, did2, 0);
-        var r = alloc(40);
-        store64(r, did2);
-        store64(r + 8, load64(doc + 8));            # title
-        store64(r + 16, load64(doc + 32));          # path
-        store64(r + 24, _fte_snippet(load64(doc + 16)));  # snippet
-        store64(r + 32, load64(vec_get(cands, k) + 8));   # score
-        vec_push(results, r);
+        var doc = map_get_or(docs, _fte_key(did2), 0);
+        # the score is an f64 — every reader formats it as one (1.2.3: the raw count, read as f64 bits, is a
+        # denormal, so every score displayed as 0)
+        vec_push(results, mneme_search_result_new(did2, load64(doc + 8), load64(doc + 32), _fte_snippet(load64(doc + 16)), f64_from(load64(vec_get(cands, k) + 8))));
         k = k + 1;
     }
     return results;

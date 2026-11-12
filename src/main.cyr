@@ -21,6 +21,7 @@ include "src/search_vector_store.cyr"
 include "src/search_embedding_backend.cyr"
 include "src/search_semantic_engine.cyr"
 include "src/search_engine.cyr"
+include "src/search_vault_index.cyr"
 include "src/search_retrieval_optimizer.cyr"
 include "src/ai_client.cyr"
 include "src/net_http.cyr"
@@ -48,6 +49,15 @@ fn main(): i64 {
     mneme_net_wire_embeddings();
     var vault = _mneme_vault_dir();
     var manager = mneme_store_manager_single(vault);
+    if (manager == 0) {
+        var em = str_builder_new();
+        str_builder_add_cstr(em, "mneme: cannot open the vault at ");
+        str_builder_add(em, vault);
+        str_builder_add_cstr(em, " (its .mneme/db.sqlite is missing permissions or is not a patra database)\n");
+        var es = str_builder_build(em);
+        eprint(str_data(es), str_len(es));
+        return 1;
+    }
     var app = mneme_ui_app_new(manager, path_join(vault, str_from("models")));
     mneme_ui_app_load_notes(app);
     mneme_ui_app_load_tags(app);

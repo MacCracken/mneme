@@ -159,14 +159,14 @@ fn _wr_source_str(s): i64 {
 }
 fn mneme_ai_write_result_to_json(r): i64 {
     var sb = str_builder_new();
-    str_builder_add_cstr(sb, "{\"original\":\"");
-    str_builder_add(sb, load64(r));
-    str_builder_add_cstr(sb, "\",\"result\":\"");
-    str_builder_add(sb, load64(r + 8));
-    str_builder_add_cstr(sb, "\",\"action\":\"");
-    str_builder_add(sb, _wr_action_str(load64(r + 16)));
-    str_builder_add_cstr(sb, "\",\"source\":\"");
-    str_builder_add(sb, _wr_source_str(load64(r + 24)));
-    str_builder_add_cstr(sb, "\"}");
+    str_builder_add_cstr(sb, "{\"original\":");
+    str_builder_add_json_str(sb, load64(r));
+    str_builder_add_cstr(sb, ",\"result\":");
+    str_builder_add_json_str(sb, load64(r + 8));
+    str_builder_add_cstr(sb, ",\"action\":");
+    str_builder_add_json_str(sb, _wr_action_str(load64(r + 16)));
+    str_builder_add_cstr(sb, ",\"source\":");
+    str_builder_add_json_str(sb, _wr_source_str(load64(r + 24)));
+    str_builder_add_cstr(sb, "}");
     return str_builder_build(sb);
 }

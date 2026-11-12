@@ -48,6 +48,21 @@ fn main() {
     assert(str_contains(html, str_from("<strong>bold</strong>")), "renders bold");
     assert(str_contains(html, str_from("<em>italic</em>")), "renders italic");
 
+    # --- 1.2.3: text is escaped and unsafe hrefs are dropped (comrak's defaults) ---
+    var h1 = mneme_io_markdown_to_html(str_from("a <script>alert(1)</script> b"));
+    assert_eq(str_index_of_cstr(h1, "<script>") < 0, 1, "no raw <script>");
+    assert_eq(str_index_of_cstr(h1, "&lt;script&gt;") >= 0, 1, "it is escaped");
+    var h2 = mneme_io_markdown_to_html(str_from("[click](javascript:alert(1))"));
+    assert_eq(str_index_of_cstr(h2, "javascript:") < 0, 1, "a javascript: href is dropped");
+    var h3 = mneme_io_markdown_to_html(str_from("[x](u\" onclick=\"evil)"));
+    assert_eq(str_index_of_cstr(h3, "\" onclick") < 0, 1, "an href cannot break out of its attribute");
+    var h4 = mneme_io_markdown_to_html(str_from("[ok](https://example.com/a?b=1&c=2)"));
+    assert_eq(str_index_of_cstr(h4, "href=\"https://example.com/a?b=1&amp;c=2\"") >= 0, 1, "a normal link survives, attribute-escaped");
+    assert_eq(str_index_of_cstr(mneme_io_markdown_to_html(str_from("use `<b>` here")), "<code>&lt;b&gt;</code>") >= 0, 1, "code spans are escaped");
+    # a failed write is reported (it returned the count regardless)
+    var fails = mneme_io_export_to_html(vec_new(), str_from("/proc/mneme-cannot-write-here"), mneme_io_export_options_default());
+    assert_eq(fails < 0, 1, "export into an unwritable dir returns a negative errno");
+
     return assert_summary();
 }
 fn _v1_tags(): i64 { var v = vec_new(); vec_push(v, str_from("test")); return v; }

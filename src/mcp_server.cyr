@@ -87,10 +87,80 @@ fn _mcp_srv_send(cfd, resp: Str): i64 {
     return 0;
 }
 
+# --- request filter (1.2.3) ------------------------------------------------------------------------------------
+# `mneme serve` is unauthenticated: anyone who can reach the port can read, create and update notes. So it binds
+# LOOPBACK by default (Rust's API server defaulted to 127.0.0.1 too; ADR 016) and two header checks keep a web
+# page in the user's own browser out:
+#   - Content-Type must be application/json. A page can send a cross-origin "simple" text/plain POST without a
+#     CORS preflight; application/json forces one, which this server never grants. (daimon's sandhi RPC client
+#     always sends application/json.)
+#   - while bound to loopback, the Host header must name loopback. A DNS-rebinding page resolves ITS hostname to
+#     127.0.0.1, so its requests are same-origin and could READ replies; their Host is the attacker's name.
+var _mcp_loopback_only = 1;
+fn _mcp_lc(c): i64 { if (c >= 65 && c <= 90) { return c + 32; } return c; }
+# does the NUL-terminated header value `v` start with `pfx` (lowercase), ignoring case?
+fn _mcp_hdr_starts(v, pfx): i64 {
+    if (v == 0) { return 0; }
+    var n = strlen(pfx);
+    var i = 0;
+    while (i < n) {
+        var c = load8(v + i);
+        if (c == 0) { return 0; }
+        if (_mcp_lc(c) != load8(pfx + i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+# is the Host value (`h`, NUL-terminated) a loopback name, with or without a :port?
+fn _mcp_host_is_loopback(h): i64 {
+    if (h == 0) { return 1; }   # no Host header (HTTP/1.0): not a browser request, which always sends one
+    var n = strlen(h);
+    var end = n;
+    if (n > 0 && load8(h) == 91) {   # [::1] or [::1]:port
+        if (n >= 5 && memeq(h, "[::1]", 5) == 1 && (n == 5 || load8(h + 5) == 58)) { return 1; }
+        return 0;
+    }
+    var i = 0;
+    while (i < n) { if (load8(h + i) == 58) { end = i; } i = i + 1; }
+    if (end == 9 && memeq(h, "127.0.0.1", 9) == 1) { return 1; }
+    if (end == 9) {
+        var lh = "localhost";
+        var j = 0;
+        var ok = 1;
+        while (j < 9) { if (_mcp_lc(load8(h + j)) != load8(lh + j)) { ok = 0; } j = j + 1; }
+        if (ok == 1) { return 1; }
+    }
+    return 0;
+}
+fn _mcp_srv_refuse(cfd, status, reason, msg): i64 {
+    var body = mneme_mcp_jsonrpc_error(str_from("null"), 0 - 32600, str_from(msg));
+    sandhi_server_send_response(cfd, status, reason, "application/json", str_data(body), str_len(body), 0);
+    return 0;
+}
+# 0 = serve it; 1 = refused (a reply has been sent).
+fn _mcp_srv_filter(cfd, buf, blen): i64 {
+    var ct = sandhi_server_find_header(buf, blen, "Content-Type");
+    if (_mcp_hdr_starts(ct, "application/json") == 0) {
+        _mcp_srv_refuse(cfd, 415, "Unsupported Media Type", "Content-Type must be application/json");
+        return 1;
+    }
+    if (_mcp_loopback_only == 1) {
+        if (_mcp_host_is_loopback(sandhi_server_find_header(buf, blen, "Host")) == 0) {
+            _mcp_srv_refuse(cfd, 403, "Forbidden", "Host is not a loopback name (set MNEME_BIND to serve another interface)");
+            return 1;
+        }
+    }
+    return 0;
+}
+
 # _mcp_srv_handle: the sandhi request handler. ctx = the vault_state {manager@0, engines@8}. Parses the JSON-RPC
 # `tools/call`, converts the args, dispatches to mneme_mcp_handle_tool_call, and writes the JSON-RPC reply. Every
 # malformed-input path replies with a JSON-RPC error (never a bare/empty body), so a strict client always parses.
 fn _mcp_srv_handle(ctx, cfd, buf, blen): i64 {
+    # 1.2.3: bound the reply's send. sandhi sets only a RECEIVE timeout, so a client that never read its reply
+    # parked this single-threaded loop in send() for good once the reply outgrew the socket buffers.
+    sock_set_send_timeout(cfd, 5, 0);
+    if (_mcp_srv_filter(cfd, buf, blen) == 1) { return 0; }
     var bo = sandhi_server_body_offset(buf, blen);
     var body = 0;
     var body_len = 0;
@@ -144,12 +214,15 @@ fn _mneme_vault_dir(): i64 {
 # mneme_api_vault_state_single but built here so serve does not pull in api_server's AI/IO router stack.
 fn _mcp_vault_state(vault_dir: Str, models_dir: Str): i64 {
     var manager = mneme_store_manager_single(vault_dir);
+    if (manager == 0) { return 0; }   # 1.2.3: the vault would not open
     var engines = vec_new();
     var ov = mneme_store_manager_active(manager);
     if (ov != 0) {
         var e = alloc(32);
         store64(e, load64(mneme_store_openvault_info(ov)));
-        store64(e + 8, mneme_search_engine_in_memory());
+        var fte = mneme_search_engine_in_memory();
+        mneme_search_engine_index_vault(fte, mneme_store_openvault_vault(ov));   # 1.2.3: seed from the vault
+        store64(e + 8, fte);
         store64(e + 16, mneme_search_semantic_engine_disabled());
         store64(e + 24, mneme_search_retrieval_optimizer_new());
         vec_push(engines, e);
@@ -266,10 +339,34 @@ fn _mcp_parse_port(s): i64 {
 
 # mneme_mcp_serve: open the vault, self-register with daimon (if configured), and run the sandhi accept loop until
 # killed. Returns sandhi's exit status. The models dir rides the vault (matches main.cyr's TUI setup).
+# The bind address: MNEME_BIND (a dotted-quad, or 0.0.0.0 for every interface), else loopback. -1 = invalid.
+# Sets _mcp_loopback_only. 1.2.3: this was INADDR_ANY unconditionally (ADR 016).
+fn _mcp_bind_addr(): i64 {
+    var mb = getenv("MNEME_BIND");
+    if (mb == 0) { _mcp_loopback_only = 1; return INADDR_LOOPBACK(); }
+    if (load8(mb) == 0) { _mcp_loopback_only = 1; return INADDR_LOOPBACK(); }
+    var a = net_parse_ipv4(mb);
+    if (a == (0 - 1)) { return 0 - 1; }
+    _mcp_loopback_only = 0;
+    if ((a & 255) == 127) { _mcp_loopback_only = 1; }   # 127.x.y.z is still loopback (packed network order)
+    return a;
+}
+fn _mcp_serve_fail(msg): i64 {
+    eprint(msg, strlen(msg));
+    return 1;
+}
 fn mneme_mcp_serve(port): i64 {
+    var addr = _mcp_bind_addr();
+    if (addr == (0 - 1)) { return _mcp_serve_fail("mneme serve: MNEME_BIND is not a dotted-quad IPv4 address\n"); }
     var vault = _mneme_vault_dir();
     var vs = _mcp_vault_state(vault, path_join(vault, str_from("models")));
+    if (vs == 0) { return _mcp_serve_fail("mneme serve: cannot open the vault (see MNEME_VAULT)\n"); }
     mneme_net_wire_embeddings();                            # live daimon embeddings when reachable (degrades to FTS)
     _mcp_self_register(port);
-    return sandhi_server_run_opts(INADDR_ANY(), port, &_mcp_srv_handle, vs, 0);
+    # 1.2.3: a single-threaded loop, so one slow client holds every other caller. Cap a request at 10 s from
+    # first byte (sandhi's default is 60 s) and an idle keep-alive at 10 s (default 30 s).
+    var opts = sandhi_server_options_new();
+    sandhi_server_options_request_ms(opts, 10000);
+    sandhi_server_options_idle_ms(opts, 10000);
+    return sandhi_server_run_opts(addr, port, &_mcp_srv_handle, vs, opts);
 }

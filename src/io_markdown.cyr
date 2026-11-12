@@ -5,11 +5,14 @@
 
 fn mneme_io_md_stats_files_found(s): i64 { return load64(s); }
 fn mneme_io_md_stats_files_imported(s): i64 { return load64(s + 8); }
+fn mneme_io_md_stats_errors(s): i64 { return load64(s + 24); }
 
-fn _md_single(root: Str, path: Str): i64 {
-    var buf = alloc(262144);
-    var n = file_read_all(_imp_cstr(path), buf, 262144);
-    if (n < 0) { n = 0; }
+# One note, or 0 with `*rerr_out` = the negative errno when the file cannot be read (Rust: Err → stats.errors).
+# 1.2.3: whole-file read; it was a fixed 256 KB buffer, and a read error became an empty imported note.
+fn _md_single(root: Str, path: Str, rerr_out): i64 {
+    var n = 0;
+    var buf = _imp_read_whole(path, &n);
+    if (buf == 0) { store64(rerr_out, n); return 0; }
     var raw = str_new(buf, n);
     var pair = mneme_core_frontmatter_split(raw);
     var yaml = mneme_core_fm_pair_yaml(pair);
@@ -38,16 +41,22 @@ fn _md_single(root: Str, path: Str): i64 {
 # import all .md files from a directory tree; 0 = SourceNotFound
 fn mneme_io_import_markdown_dir(source_dir: Str): i64 {
     if (is_dir(source_dir) == 0) { return 0; }
-    var files = find_files(source_dir, str_from(".md"));
-    _imp_sort(files);
+    var files = _imp_collect(source_dir, ".md", 0);   # Rust: skip dot-entries
     var notes = vec_new();
+    var errors = vec_new();
     var i = 0;
-    while (i < vec_len(files)) { vec_push(notes, _md_single(source_dir, vec_get(files, i))); i = i + 1; }
+    while (i < vec_len(files)) {
+        var rerr = 0;
+        var note = _md_single(source_dir, vec_get(files, i), &rerr);
+        if (note == 0) { vec_push(errors, _imp_error(vec_get(files, i), rerr)); }
+        else { vec_push(notes, note); }
+        i = i + 1;
+    }
     var stats = alloc(32);
     store64(stats, vec_len(files));
     store64(stats + 8, vec_len(notes));
     store64(stats + 16, 0);
-    store64(stats + 24, vec_new());
+    store64(stats + 24, errors);
     var result = alloc(16);
     store64(result, notes);
     store64(result + 8, stats);

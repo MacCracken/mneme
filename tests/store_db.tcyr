@@ -192,6 +192,15 @@ fn main() {
     # parse_datetime_invalid_returns_now
     assert_gte(mneme_store_datetime_year(mneme_store_parse_datetime(str_from("not-a-date"))), 2026, "invalid -> now year");
 
+    # 1.2.3: a failed UPDATE reports -1 (it returned the previous statement's row count)
+    var dbu = _reset_db();
+    var nu = _sample_note();
+    mneme_store_db_insert_note(dbu, nu);
+    var lt = str_builder_new();
+    var li = 0;
+    while (li < 300) { str_builder_putc(lt, 98); li = li + 1; }
+    assert_eq(mneme_store_db_update_note(dbu, mneme_core_note_id(nu), str_builder_build(lt), str_from("h")), 0 - 1, "update with a 300-byte title -> -1");
+
     return assert_summary();
 }
 

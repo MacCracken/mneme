@@ -52,7 +52,9 @@ fn mneme_store_manager_open_vault(m, id): i64 {
     if (_mgr_find(m, id) != 0) { return 1; }
     var info = mneme_store_registry_get_by_id(load64(m), id);
     if (info == 0) { return 0; }
-    _mgr_insert(m, info, mneme_store_vault_open(load64(info + 16)));
+    var vault = mneme_store_vault_open(load64(info + 16));
+    if (vault == 0) { return 0; }   # 1.2.3: a vault whose database will not open is not opened (Rust: `?`)
+    _mgr_insert(m, info, vault);
     mneme_store_registry_touch(load64(m), id);
     return 1;
 }
@@ -80,10 +82,15 @@ fn mneme_store_manager_close_vault(m, id): i64 {
     }
     return 0;
 }
-# create + register + open a new vault; returns the VaultInfo
+# create + register + open a new vault; returns the VaultInfo, or 0 when the name is taken
+# (VaultAlreadyExists) or the vault will not open. 1.2.3: a duplicate name made registry_create return 0,
+# which was then inserted and loaded through.
 fn mneme_store_manager_create_vault(m, name: Str, path: Str): i64 {
     var info = mneme_store_registry_create(load64(m), name, path);
-    _mgr_insert(m, info, mneme_store_vault_open(path));
+    if (info == 0) { return 0; }
+    var vault = mneme_store_vault_open(path);
+    if (vault == 0) { return 0; }
+    _mgr_insert(m, info, vault);
     return info;
 }
 fn mneme_store_manager_remove_vault(m, id): i64 {
@@ -99,7 +106,9 @@ fn mneme_store_manager_single(vault_dir: Str): i64 {
     store64(m, registry);
     store64(m + 8, 0);
     store64(m + 16, vec_new());
-    _mgr_insert(m, info, mneme_store_vault_open(load64(info + 16)));
+    var vault = mneme_store_vault_open(load64(info + 16));
+    if (vault == 0) { return 0; }   # 1.2.3: 0 when the vault will not open (Rust: `VaultManager::single(..)?`)
+    _mgr_insert(m, info, vault);
     return m;
 }
 fn mneme_store_manager_new(registry): i64 {

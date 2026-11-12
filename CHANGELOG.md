@@ -4,6 +4,155 @@ All notable changes to Mneme will be documented in this file.
 
 ## [Unreleased]
 
+## [1.2.3] — 2026-11-12
+
+**The P(-1) sweep: audit, refactor, hardening, optimization, security.** It is a full re-audit, the one the
+2026-07-10 audit asked for once `mneme serve` added a listening socket.
+- 39 defects repaired: 4 critical, 15 high, 13 medium, 7 low. 11 more are deferred to named releases.
+- Findings and status, item by item: [`docs/audit/2026-11-12-audit.md`](docs/audit/2026-11-12-audit.md).
+- Two deliberate divergences from rust-old: [ADR 016](docs/adr/016-confine-note-paths-and-bind-loopback.md).
+- 62 → 63 test files, 1,170 → 1,328 assertions, all green, and the key regressions are mutation-proven. Toolchain
+  unchanged at `6.7.18`.
+
+### Security
+- **Two one-request crashes of `mneme serve` are fixed** (high).
+  - `mneme_search_feedback` with `search_id` `s:18446744073709551615` wrapped to -1, passed the optimizer's signed
+    bound, and `vec_get(arms, -1)` aborted the process. The index now parses as Rust's `usize` does (`unwrap_or(0)`)
+    and the optimizer rejects a negative index.
+  - `mneme_query_graph` with a 32-hex (simple-form) id parsed to 0, and `get_note` read through address 0.
+- **`mneme serve` binds loopback by default** (ADR 016). It bound every interface with no authentication.
+  - `MNEME_BIND=<dotted-quad>` opts into another interface (`0.0.0.0` for all).
+  - Every request needs `Content-Type: application/json` (415 otherwise); a browser's cross-origin `text/plain`
+    POST, which needs no preflight, no longer gets through.
+  - While loopback-bound, the `Host` header must name loopback (403 otherwise), which blocks DNS rebinding.
+  - daimon's sandhi client already sends `application/json` and calls `127.0.0.1`.
+- **`mneme serve` cannot be stalled indefinitely.** A 5 s send timeout is set per reply: a client that never read
+  its reply used to park the single-threaded loop in `send()` forever. The request and idle budgets are 10 s
+  (sandhi's defaults are 60 s and 30 s).
+- **Explicit note paths stay inside the vault** (ADR 016; audit 2026-07-10 §2). `../`, absolute and NUL-holding
+  paths are refused at create and in every FileStore operation. They were inherited from Rust, and through MCP
+  `create_note` they were reachable from the network.
+- **An API id that is not a uuid is 400**, as Rust's `Path<Uuid>`. It parsed to 0 and was read through.
+- **HTML export escapes text and drops unsafe link targets**, as comrak does: `javascript:`, `vbscript:`, `file:`,
+  and `data:` other than images. Raw `<script>` and `href` breakouts went through.
+- **Every JSON string is RFC 8259-escaped.** Seven hand-rolled escapers now delegate to the stdlib's
+  `str_builder_add_json_str`, and nine emitters that escaped nothing now use it too. Nearly every MCP reply carried
+  a raw newline, which is invalid JSON.
+- **The "Unknown tool" error echoes the tool's name.** It `strlen`'d a Str handle and sent heap bytes back.
+
+### Fixed — data loss
+- **⛔ Updating a note whose file could not be read rewrote it with an EMPTY BODY** and returned success.
+  `update_note` and `get_note` now fail before anything is written, as Rust's `read_note(..)?` does.
+- **⛔ Notes over 256 KB were read cut short, so saving after an edit destroyed the rest** (`store_files`). Every
+  fixed-buffer read is now `file_read_whole`: the Obsidian and Markdown importers (256 KB), and the vector store,
+  training log and attachments (1 MB).
+- **⛔ The training log's append rewrote the whole log through a 1 MB buffer**, so past 1 MB each append destroyed
+  everything after the first megabyte. A test that seeds 20,000 lines kept 15,651 under the old code. It is now an
+  `O_APPEND` write under a lock, and a failed write returns 0.
+- **⛔ The full-text index keyed documents by the uuid handle's ADDRESS.** An update through the API or MCP added a
+  duplicate with the stale title, and a delete left the note searchable. It is now keyed by value.
+- **create/update ignored their file-write and insert results.** A title over 255 bytes (patra's STR limit) wrote
+  the file, lost the row and reported success, and re-creating it then hit PathConflict. Every step is checked now,
+  a failed insert removes the file it wrote, and a failed UPDATE returns -1 instead of the previous statement's row
+  count.
+- **Note writes are crash-safe** (`file_replace_atomic`). A truncating write that failed part-way left the note cut
+  short.
+- **A vault whose `.mneme/db.sqlite` patra refuses no longer opens** (rust-old's SQLite file is one). It used to
+  open and lose every write. The TUI and `mneme serve` exit with a message, and the manager's open, create and
+  single-vault paths return 0.
+- **The vector store** used to:
+  - load only its first 1 MB;
+  - open EMPTY when its file was unreadable, and then save over it;
+  - save non-atomically and ignore the result;
+  - shift every later entry when a snippet held a newline.
+
+  All four are fixed.
+- **Deleting a note removes its `note_tags` and `links` rows**, as Rust's `ON DELETE CASCADE` does, and a backlink
+  to a missing note is dropped. Other notes used to keep backlinks to the deleted note.
+- **The importers recorded a read error as an empty note counted as imported.** Errors now go to `stats.errors`, as
+  in Rust.
+
+### Fixed — correctness
+- **Search finds existing notes.** Nothing seeded the in-memory index, so TUI search found nothing, and the API and
+  `mneme serve` found only notes created in that process.
+  - The new `src/search_vault_index.cyr` rebuilds the index when a vault opens and on a TUI vault switch.
+  - It reads note files directly, so a rebuild does not touch `last_accessed`.
+- **Full-text scores are f64** — they were integer counts read as f64 bits, so every score displayed as 0.
+- **Stored timestamps are the wall clock** (`clock_epoch_ns`, Rust's `Utc::now()`). They were `CLOCK_MONOTONIC`, time
+  since boot, so dates showed as 1970 and a reboot reordered "recently updated". Rows written before 1.2.3 keep
+  their old values.
+- **Obsidian and Markdown import** skip dot-entries, and Obsidian also skips `node_modules`, as Rust does. Before,
+  `.trash/*.md` and plugin READMEs were imported as notes. Files sort in `PathBuf` order, now shared by all three
+  importers.
+- **Wikilinks follow Rust's regex exactly.** `[[Note] and see [[Other]]` became one link, and `[[]]`, `[[|x]]` and
+  `[[a|]]` became links.
+- **Query DSL:** "last 2 weeks opened" reads the field `accessed`. The window was centred one word early.
+- **Task ids are per note** (`{note_id}:{line}`). They were `task<line>`, so tasks collided across notes.
+- **Impossible dates are refused**, as chrono's `NaiveDate` refuses them: due date `@2026-02-30`, and calendar
+  `2026-13-01` or a Feb 29 outside a leap year.
+- **The TUI exits on EOF.** It redrew at 100% CPU forever on `< /dev/null` or a dropped SSH session.
+- **A TUI vault switch builds and seeds the new vault's search engine**, and shows an error if the vault will not
+  open.
+- **Web clips carry the real time** in Rust's two formats. Every clip was stamped `1970-01-01 00:00`.
+- **A duplicate vault name** returns 0 (VaultAlreadyExists); it used to be loaded through as 0.
+- **Temporal analysis** gets each note's real content, tags and dates instead of empty content and 2026-01-01.
+- **The cross-vault merge** keys by uuid value, so one note from two sources is "both", not two entries.
+- **The RAG score** is a JSON number (`0.85`); it was the f64's bit pattern. The training reader decodes escaped
+  strings.
+- **Attachment size** is the real size; it was capped at 1,048,576.
+- **`mneme_core_uuid_v4` checks `getrandom`.** A refused call stops the process, as Rust's `Uuid::new_v4` panics,
+  instead of handing out identical ids.
+
+### Changed — refactor
+- **One uuid codec** in `core_uuid` replaces nine private copies (`store_db`, `store_registry`,
+  `search_vector_store`, six `ai_*` modules) and their three disagreeing parsers.
+  - `mneme_core_uuid_to_string` writes the hyphenated form, and `_to_hex` the 32-hex form the ai and vector modules
+    serialize (unchanged on disk).
+  - `mneme_core_uuid_parse` accepts Rust's four forms: hyphenated, simple, braced and URN.
+  - `mneme_core_uuid_parse_stored` gives the nil uuid for a corrupt stored id.
+  - A 0 handle is safe in `to_string` and `eq`.
+- **`SearchResult` is defined once**, in `search_engine`. `search_cross_vault` carried an identical copy, which is
+  why the two could not be included together.
+- **The importers share** one error record, one `PathBuf` sort and one skip filter (`io_obsidian`).
+- **`_cfg_toml_str` is removed.** It has been a passthrough since bayan 1.5.5 began unescaping TOML.
+- **No compiler warnings remain in `src/`.** That took `: Str` return types on four string helpers, `x != 0` for
+  the bitwise +0.0 test, and untyped locals where a Str is reassigned from an `i64` fn.
+
+### Changed — optimization
+- **`[build] dce = true`:** `build/mneme` 2,904,416 → 1,564,240 B. The pointer-reached `&_mcp_srv_handle` and
+  `&_mneme_embed_http` were checked as kept.
+- **`assert` and `bench` move to `[test] stdlib`.** They are compiled into tests, benches and fuzz harnesses, never
+  into the binary. `lib/` and `cyrius.lock` are unchanged.
+- **uuid v4 draws entropy 4 KB at a time:** 550 → 133 ns per id.
+- **The full-text index** dedups terms with a hash set and ranks with a stable bucket pass instead of a bubble sort.
+  The 200-doc search went from 310 to 103 µs.
+
+### Added
+- `docs/audit/2026-11-12-audit.md` and `docs/adr/016-confine-note-paths-and-bind-loopback.md`.
+- `tests/core_uuid.tcyr`: the codec's parse forms and rejects, 0-safety, and 600 pooled ids that are distinct and
+  version 4.
+- Regression tests across 22 more suites; the biggest growth is in `store_vault`, `store_files`, `mcp_server` and
+  `api_server`.
+  - **Mutation-proven:** each of these old behaviours fails the suite when reapplied:
+    - the update that writes after a failed read;
+    - pointer-keyed index entries;
+    - the quote-only JSON escaper;
+    - raw HTML text;
+    - the monotonic clock;
+    - the non-cascading delete;
+    - every fixed-buffer read.
+  - **Live-tested:** the serve fixes against `mneme serve` with curl; the replies parse as strict JSON.
+
+### Verified
+- `cyrius build src/main.cyr build/mneme`: OK, 1,564,240 B. No warnings in `src/`.
+- `cyrius test`: 63 passed, 0 failed (1,328 assertions).
+- `scripts/pdfcheck.sh --strict`: 7/7. `tests/mneme.fcyr`: ok.
+- `benches/mneme_bench.bcyr` (single run):
+  - `core_uuid_v4` 133 ns
+  - `ai_tokenize` 4.39 µs
+  - `squared_distance_3d` 40 ns
+  - `bm25_search_200docs` 103 µs
+
 ## [1.2.2] — 2026-11-12
 
 **Quick batch: the roadmap is reorganized around the releases ahead, and the Notion directory import — the last

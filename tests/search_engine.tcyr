@@ -60,6 +60,28 @@ fn main() {
     assert_eq(vec_len(r6), 2, "two rust results");
     assert_eq(_any_title_eq(r6, "Python Guide"), 0, "python not in results");
 
+    # --- 1.2.3: the index is keyed by the uuid's VALUE ---
+    var e9 = mneme_search_engine_in_memory();
+    var id9 = mneme_core_uuid_v4();
+    mneme_search_engine_index_note(e9, id9, str_from("Old Title"), str_from("zebra stripes"), _tags1(str_from("t")), str_from("z.md"));
+    var id9b = mneme_core_uuid_parse(mneme_core_uuid_to_string(id9));   # a fresh handle, as a request parse gives
+    mneme_search_engine_index_note(e9, id9b, str_from("New Title"), str_from("zebra stripes"), _tags1(str_from("t")), str_from("z.md"));
+    var r9 = mneme_search_engine_search(e9, str_from("zebra"), 10);
+    assert_eq(vec_len(r9), 1, "re-indexing through a fresh handle replaces the doc (no duplicate)");
+    assert_eq(str_eq_cstr(mneme_search_result_title(vec_get(r9, 0)), "New Title"), 1, "and the stale title is gone");
+    assert_eq(mneme_search_result_score(vec_get(r9, 0)), f64_from(1), "score is an f64 (1.0), not the raw count");
+    mneme_search_engine_remove_note(e9, mneme_core_uuid_parse(mneme_core_uuid_to_string(id9)));
+    assert_eq(vec_len(mneme_search_engine_search(e9, str_from("zebra"), 10)), 0, "remove through a fresh handle removes it");
+    # ranking: more matched terms first, ties in index order (the bucket pass that replaced the bubble sort)
+    var e10 = mneme_search_engine_in_memory();
+    mneme_search_engine_index_note(e10, mneme_core_uuid_v4(), str_from("one"), str_from("apple"), _tags1(str_from("t")), str_from("1.md"));
+    mneme_search_engine_index_note(e10, mneme_core_uuid_v4(), str_from("two"), str_from("apple banana"), _tags1(str_from("t")), str_from("2.md"));
+    mneme_search_engine_index_note(e10, mneme_core_uuid_v4(), str_from("three"), str_from("apple"), _tags1(str_from("t")), str_from("3.md"));
+    var r10 = mneme_search_engine_search(e10, str_from("apple banana"), 10);
+    assert_eq(str_eq_cstr(mneme_search_result_title(vec_get(r10, 0)), "two"), 1, "two matched terms ranks first");
+    assert_eq(str_eq_cstr(mneme_search_result_title(vec_get(r10, 1)), "one"), 1, "then ties in index order: one");
+    assert_eq(str_eq_cstr(mneme_search_result_title(vec_get(r10, 2)), "three"), 1, "then three");
+
     return assert_summary();
 }
 

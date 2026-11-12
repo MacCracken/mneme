@@ -4,18 +4,6 @@
 
 enum AssertionType { ASSERT_CONTENT_CONTAINS; ASSERT_TAG_MIN_COUNT; ASSERT_BACKLINK_MIN_COUNT; ASSERT_NO_ORPHANS; ASSERT_NO_DEAD_LINKS; }
 
-fn _qa_hexc(nib): i64 { if (nib < 10) { return 48 + nib; } return 87 + nib; }
-fn _qa_uuid_hex(u): i64 {
-    var sb = str_builder_new();
-    var i = 0;
-    while (i < 16) {
-        var b = load8(u + i);
-        str_builder_putc(sb, _qa_hexc((b >> 4) & 15));
-        str_builder_putc(sb, _qa_hexc(b & 15));
-        i = i + 1;
-    }
-    return str_builder_build(sb);
-}
 fn _qa_json_str(json: Str, quoted_key): i64 {
     var pos = str_index_of_cstr(json, quoted_key);
     if (pos < 0) { return 0; }
@@ -57,16 +45,16 @@ fn _qa_assert_type_str(t): i64 {
 }
 fn mneme_ai_knowledge_assertion_to_json(a): i64 {
     var sb = str_builder_new();
-    str_builder_add_cstr(sb, "{\"description\":\"");
-    str_builder_add(sb, load64(a));
-    str_builder_add_cstr(sb, "\",\"assertion_type\":\"");
-    str_builder_add(sb, _qa_assert_type_str(load64(a + 8)));
-    str_builder_add_cstr(sb, "\",\"note_id\":");
-    if (load64(a + 16) != 0) { str_builder_putc(sb, 34); str_builder_add(sb, _qa_uuid_hex(load64(a + 16))); str_builder_putc(sb, 34); }
+    str_builder_add_cstr(sb, "{\"description\":");
+    str_builder_add_json_str(sb, load64(a));
+    str_builder_add_cstr(sb, ",\"assertion_type\":");
+    str_builder_add_json_str(sb, _qa_assert_type_str(load64(a + 8)));
+    str_builder_add_cstr(sb, ",\"note_id\":");
+    if (load64(a + 16) != 0) { str_builder_putc(sb, 34); str_builder_add(sb, mneme_core_uuid_to_hex(load64(a + 16))); str_builder_putc(sb, 34); }
     else { str_builder_add_cstr(sb, "null"); }
-    str_builder_add_cstr(sb, ",\"expected\":\"");
-    str_builder_add(sb, load64(a + 24));
-    str_builder_add_cstr(sb, "\"}");
+    str_builder_add_cstr(sb, ",\"expected\":");
+    str_builder_add_json_str(sb, load64(a + 24));
+    str_builder_add_cstr(sb, "}");
     return str_builder_build(sb);
 }
 fn mneme_ai_knowledge_assertion_from_json(json: Str): i64 {

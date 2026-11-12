@@ -220,67 +220,14 @@ fn mneme_io_notion_stats_pages_imported(s): i64 { return load64(s + 8); }
 fn mneme_io_notion_stats_csv_databases_found(s): i64 { return load64(s + 16); }
 fn mneme_io_notion_stats_uuid_suffixes_cleaned(s): i64 { return load64(s + 24); }
 fn mneme_io_notion_stats_errors(s): i64 { return load64(s + 32); }
-fn mneme_io_notion_error_path(e): i64 { return load64(e); }
-fn mneme_io_notion_error_message(e): i64 { return load64(e + 8); }
+fn mneme_io_notion_error_path(e): i64 { return mneme_io_import_error_path(e); }
+fn mneme_io_notion_error_message(e): i64 { return mneme_io_import_error_message(e); }
 # The result (16) is [notes@0 (vec<ImportedNote>), stats@8] — the same layout as the Obsidian import's,
 # so `mneme_io_import_result_notes` / `_stats` read it too.
 fn mneme_io_notion_result_notes(r): i64 { return load64(r); }
 fn mneme_io_notion_result_stats(r): i64 { return load64(r + 8); }
 
-# Rust sorts the collected PathBufs, and PathBuf orders COMPONENT by component. For paths without empty
-# components that is byte order with '/' ranked below every other byte ("a/b" < "a-b"), which is what
-# this compares — a plain byte compare would put "a-b" first ('-' is 45, '/' is 47).
-fn _ntn_path_byte(c): i64 { if (c == 47) { return 0 - 1; } return c; }
-fn _ntn_path_lt(a: Str, b: Str): i64 {
-    var la = str_len(a);
-    var lb = str_len(b);
-    var da = str_data(a);
-    var db = str_data(b);
-    var n = la;
-    if (lb < la) { n = lb; }
-    var i = 0;
-    while (i < n) {
-        var ca = _ntn_path_byte(load8(da + i));
-        var cb = _ntn_path_byte(load8(db + i));
-        if (ca < cb) { return 1; }
-        if (ca > cb) { return 0; }
-        i = i + 1;
-    }
-    if (la < lb) { return 1; }
-    return 0;
-}
-fn _ntn_sort_paths(v): i64 {
-    var n = vec_len(v);
-    var i = 1;
-    while (i < n) {   # insertion sort: stable, and exports are small
-        var cur = vec_get(v, i);
-        var j = i;
-        while (j > 0 && _ntn_path_lt(cur, vec_get(v, j - 1)) == 1) {
-            vec_set(v, j, vec_get(v, j - 1));
-            j = j - 1;
-        }
-        vec_set(v, j, cur);
-        i = i + 1;
-    }
-    return 0;
-}
 
-# Rust's walker skips every ENTRY whose name starts with '.', so a hidden directory's whole subtree is
-# skipped. Over a full walk that is: drop a file when any component of its path BELOW the root starts
-# with '.'. (The root itself is never tested, as in Rust — `/tmp/.export` imports fine.)
-fn _ntn_hidden_below_root(rel: Str): i64 {
-    var n = str_len(rel);
-    var d = str_data(rel);
-    var i = 0;
-    var at_start = 1;
-    while (i < n) {
-        var c = load8(d + i);
-        if (at_start == 1 && c == 46) { return 1; }
-        if (c == 47) { at_start = 1; } else { at_start = 0; }
-        i = i + 1;
-    }
-    return 0;
-}
 
 # collect_notion_files: every non-hidden `.md` and `.csv` file under `dir`, sorted. Returns the vec, or 0
 # when any directory in the tree could not be listed (Rust: `fs::read_dir(..)?` fails the whole import).
@@ -295,27 +242,19 @@ fn _ntn_collect_files(dir: Str): i64 {
     var i = 0;
     while (i < vec_len(all)) {
         var p = vec_get(all, i);
-        if (_ntn_hidden_below_root(_imp_relative(dir, p)) == 0) {
+        if (_imp_skipped_below_root(_imp_relative(dir, p), 0) == 0) {
             if (path_has_ext(p, str_from(".md")) == 1 || path_has_ext(p, str_from(".csv")) == 1) {
                 vec_push(files, p);
             }
         }
         i = i + 1;
     }
-    _ntn_sort_paths(files);
+    _imp_sort(files);   # PathBuf order (io_obsidian)
     return files;
 }
 
-fn _ntn_error(path: Str, rerr): i64 {
-    var sb = str_builder_new();
-    str_builder_add_cstr(sb, "read failed (errno ");
-    str_builder_add_int(sb, 0 - rerr);
-    str_builder_add_cstr(sb, ")");
-    var e = alloc(16);
-    store64(e, path);
-    store64(e + 8, str_builder_build(sb));
-    return e;
-}
+# A page error is the shared import-error record (`_imp_error`, io_obsidian).
+fn _ntn_error(path: Str, rerr): i64 { return _imp_error(path, rerr); }
 
 # import_notion_page → the ImportedNote, with `*cleaned_out` = 1 when the title lost a UUID suffix; or 0
 # with `*rerr_out` = the negative errno when the file could not be read. The whole file is read (`file_read_whole` grows
@@ -323,7 +262,7 @@ fn _ntn_error(path: Str, rerr): i64 {
 # that is not valid UTF-8, and this imports its bytes as they are.
 fn _ntn_import_page(export_root: Str, file_path: Str, cleaned_out, rerr_out): i64 {
     var len = 0;
-    var buf = file_read_whole(_imp_cstr(file_path), &len);
+    var buf = _imp_read_whole(file_path, &len);
     if (buf == 0) { store64(rerr_out, len); return 0; }
     var raw = str_new(buf, len);
     var pair = mneme_core_frontmatter_split(raw);

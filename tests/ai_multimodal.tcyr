@@ -8,6 +8,14 @@ fn _att(filename, media_type): i64 {
     return mneme_ai_attachment_new(str_from(filename), media_type, 1024, str_from(filename));
 }
 
+# a `n`-byte Str of 'a'..'z' (1.2.3 regression helper)
+fn _big(n): i64 {
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < n) { str_builder_putc(sb, 97 + (i % 26)); i = i + 1; }
+    return str_builder_build(sb);
+}
+
 fn main() {
     alloc_init();
     test_group("ai_multimodal");
@@ -64,6 +72,15 @@ fn main() {
     assert_eq(str_eq_cstr(mneme_ai_attachment_filename(att), "test.png"), 1, "attachment filename");
     assert_eq(mneme_ai_attachment_media_type(att), MEDIA_IMAGE, "attachment image type");
     assert_eq(mneme_ai_attachment_size_bytes(att) > 0, 1, "attachment size > 0");
+
+    # 1.2.3 regression: the size is the file's real size (a read into a 1 MB buffer capped it at 1,048,576)
+    var bigp = str_from("/tmp/mneme_mm_d/big.bin");
+    var bigd = _big(1500000);
+    file_write_all(_mm_cstr(bigp), str_data(bigd), str_len(bigd));
+    var attb = mneme_ai_create_attachment(bigp);
+    assert(attb != 0, "big attachment created");
+    assert_eq(mneme_ai_attachment_size_bytes(attb), 1500000, "1,500,000-byte attachment reports its real size");
+    assert_eq(mneme_ai_create_attachment(str_from("/tmp/mneme_mm_d")), 0, "a directory is not an attachment (read fails)");
 
     return assert_summary();
 }

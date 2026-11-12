@@ -38,7 +38,7 @@ fn main() {
     var reg5 = mneme_store_registry_in_memory();
     var info5 = mneme_store_registry_create(reg5, str_from("work"), str_from("/w"));
     var id5 = mneme_store_vault_info_id(info5);
-    var idstr5 = mneme_store_uuid_to_string(id5);
+    var idstr5 = mneme_core_uuid_to_string(id5);
     assert_neq(mneme_store_registry_resolve(reg5, idstr5), 0, "resolve by id string Some");
 
     # remove_vault

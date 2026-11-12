@@ -1,6 +1,7 @@
 # mneme-core task tests — ported from rust-old/crates/mneme-core/src/task.rs.
 include "src/core_uuid.cyr"
 include "src/core_task.cyr"
+include "src/core_calendar.cyr"   # mneme_core_date_valid (1.2.3)
 
 fn main() {
     alloc_init();
@@ -35,6 +36,21 @@ fn main() {
     # task_serialization: priority High -> json contains "high"
     var task = mneme_core_task_new(mneme_core_uuid_v4(), mneme_core_uuid_v4(), str_from("Test"), 0, PRIO_HIGH, 0 - 1, 1);
     assert(str_contains(mneme_core_task_to_json(task), str_from("high")), "json has priority high");
+
+    # 1.2.3: task ids are per note (they were "task<line>" for every note)
+    var na = mneme_core_uuid_v4();
+    var nb = mneme_core_uuid_v4();
+    var ta = vec_get(mneme_core_task_extract_tasks(na, str_from("- [ ] same")), 0);
+    var tb = vec_get(mneme_core_task_extract_tasks(nb, str_from("- [ ] same")), 0);
+    assert_eq(mneme_core_uuid_eq(mneme_core_task_id(ta), mneme_core_task_id(tb)), 0, "line 0 of two notes -> different ids");
+    var ta2 = vec_get(mneme_core_task_extract_tasks(na, str_from("- [ ] same")), 0);
+    assert_eq(mneme_core_uuid_eq(mneme_core_task_id(ta), mneme_core_task_id(ta2)), 1, "and stable for the same note and line");
+    # an impossible due date is None and the text keeps its marker (Rust's NaiveDate parse fails)
+    var tbad = vec_get(mneme_core_task_extract_tasks(na, str_from("- [ ] pay @2026-02-30")), 0);
+    assert_eq(mneme_core_task_due_date(tbad), 0 - 1, "@2026-02-30 -> no due date");
+    assert(str_eq_cstr(mneme_core_task_text(tbad), "pay @2026-02-30"), "and the marker stays in the text");
+    var tok = vec_get(mneme_core_task_extract_tasks(na, str_from("- [ ] leap @2024-02-29")), 0);
+    assert_eq(mneme_core_task_due_date(tok), 20240229, "@2024-02-29 is a real date");
 
     return assert_summary();
 }

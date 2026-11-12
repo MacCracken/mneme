@@ -4,16 +4,14 @@
 # structs; tool_definitions() carries names + required fields (the property
 # schemas are metadata the tests don't inspect in detail).
 
+# Append `s` JSON-escaped (RFC 8259 §7), without the surrounding quotes — the caller writes those.
+# 1.2.3: delegates to the stdlib's `str_builder_add_json_str`. This escaped only `"` and `\\`, so control bytes
+# went out raw — a newline in a note made the JSON invalid (a strict parser, bayan 1.11.1's included, rejects it).
 fn _mcp_escape(sb, s: Str): i64 {
-    var n = str_len(s);
-    var d = str_data(s);
-    var i = 0;
-    while (i < n) {
-        var c = load8(d + i);
-        if (c == 34 || c == 92) { str_builder_putc(sb, 92); }
-        str_builder_putc(sb, c);
-        i = i + 1;
-    }
+    var t = str_builder_new();
+    str_builder_add_json_str(t, s);
+    var q = str_builder_build(t);
+    str_builder_add(sb, str_substr(q, 1, str_len(q) - 1));
     return 0;
 }
 

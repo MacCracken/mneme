@@ -87,6 +87,10 @@ fn main() {
     assert(mneme_search_query_temporal(mneme_search_parse_query(str_from("notes last 5"))) != 0, "last 5 temporal");
     assert(mneme_search_query_temporal(mneme_search_parse_query(str_from("older than 30"))) != 0, "older 30 temporal");
 
+    # 1.2.3: the field window is centred past the unit word, as in Rust
+    var qf = mneme_search_parse_query(str_from("last 2 weeks opened"));
+    assert(str_eq_cstr(mneme_search_temporal_field(mneme_search_query_temporal(qf)), "accessed"), "'last 2 weeks opened' -> accessed");
+
     return assert_summary();
 }
 

@@ -36,11 +36,11 @@ fn mneme_ai_concept_kind_str(kind): i64 {
 # minimal serde (score omitted — f64 formatting deferred; tests only check the kind string)
 fn mneme_ai_concept_to_json(c): i64 {
     var sb = str_builder_new();
-    str_builder_add_cstr(sb, "{\"term\":\"");
-    str_builder_add(sb, load64(c));
-    str_builder_add_cstr(sb, "\",\"kind\":\"");
-    str_builder_add(sb, mneme_ai_concept_kind_str(load64(c + 8)));
-    str_builder_add_cstr(sb, "\",\"occurrences\":");
+    str_builder_add_cstr(sb, "{\"term\":");
+    str_builder_add_json_str(sb, load64(c));
+    str_builder_add_cstr(sb, ",\"kind\":");
+    str_builder_add_json_str(sb, mneme_ai_concept_kind_str(load64(c + 8)));
+    str_builder_add_cstr(sb, ",\"occurrences\":");
     str_builder_add_int(sb, load64(c + 24));
     str_builder_add_cstr(sb, "}");
     return str_builder_build(sb);

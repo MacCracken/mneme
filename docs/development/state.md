@@ -5,6 +5,42 @@
 
 ## Version
 
+**1.2.3** — the P(-1) sweep: audit, refactor, hardening, optimization, security (2026-11-12). Toolchain unchanged at
+`6.7.18`. The full findings table is [`../audit/2026-11-12-audit.md`](../audit/2026-11-12-audit.md): 39 defects
+repaired (4 critical, 15 high, 13 medium, 7 low) and 11 deferred to named releases. The headlines:
+- **Data loss stopped.**
+  - An update of an unreadable note no longer rewrites it with an empty body.
+  - Notes over 256 KB are no longer truncated on read, and so no longer destroyed on save.
+  - The training log is appended to instead of rewritten through a 1 MB buffer.
+  - Note and vector-store writes are atomic.
+  - create and update check every step and roll back.
+  - A vault with a database patra refuses no longer "opens".
+- **`mneme serve` hardened.**
+  - Two one-request crashes are gone: the `search_feedback` overflow, and a simple-form uuid in `query_graph`.
+  - It binds loopback by default; set `MNEME_BIND` to widen.
+  - It requires `Content-Type: application/json`, and a loopback Host while loopback-bound.
+  - It has a send timeout and 10 s request and idle budgets.
+  - Explicit note paths can no longer leave the vault.
+  - The divergences are recorded in ADR [016](../adr/016-confine-note-paths-and-bind-loopback.md).
+- **Search works.**
+  - The index is keyed by uuid value, so update and delete reach it.
+  - It is rebuilt from the vault when a vault opens.
+  - Scores are real f64s.
+- **Wall-clock timestamps**, valid JSON everywhere (one RFC 8259 escaper), and escaped HTML export.
+- **Refactor.**
+  - One uuid codec replaces nine.
+  - One `SearchResult` replaces two.
+  - The importers share their helpers.
+  - The `_cfg_toml_str` passthrough is gone.
+  - There are no compiler warnings left in `src/`.
+- **Binary and speed.**
+  - `[build] dce = true` takes `build/mneme` from 2,904,416 to 1,564,240 B.
+  - `assert` and `bench` moved to `[test] stdlib`.
+  - uuid v4 went from about 550 to 133 ns (pooled entropy).
+  - The 200-doc full-text search went from about 310 to 103 µs.
+- 62 files / 1,170 assertions became 63 / 1,328, all green (new: `tests/core_uuid.tcyr`). The key regression tests
+  are mutation-proven.
+
 **1.2.2** — quick batch (2026-11-12). Toolchain unchanged at `6.7.18`.
 - **The roadmap is reorganized** (`roadmap.md`): completed milestones and done items are out. The remaining work
   is sequenced as 1.2.3 (P(-1) sweep), 1.3.x (document pipeline on bayan), 1.4.x (parity polish), 1.5.x
@@ -132,6 +168,12 @@ Rust preserved at `rust-old/` (the full original workspace) for parity reference
   `cyrius deps --verify`. Since 6.7.18, `cyrius deps` refuses to re-lock across a pin move while an undeclared
   `lib/` file differs from the new snapshot. It suggests `rm` or `cyrius lib sync --full`; don't use either. Once
   the copies match, it locks them and notes them as "outside the declared footprint".
+- **Build**:
+  - `[build] dce = true` (1.2.3) drops unreachable fns from `build/mneme`, about 1.3 MB. Address-taken fns
+    (`&_mcp_srv_handle`, `&_mneme_embed_http`) are kept.
+  - `assert` and `bench` are `[test] stdlib` leaves (1.2.3): compiled into tests, benches and fuzz harnesses, never
+    into the binary. Some editor diagnostics do not apply the test scope and flag `assert_*` as undefined in a
+    `.tcyr`; `cyrius test` resolves them.
 
 ## Source
 
@@ -212,7 +254,7 @@ Note: `search_semantic_engine`'s functions were renamed to the
 
 ## Tests
 
-**62 `.tcyr` files, 1,170 assertions — all green.** The entire 21,014-LOC workspace is ported (core,
+**63 `.tcyr` files, 1,328 assertions — all green.** The entire 21,014-LOC workspace is ported (core,
 io incl. PDF, store, search, ai, mcp, full api HTTP surface, ui app), plus the
 mneme-ui `views`/`main` glue (`ui_render`, `ui_events`) and the **live network +
 terminal bridges** (`net_http` = sandhi HTTP to daimon + remote embeddings;
@@ -239,17 +281,17 @@ tls, ws, async, atomic, sandhi, fdlopen, dynlib, mmap, freelist, process, sakshi
 
 ## Next
 
-The port is complete. What remains is sequenced in [`roadmap.md`](roadmap.md): **1.2.3** is a P(-1) sweep (audit,
-refactor, hardening, optimization, security); **1.3.x** moves the document pipeline onto bayan (`bayan_pdf_*`, then
-`bayan_markdown_*`, which shipped in bayan 1.11.1); **1.4.x** is the remaining parity polish (RFC 3339 datetimes,
-graph layout); **1.5.x** is performance; local ONNX inference and the dhancha GUI are the **2.0.0** backlog.
-
-⛔ **Top of the 1.2.3 list — silent truncation on read.** `store_files.cyr:44` reads every note through a fixed
-256 KB `file_read_all` buffer, so a larger note comes back cut short with no error, and saving it after an edit
-destroys the rest. The importers `io_obsidian.cyr:121` and `io_markdown.cyr:11` have the same 256 KB cap. Three
-1 MB caps are in the same class: `search_vector_store.cyr:286`, `ai_training_export.cyr:161` and
-`ai_multimodal.cyr:102`. The 1.2.2 Notion importer already reads through `file_read_whole`, and its test proves a
-300,000-byte page imports whole.
+The port is complete, and the 1.2.3 sweep is done. What remains is sequenced in [`roadmap.md`](roadmap.md):
+- **1.3.x** moves the document pipeline onto bayan: `bayan_pdf_*`, then `bayan_markdown_*`, which shipped in bayan
+  1.11.1.
+- **1.4.x** is the remaining parity polish and robustness, including the sweep's deferred items:
+  - Unicode text;
+  - titles over 255 bytes;
+  - a per-request arena and a shared secret for `mneme serve`;
+  - TUI raw mode;
+  - RFC 3339 parsing and graph layout.
+- **1.5.x** is performance.
+- **2.0.0** is the backlog: local ONNX inference and the dhancha GUI.
 
 **Live PDF-export defects — retired by the 1.3.0 `bayan_pdf_*` migration.** bayan's PDF module was shaped around
 auditing mneme's hand-rolled writer (`bayan/src/pdf.cyr` cites `src/io_export_pdf.cyr` seven times). Neither the

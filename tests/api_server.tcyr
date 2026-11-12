@@ -24,6 +24,7 @@ include "src/search_vector_store.cyr"
 include "src/search_embedding_backend.cyr"
 include "src/search_semantic_engine.cyr"
 include "src/search_engine.cyr"
+include "src/search_vault_index.cyr"
 include "src/ai_concepts.cyr"
 include "src/ai_tagger.cyr"
 include "src/ai_templates.cyr"
@@ -148,7 +149,7 @@ fn main() {
     assert_eq(_st(_req(app5, "GET", _notepath("/v1/notes/", did), "")), 404, "deleted gone 404");
 
     # get_nonexistent_note
-    var ne = _req(_app(), "GET", _notepath("/v1/notes/", mneme_store_uuid_to_string(mneme_core_uuid_v4())), "");
+    var ne = _req(_app(), "GET", _notepath("/v1/notes/", mneme_core_uuid_to_string(mneme_core_uuid_v4())), "");
     assert_eq(_st(ne), 404, "nonexistent 404");
 
     # search_notes
@@ -314,6 +315,33 @@ fn main() {
     var pl = _reqc(_app(), "GET", "/v1/plugins", "");
     assert_eq(_st(pl), 200, "plugins 200");
     assert_eq(str_eq_cstr(_bd(pl), "[]"), 1, "plugins empty");
+
+    # --- 1.2.3 regressions ---
+    # an id that is not a uuid is 400 (Rust: Path<Uuid> rejects it); it parsed to 0 and was loaded through
+    var appx = _app();
+    assert_eq(_st(_reqc(appx, "GET", "/v1/notes/not-a-uuid", "")), 400, "GET bad id -> 400");
+    assert_eq(_st(_reqc(appx, "PUT", "/v1/notes/not-a-uuid", "{\"title\":\"x\"}")), 400, "PUT bad id -> 400");
+    assert_eq(_st(_reqc(appx, "DELETE", "/v1/notes/not-a-uuid", "")), 400, "DELETE bad id -> 400");
+    assert_eq(_st(_reqc(appx, "DELETE", "/v1/tags/not-a-uuid", "")), 400, "DELETE bad tag id -> 400");
+    # update and delete through the API reach the full-text index (it was keyed by pointer)
+    var apps = _app();
+    var sid = _mk(apps, "{\"title\":\"Quokka Facts\",\"content\":\"quokka quokka\",\"tags\":[]}");
+    _req(apps, "PUT", _notepath("/v1/notes/", sid), "{\"title\":\"Quokka Renamed\"}");
+    var sr1 = _bd(_reqc(apps, "GET", "/v1/search?q=quokka", ""));
+    assert_eq(_has(sr1, "Quokka Renamed"), 1, "search shows the new title");
+    assert_eq(_has(sr1, "Quokka Facts"), 0, "and not a stale duplicate");
+    _req(apps, "DELETE", _notepath("/v1/notes/", sid), "");
+    assert_eq(_has(_bd(_reqc(apps, "GET", "/v1/search?q=quokka", "")), "note_id"), 0, "a deleted note is not searchable");
+    # a vault's existing notes are searchable in a fresh state (the index is seeded from the vault)
+    var seedroot = str_from("/tmp/mneme_api_seed");
+    _wipe(seedroot);
+    var st1 = mneme_api_vault_state_single(seedroot, str_from("/nonexistent"));
+    _mk(st1, "{\"title\":\"Wombat Notes\",\"content\":\"wombat burrows\",\"tags\":[]}");
+    var st2 = mneme_api_vault_state_single(seedroot, str_from("/nonexistent"));
+    assert_eq(_has(_bd(_reqc(st2, "GET", "/v1/search?q=wombat", "")), "Wombat Notes"), 1, "a reopened vault finds its notes");
+    # JSON stays valid when a note holds control characters (they went out raw)
+    var ctl = _mk(apps, "{\"title\":\"Tabbed\",\"content\":\"a\\tb\",\"tags\":[]}");
+    assert_eq(_has(_bd(_req(apps, "GET", _notepath("/v1/notes/", ctl), "")), "a\\tb"), 1, "a tab is escaped as \\t");
 
     return assert_summary();
 }

@@ -37,24 +37,62 @@ fn mneme_store_filestore_notes_dir(fs): i64 { return load64(fs); }
 fn mneme_store_filestore_init(fs): i64 {
     return _fs_mkdir_p(load64(fs));
 }
-# read Markdown content, or 0 (NotFound) on open failure
+# Is `rel` a path that stays inside the notes directory? Non-empty, no NUL byte, not absolute (`/` or
+# `\\`), and no `..` component (split on `/` and `\\`). 1.2.3 hardening — a DIVERGENCE from rust-old, which
+# writes an explicit `CreateNote.path` as given, so `../../x` escaped the vault (audit 2026-07-10 §2;
+# ADR 016). A title-derived path is a flat slug and always passes. Every FileStore operation checks it, so a
+# path that reached the database some other way cannot escape either.
+fn mneme_store_note_path_is_safe(rel: Str): i64 {
+    if (rel == 0) { return 0; }
+    var n = str_len(rel);
+    if (n == 0) { return 0; }
+    var d = str_data(rel);
+    var c0 = load8(d);
+    if (c0 == 47 || c0 == 92) { return 0; }
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var c = 0;
+        if (i < n) { c = load8(d + i); }
+        if (i < n && c == 0) { return 0; }
+        if (i == n || c == 47 || c == 92) {
+            if (i - start == 2 && load8(d + start) == 46 && load8(d + start + 1) == 46) { return 0; }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# read Markdown content, or 0 (NotFound) when the file cannot be opened or read, or `rel` is unsafe.
+# 1.2.3: the whole file. This read through a fixed 256 KB `file_read_all` buffer, so a larger note came back
+# cut short with no error — and saving it after an edit destroyed the rest. `file_read_whole` grows its
+# buffer, and a read that fails part-way is a failure (0), never a prefix.
 fn mneme_store_filestore_read_note(fs, rel: Str): i64 {
+    if (mneme_store_note_path_is_safe(rel) == 0) { return 0; }
     var full = _fs_cstr(path_join(load64(fs), rel));
-    var buf = alloc(262144);
-    var n = file_read_all(full, buf, 262144);
-    if (n < 0) { return 0; }
+    var n = 0;
+    var buf = file_read_whole(full, &n);
+    if (buf == 0) { return 0; }
     return str_new(buf, n);
 }
+# write a note: 0 on success, a negative errno on failure (-22 EINVAL for an unsafe `rel`).
+# 1.2.3: crash-safe. `file_write_all` truncates at open, so a write that failed part-way (a full disk) left
+# an EXISTING note cut short. `file_replace_atomic` writes a temp, fsyncs and renames it over the note, so a
+# failure leaves the old note intact; a symlinked note stays a link and its target gets the bytes, as before.
 fn mneme_store_filestore_write_note(fs, rel: Str, content: Str): i64 {
+    if (mneme_store_note_path_is_safe(rel) == 0) { return 0 - 22; }
     var full = path_join(load64(fs), rel);
     _fs_mkdir_p(path_dirname(full));
-    return file_write_all(_fs_cstr(full), str_data(content), str_len(content));
+    return file_replace_atomic(_fs_cstr(full), str_data(content), str_len(content));
 }
-# delete; returns 0 on success, negative (e.g. -ENOENT) if not found
+# delete; returns 0 on success, negative (e.g. -ENOENT) if not found (-22 for an unsafe `rel`)
 fn mneme_store_filestore_delete_note(fs, rel: Str): i64 {
+    if (mneme_store_note_path_is_safe(rel) == 0) { return 0 - 22; }
     return sys_unlink(_fs_cstr(path_join(load64(fs), rel)));
 }
 fn mneme_store_filestore_exists(fs, rel: Str): i64 {
+    if (mneme_store_note_path_is_safe(rel) == 0) { return 0; }
     return file_exists(_fs_cstr(path_join(load64(fs), rel)));
 }
 

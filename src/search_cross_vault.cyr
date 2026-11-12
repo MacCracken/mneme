@@ -22,22 +22,9 @@ fn mneme_search_cross_vault_source_as_str(s): i64 {
 }
 
 # --- SearchResult (40 bytes): [note_id@0, title@8, path@16, snippet@24, score@32 (f64)] ---
-# Full-text hit fed into the merge. score is unused by the merge (rank-based RRF) but
-# kept for fidelity with the Rust struct.
-fn mneme_search_result_new(note_id, title: Str, path: Str, snippet: Str, score): i64 {
-    var r = alloc(40);
-    store64(r, note_id);
-    store64(r + 8, title);
-    store64(r + 16, path);
-    store64(r + 24, snippet);
-    store64(r + 32, score);
-    return r;
-}
-fn mneme_search_result_note_id(r): i64 { return load64(r); }
-fn mneme_search_result_title(r): i64 { return load64(r + 8); }
-fn mneme_search_result_path(r): i64 { return load64(r + 16); }
-fn mneme_search_result_snippet(r): i64 { return load64(r + 24); }
-fn mneme_search_result_score(r): i64 { return load64(r + 32); }
+# Full-text hits fed into the merge are search_engine's SearchResult (`mneme_search_result_*`; include
+# search_engine first). 1.2.3: this file carried an identical second copy of the struct and its accessors, which
+# is why the two modules could not be included together. The score is unused by the merge (rank-based RRF).
 
 # --- SemanticResult (32 bytes): [note_id@0 (0=None), title@8 (0=None), content@16, score@24 (f64)] ---
 fn mneme_search_semantic_result_new(note_id, title, content: Str, score): i64 {
@@ -156,7 +143,9 @@ fn mneme_search_cross_vault_merge(vault_results, limit): i64 {
     var vi = 0;
     while (vi < vec_len(vault_results)) {
         var vr = vec_get(vault_results, vi);
-        var note_scores = map_u64_new();
+        # keyed by the uuid's VALUE (hex): the same note from full-text and semantic results is two different
+        # handles, so the pointer-keyed map_u64 this was listed it twice instead of marking it "both". (1.2.3)
+        var note_scores = map_new_str();
         var order = vec_new();   # preserve first-seen note_id order for deterministic collection
 
         # Score fulltext results by rank
@@ -165,10 +154,10 @@ fn mneme_search_cross_vault_merge(vault_results, limit): i64 {
         while (rank < vec_len(ft)) {
             var res = vec_get(ft, rank);
             var nid = mneme_search_result_note_id(res);
-            var entry = map_u64_get_or(note_scores, nid, 0);
+            var entry = map_get_or(note_scores, mneme_core_uuid_to_hex(nid), 0);
             if (entry == 0) {
                 entry = _cv_entry_new(mneme_search_result_title(res), mneme_search_result_path(res), mneme_search_result_snippet(res));
-                map_u64_set(note_scores, nid, entry);
+                map_set(note_scores, mneme_core_uuid_to_hex(nid), entry);
                 vec_push(order, nid);
             }
             store64(entry + 24, f64_add(load64(entry + 24), _cv_rrf(rank)));
@@ -183,12 +172,12 @@ fn mneme_search_cross_vault_merge(vault_results, limit): i64 {
             var sres = vec_get(sem, srank);
             var snid = mneme_search_semantic_result_note_id(sres);
             if (snid != 0) {
-                var sentry = map_u64_get_or(note_scores, snid, 0);
+                var sentry = map_get_or(note_scores, mneme_core_uuid_to_hex(snid), 0);
                 if (sentry == 0) {
                     var stitle = mneme_search_semantic_result_title(sres);
                     if (stitle == 0) { stitle = str_from(""); }   # unwrap_or_default
                     sentry = _cv_entry_new(stitle, str_from(""), _cv_truncate(mneme_search_semantic_result_content(sres), 200));
-                    map_u64_set(note_scores, snid, sentry);
+                    map_set(note_scores, mneme_core_uuid_to_hex(snid), sentry);
                     vec_push(order, snid);
                 }
                 store64(sentry + 24, f64_add(load64(sentry + 24), _cv_rrf(srank)));
@@ -204,7 +193,7 @@ fn mneme_search_cross_vault_merge(vault_results, limit): i64 {
         var oi = 0;
         while (oi < vec_len(order)) {
             var note_id = vec_get(order, oi);
-            var e = map_u64_get_or(note_scores, note_id, 0);
+            var e = map_get_or(note_scores, mneme_core_uuid_to_hex(note_id), 0);
             var has_ft = load64(e + 32);
             var has_sem = load64(e + 40);
             var source = CROSS_VAULT_FULLTEXT;

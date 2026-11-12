@@ -122,6 +122,46 @@ fn main() {
     # delete_nonexistent_note
     assert_eq(mneme_store_vault_delete_note(_fresh_vault(), mneme_core_uuid_v4()), 0, "delete missing -> 0");
 
+    # --- 1.2.3 regressions ---
+    # an explicit path that escapes the vault is refused (ADR 016)
+    var vt = _fresh_vault();
+    assert_eq(mneme_store_vault_create_note(vt, mneme_store_create_note_new(str_from("Esc"), str_from("../escape.md"), str_from("x"), vec_new(), 0 - 1)), 0, "create refuses ../escape.md");
+    assert_eq(file_exists(str_cstr(path_join(mneme_store_vault_root(vt), str_from("escape.md")))), 0, "nothing written outside notes/");
+    assert(mneme_store_vault_create_note(vt, mneme_store_create_note_new(str_from("Sub"), str_from("sub/x.md"), str_from("x"), vec_new(), 0 - 1)) != 0, "a safe explicit path still works");
+    # a title patra cannot store (>255 bytes) fails the create AND removes the file it wrote
+    var lt = str_builder_new();
+    var li = 0;
+    while (li < 300) { str_builder_putc(lt, 97); li = li + 1; }
+    assert_eq(mneme_store_vault_create_note(vt, mneme_store_create_note_new(str_builder_build(lt), str_from("long.md"), str_from("x"), vec_new(), 0 - 1)), 0, "create with a 300-byte title fails");
+    assert_eq(mneme_store_filestore_exists(load64(vt + 8), str_from("long.md")), 0, "and leaves no orphan file");
+    # ⛔ an update whose note file cannot be read fails and writes NOTHING (it rewrote the note with no body)
+    var cw = mneme_store_vault_create_note(vt, mneme_store_create_note_new(str_from("Keep"), 0, str_from("the body"), vec_new(), 0 - 1));
+    var cwid = mneme_core_note_id(mneme_store_nwc_note(cw));
+    var cwpath = mneme_core_note_path(mneme_store_nwc_note(cw));
+    mneme_store_filestore_delete_note(load64(vt + 8), cwpath);
+    assert_eq(mneme_store_vault_update_note(vt, cwid, mneme_store_update_note_new(str_from("New Title"), 0, 0)), 0, "update of an unreadable note fails");
+    assert_eq(mneme_store_filestore_exists(load64(vt + 8), cwpath), 0, "and does not recreate it with an empty body");
+    assert_eq(mneme_store_vault_get_note(vt, cwid), 0, "get of an unreadable note fails (no empty body)");
+    # deleting a note removes its links both ways (Rust: ON DELETE CASCADE)
+    var na = mneme_store_vault_create_note(vt, mneme_store_create_note_new(str_from("Link A"), 0, str_from("a"), vec_new(), 0 - 1));
+    var nb = mneme_store_vault_create_note(vt, mneme_store_create_note_new(str_from("Link B"), 0, str_from("b"), vec_new(), 0 - 1));
+    var ida = mneme_core_note_id(mneme_store_nwc_note(na));
+    var idb = mneme_core_note_id(mneme_store_nwc_note(nb));
+    mneme_store_db_insert_link(mneme_store_vault_db(vt), mneme_core_link_new(ida, idb, str_from("B"), str_from("ctx")));
+    assert_eq(vec_len(mneme_store_db_get_backlinks(mneme_store_vault_db(vt), idb)), 1, "B has a backlink from A");
+    mneme_store_vault_delete_note(vt, ida);
+    assert_eq(vec_len(mneme_store_db_get_backlinks(mneme_store_vault_db(vt), idb)), 0, "deleting A removes B's backlink");
+    assert_eq(vec_len(mneme_store_vault_list_all_links(vt)), 0, "and the link row itself");
+    # a vault whose database patra refuses does not open (it opened and lost every write)
+    var bad = str_from("/tmp/mneme_vt_baddb");
+    _wipe(bad);
+    xmkdir_p(str_cstr(path_join(bad, str_from(".mneme"))), 493);
+    var junk = str_from("SQLite format 3\0 not a patra file");
+    file_write_all(str_cstr(path_join(bad, str_from(".mneme/db.sqlite"))), str_data(junk), str_len(junk));
+    assert_eq(mneme_store_vault_open(bad), 0, "vault with a non-patra db.sqlite -> 0");
+    # timestamps are the wall clock (they were CLOCK_MONOTONIC: time since boot)
+    assert_eq(mneme_core_note_created_at(mneme_store_nwc_note(na)) > 1700000000000000000, 1, "created_at is epoch ns (after 2023)");
+
     return assert_summary();
 }
 

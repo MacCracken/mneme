@@ -24,45 +24,6 @@ fn _db_getstr(rs, row, col): i64 {
     store8(buf + len, 0);
     return str_new(buf, len);
 }
-fn _db_hexc(nib): i64 { if (nib < 10) { return 48 + nib; } return 87 + nib; }
-fn _db_hexv(c): i64 {
-    if (c >= 48 && c <= 57) { return c - 48; }
-    if (c >= 97 && c <= 102) { return c - 87; }
-    if (c >= 65 && c <= 70) { return c - 55; }
-    return 0 - 1;
-}
-fn _db_uuid_to_str(u): i64 {
-    var sb = str_builder_new();
-    var i = 0;
-    while (i < 16) {
-        if (i == 4 || i == 6 || i == 8 || i == 10) { str_builder_putc(sb, 45); }
-        var b = load8(u + i);
-        str_builder_putc(sb, _db_hexc((b >> 4) & 15));
-        str_builder_putc(sb, _db_hexc(b & 15));
-        i = i + 1;
-    }
-    return str_builder_build(sb);
-}
-fn _db_uuid_from_str(s: Str): i64 {
-    var u = alloc(16);
-    var n = str_len(s);
-    var d = str_data(s);
-    var bi = 0;
-    var hi = 0 - 1;
-    var i = 0;
-    while (i < n && bi < 16) {
-        var c = load8(d + i);
-        if (c != 45) {
-            var v = _db_hexv(c);
-            if (v >= 0) {
-                if (hi < 0) { hi = v; }
-                else { store8(u + bi, (hi << 4) | v); bi = bi + 1; hi = 0 - 1; }
-            }
-        }
-        i = i + 1;
-    }
-    return u;
-}
 # append a SQL string literal: '...' with '' escaping
 fn _db_sql_str(sb, s: Str): i64 {
     str_builder_putc(sb, 39);
@@ -97,7 +58,7 @@ fn mneme_store_db_close(db): i64 { return patra_close(db); }
 # --- row -> struct ---
 fn _db_row_to_note(rs, row): i64 {
     var n = alloc(80);
-    store64(n, _db_uuid_from_str(_db_getstr(rs, row, 0)));
+    store64(n, mneme_core_uuid_parse_stored(_db_getstr(rs, row, 0)));
     store64(n + 8, _db_getstr(rs, row, 1));
     store64(n + 16, _db_getstr(rs, row, 2));
     store64(n + 24, _db_getstr(rs, row, 3));
@@ -116,7 +77,7 @@ var _DB_NOTE_COLS = "SELECT id, title, path, content_hash, created_at, updated_a
 fn mneme_store_db_insert_note(db, note): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "INSERT INTO notes (id, title, path, content_hash, created_at, updated_at, last_accessed, provenance, trust_has, trust_val) VALUES (");
-    _db_sql_str(sb, _db_uuid_to_str(mneme_core_note_id(note)));
+    _db_sql_str(sb, mneme_core_uuid_to_string(mneme_core_note_id(note)));
     str_builder_add_cstr(sb, ", ");
     _db_sql_str(sb, mneme_core_note_title(note));
     str_builder_add_cstr(sb, ", ");
@@ -142,7 +103,7 @@ fn mneme_store_db_get_note(db, id): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, _DB_NOTE_COLS);
     str_builder_add_cstr(sb, " WHERE id = ");
-    _db_sql_str(sb, _db_uuid_to_str(id));
+    _db_sql_str(sb, mneme_core_uuid_to_string(id));
     var rs = _db_sel(db, sb);
     if (patra_result_count(rs) == 0) { return 0; }
     return _db_row_to_note(rs, 0);
@@ -181,25 +142,37 @@ fn mneme_store_db_update_note(db, id, title: Str, content_hash: Str): i64 {
     str_builder_add_cstr(sb, ", content_hash = ");
     _db_sql_str(sb, content_hash);
     str_builder_add_cstr(sb, ", updated_at = ");
-    str_builder_add_int(sb, clock_now_ns());
+    str_builder_add_int(sb, clock_epoch_ns());
     str_builder_add_cstr(sb, " WHERE id = ");
-    _db_sql_str(sb, _db_uuid_to_str(id));
-    _db_run(db, sb);
+    _db_sql_str(sb, mneme_core_uuid_to_string(id));
+    # 1.2.3: a failed UPDATE is -1. patra refreshes rows_affected only on PATRA_OK, so this returned the
+    # PREVIOUS statement's count — a title over 255 bytes (PATRA_ERR_ROWSZ) looked like a successful update.
+    if (_db_run(db, sb) != PATRA_OK) { return 0 - 1; }
     return patra_rows_affected(db);
 }
-fn mneme_store_db_delete_note(db, id): i64 {
+# delete a note and, as Rust's schema does with ON DELETE CASCADE, its note_tags and its links in either
+# direction. 1.2.3: only the notes row was deleted, so other notes kept backlinks to a note that was gone and
+# list_all_links returned edges to it. Returns the notes rows deleted, or -1.
+fn _db_delete_where(db, sql_prefix, id): i64 {
     var sb = str_builder_new();
-    str_builder_add_cstr(sb, "DELETE FROM notes WHERE id = ");
-    _db_sql_str(sb, _db_uuid_to_str(id));
-    _db_run(db, sb);
-    return patra_rows_affected(db);
+    str_builder_add_cstr(sb, sql_prefix);
+    _db_sql_str(sb, mneme_core_uuid_to_string(id));
+    return _db_run(db, sb);
+}
+fn mneme_store_db_delete_note(db, id): i64 {
+    if (_db_delete_where(db, "DELETE FROM notes WHERE id = ", id) != PATRA_OK) { return 0 - 1; }
+    var deleted = patra_rows_affected(db);
+    _db_delete_where(db, "DELETE FROM note_tags WHERE note_id = ", id);
+    _db_delete_where(db, "DELETE FROM links WHERE source_id = ", id);
+    _db_delete_where(db, "DELETE FROM links WHERE target_id = ", id);
+    return deleted;
 }
 fn mneme_store_db_touch_note(db, id): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "UPDATE notes SET last_accessed = ");
-    str_builder_add_int(sb, clock_now_ns());
+    str_builder_add_int(sb, clock_epoch_ns());
     str_builder_add_cstr(sb, " WHERE id = ");
-    _db_sql_str(sb, _db_uuid_to_str(id));
+    _db_sql_str(sb, mneme_core_uuid_to_string(id));
     return _db_run(db, sb);
 }
 fn mneme_store_db_count_notes(db): i64 {
@@ -214,7 +187,7 @@ fn mneme_store_tag_color(t): i64 { return load64(t + 16); }
 fn mneme_store_tag_created_at(t): i64 { return load64(t + 24); }
 fn _db_row_to_tag(rs, row): i64 {
     var t = alloc(32);
-    store64(t, _db_uuid_from_str(_db_getstr(rs, row, 0)));
+    store64(t, mneme_core_uuid_parse_stored(_db_getstr(rs, row, 0)));
     store64(t + 8, _db_getstr(rs, row, 1));
     store64(t + 16, _db_getstr(rs, row, 2));
     store64(t + 24, patra_result_get_int(rs, row, 3));
@@ -227,7 +200,7 @@ fn mneme_store_db_get_or_create_tag(db, name: Str): i64 {
     var rs = _db_sel(db, q);
     if (patra_result_count(rs) > 0) { return _db_row_to_tag(rs, 0); }
     var id = mneme_core_uuid_v4();
-    var created = clock_now_ns();
+    var created = clock_epoch_ns();
     var t = alloc(32);
     store64(t, id);
     store64(t + 8, name);
@@ -235,7 +208,7 @@ fn mneme_store_db_get_or_create_tag(db, name: Str): i64 {
     store64(t + 24, created);
     var ib = str_builder_new();
     str_builder_add_cstr(ib, "INSERT INTO tags (id, name, color, created_at) VALUES (");
-    _db_sql_str(ib, _db_uuid_to_str(id));
+    _db_sql_str(ib, mneme_core_uuid_to_string(id));
     str_builder_add_cstr(ib, ", ");
     _db_sql_str(ib, name);
     str_builder_add_cstr(ib, ", '', ");
@@ -257,7 +230,7 @@ fn mneme_store_db_list_tags(db): i64 {
 fn mneme_store_db_delete_tag(db, id): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "DELETE FROM tags WHERE id = ");
-    _db_sql_str(sb, _db_uuid_to_str(id));
+    _db_sql_str(sb, mneme_core_uuid_to_string(id));
     _db_run(db, sb);
     return patra_rows_affected(db);
 }
@@ -266,39 +239,39 @@ fn mneme_store_db_delete_tag(db, id): i64 {
 fn _db_note_tag_exists(db, note_id, tag_id): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "SELECT note_id FROM note_tags WHERE note_id = ");
-    _db_sql_str(sb, _db_uuid_to_str(note_id));
+    _db_sql_str(sb, mneme_core_uuid_to_string(note_id));
     str_builder_add_cstr(sb, " AND tag_id = ");
-    _db_sql_str(sb, _db_uuid_to_str(tag_id));
+    _db_sql_str(sb, mneme_core_uuid_to_string(tag_id));
     return patra_result_count(_db_sel(db, sb));
 }
 fn mneme_store_db_tag_note(db, note_id, tag_id): i64 {
     if (_db_note_tag_exists(db, note_id, tag_id) > 0) { return 0; }
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "INSERT INTO note_tags (note_id, tag_id) VALUES (");
-    _db_sql_str(sb, _db_uuid_to_str(note_id));
+    _db_sql_str(sb, mneme_core_uuid_to_string(note_id));
     str_builder_add_cstr(sb, ", ");
-    _db_sql_str(sb, _db_uuid_to_str(tag_id));
+    _db_sql_str(sb, mneme_core_uuid_to_string(tag_id));
     str_builder_add_cstr(sb, ")");
     return _db_run(db, sb);
 }
 fn mneme_store_db_untag_note(db, note_id, tag_id): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "DELETE FROM note_tags WHERE note_id = ");
-    _db_sql_str(sb, _db_uuid_to_str(note_id));
+    _db_sql_str(sb, mneme_core_uuid_to_string(note_id));
     str_builder_add_cstr(sb, " AND tag_id = ");
-    _db_sql_str(sb, _db_uuid_to_str(tag_id));
+    _db_sql_str(sb, mneme_core_uuid_to_string(tag_id));
     return _db_run(db, sb);
 }
 fn mneme_store_db_clear_note_tags(db, note_id): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "DELETE FROM note_tags WHERE note_id = ");
-    _db_sql_str(sb, _db_uuid_to_str(note_id));
+    _db_sql_str(sb, mneme_core_uuid_to_string(note_id));
     return _db_run(db, sb);
 }
 fn mneme_store_db_get_note_tags(db, note_id): i64 {
     var q = str_builder_new();
     str_builder_add_cstr(q, "SELECT tag_id FROM note_tags WHERE note_id = ");
-    _db_sql_str(q, _db_uuid_to_str(note_id));
+    _db_sql_str(q, mneme_core_uuid_to_string(note_id));
     var rs = _db_sel(db, q);
     var tagids = vec_new();
     var i = 0;
@@ -326,9 +299,9 @@ fn mneme_store_backlink_link_text(b): i64 { return load64(b + 16); }
 fn mneme_store_backlink_context(b): i64 { return load64(b + 24); }
 fn _db_row_to_link(rs, row): i64 {
     var l = alloc(48);
-    store64(l, _db_uuid_from_str(_db_getstr(rs, row, 0)));
-    store64(l + 8, _db_uuid_from_str(_db_getstr(rs, row, 1)));
-    store64(l + 16, _db_uuid_from_str(_db_getstr(rs, row, 2)));
+    store64(l, mneme_core_uuid_parse_stored(_db_getstr(rs, row, 0)));
+    store64(l + 8, mneme_core_uuid_parse_stored(_db_getstr(rs, row, 1)));
+    store64(l + 16, mneme_core_uuid_parse_stored(_db_getstr(rs, row, 2)));
     store64(l + 24, _db_getstr(rs, row, 3));
     store64(l + 32, _db_getstr(rs, row, 4));
     store64(l + 40, patra_result_get_int(rs, row, 5));
@@ -338,11 +311,11 @@ var _DB_LINK_COLS = "SELECT id, source_id, target_id, link_text, context, create
 fn mneme_store_db_insert_link(db, link): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "INSERT INTO links (id, source_id, target_id, link_text, context, created_at) VALUES (");
-    _db_sql_str(sb, _db_uuid_to_str(mneme_core_link_id(link)));
+    _db_sql_str(sb, mneme_core_uuid_to_string(mneme_core_link_id(link)));
     str_builder_add_cstr(sb, ", ");
-    _db_sql_str(sb, _db_uuid_to_str(mneme_core_link_source_id(link)));
+    _db_sql_str(sb, mneme_core_uuid_to_string(mneme_core_link_source_id(link)));
     str_builder_add_cstr(sb, ", ");
-    _db_sql_str(sb, _db_uuid_to_str(mneme_core_link_target_id(link)));
+    _db_sql_str(sb, mneme_core_uuid_to_string(mneme_core_link_target_id(link)));
     str_builder_add_cstr(sb, ", ");
     _db_sql_str(sb, mneme_core_link_text(link));
     str_builder_add_cstr(sb, ", ");
@@ -356,7 +329,7 @@ fn mneme_store_db_get_outgoing_links(db, note_id): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, _DB_LINK_COLS);
     str_builder_add_cstr(sb, " WHERE source_id = ");
-    _db_sql_str(sb, _db_uuid_to_str(note_id));
+    _db_sql_str(sb, mneme_core_uuid_to_string(note_id));
     var rs = _db_sel(db, sb);
     var out = vec_new();
     var i = 0;
@@ -373,13 +346,13 @@ fn mneme_store_db_list_all_links(db): i64 {
 fn mneme_store_db_clear_note_links(db, note_id): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "DELETE FROM links WHERE source_id = ");
-    _db_sql_str(sb, _db_uuid_to_str(note_id));
+    _db_sql_str(sb, mneme_core_uuid_to_string(note_id));
     return _db_run(db, sb);
 }
 fn mneme_store_db_get_backlinks(db, note_id): i64 {
     var q = str_builder_new();
     str_builder_add_cstr(q, "SELECT source_id, link_text, context FROM links WHERE target_id = ");
-    _db_sql_str(q, _db_uuid_to_str(note_id));
+    _db_sql_str(q, mneme_core_uuid_to_string(note_id));
     var rs = _db_sel(db, q);
     var cnt = patra_result_count(rs);
     var sids = vec_new();
@@ -399,14 +372,15 @@ fn mneme_store_db_get_backlinks(db, note_id): i64 {
         str_builder_add_cstr(tb, "SELECT title FROM notes WHERE id = ");
         _db_sql_str(tb, vec_get(sids, j));
         var trs = _db_sel(db, tb);
-        var title = str_from("");
-        if (patra_result_count(trs) > 0) { title = _db_getstr(trs, 0, 0); }
-        var bl = alloc(32);
-        store64(bl, _db_uuid_from_str(vec_get(sids, j)));
-        store64(bl + 8, title);
-        store64(bl + 16, vec_get(ltxt, j));
-        store64(bl + 24, vec_get(ctxs, j));
-        vec_push(out, bl);
+        # Rust's JOIN drops a link whose source note is gone; this returned it with title "". (1.2.3)
+        if (patra_result_count(trs) > 0) {
+            var bl = alloc(32);
+            store64(bl, mneme_core_uuid_parse_stored(vec_get(sids, j)));
+            store64(bl + 8, _db_getstr(trs, 0, 0));
+            store64(bl + 16, vec_get(ltxt, j));
+            store64(bl + 24, vec_get(ctxs, j));
+            vec_push(out, bl);
+        }
         j = j + 1;
     }
     return out;

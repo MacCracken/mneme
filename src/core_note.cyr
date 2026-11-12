@@ -47,7 +47,9 @@ fn mneme_core_note_new(title: Str, path: Str, content_hash: Str): i64 {
     store64(n + 8, title);
     store64(n + 16, path);
     store64(n + 24, content_hash);
-    var now = clock_now_ns();
+    # wall-clock epoch ns (Rust: Utc::now()). 1.2.3: every stored timestamp used clock_now_ns, which is
+    # CLOCK_MONOTONIC — time since BOOT — so dates showed as 1970 and a reboot reordered "updated" sorts.
+    var now = clock_epoch_ns();
     store64(n + 32, now);          # created_at
     store64(n + 40, now);          # updated_at
     store64(n + 48, now);          # last_accessed

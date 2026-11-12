@@ -39,6 +39,12 @@ fn main() {
     assert_eq(vec_len(built), 1, "built entries len");
     assert(str_eq(mneme_core_calendar_entry_title(vec_get(built, 0)), str_from("Note 1")), "built entry title");
 
+    # 1.2.3: impossible dates are None (Rust's NaiveDate parse fails)
+    assert_eq(mneme_core_calendar_parse_date(str_from("x 2026-13-01")), 0 - 1, "month 13 -> None");
+    assert_eq(mneme_core_calendar_parse_date(str_from("2026-02-29 note")), 0 - 1, "Feb 29 in a common year -> None");
+    assert_eq(mneme_core_calendar_parse_date(str_from("2026-04-31")), 0 - 1, "April 31 -> None");
+    assert(mneme_core_calendar_parse_date(str_from("2024-02-29")) != 0 - 1, "Feb 29 in a leap year is a date");
+
     return assert_summary();
 }
 

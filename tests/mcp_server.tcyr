@@ -23,6 +23,7 @@ include "src/search_vector_store.cyr"
 include "src/search_embedding_backend.cyr"
 include "src/search_semantic_engine.cyr"
 include "src/search_engine.cyr"
+include "src/search_vault_index.cyr"
 include "src/ai_client.cyr"
 include "src/net_http.cyr"
 include "src/mcp_protocol.cyr"
@@ -82,5 +83,21 @@ fn main() {
     # Must be assert_summary(), not `return 0` — the summary's return value IS
     # the failure count, and every other tests/*.tcyr uses it. With a bare 0 the
     # assertions above still ran but a failure could never fail the build.
+    # --- 1.2.3: the request filter's helpers ---
+    assert_eq(_mcp_host_is_loopback("127.0.0.1:8100"), 1, "host 127.0.0.1:port");
+    assert_eq(_mcp_host_is_loopback("127.0.0.1"), 1, "host 127.0.0.1");
+    assert_eq(_mcp_host_is_loopback("localhost:8100"), 1, "host localhost:port");
+    assert_eq(_mcp_host_is_loopback("LocalHost"), 1, "host localhost, any case");
+    assert_eq(_mcp_host_is_loopback("[::1]:8100"), 1, "host [::1]:port");
+    assert_eq(_mcp_host_is_loopback(0), 1, "no Host header (not a browser)");
+    assert_eq(_mcp_host_is_loopback("evil.example:8100"), 0, "a rebinding name is refused");
+    assert_eq(_mcp_host_is_loopback("127.0.0.1.evil.example"), 0, "a lookalike is refused");
+    assert_eq(_mcp_host_is_loopback("localhostx"), 0, "localhostx is refused");
+    assert_eq(_mcp_hdr_starts("application/json", "application/json"), 1, "content-type json");
+    assert_eq(_mcp_hdr_starts("Application/JSON; charset=utf-8", "application/json"), 1, "content-type json, any case, with params");
+    assert_eq(_mcp_hdr_starts("text/plain", "application/json"), 0, "text/plain refused");
+    assert_eq(_mcp_hdr_starts(0, "application/json"), 0, "missing content-type refused");
+    assert_eq(_mcp_bind_addr(), INADDR_LOOPBACK(), "binds loopback by default (MNEME_BIND unset)");
+
     return assert_summary();
 }

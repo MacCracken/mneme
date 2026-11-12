@@ -36,6 +36,15 @@ fn main() {
     assert(str_eq(mneme_io_title_to_slug(str_from("Hello World")), str_from("hello-world")), "slug hello world");
     assert(str_eq(mneme_io_title_to_slug(str_from("What's New? (2026)")), str_from("what-s-new-2026")), "slug punctuation");
 
+    # --- 1.2.3: Rust's regex `\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]`, exactly ---
+    var w1 = mneme_io_extract_wikilinks(str_from("[[Note] and see [[Other]]"));
+    assert_eq(vec_len(w1), 1, "a stray ']' does not swallow the next link");
+    assert(str_eq_cstr(mneme_io_wikilink_target(vec_get(w1, 0)), "Other"), "the link is Other");
+    assert_eq(vec_len(mneme_io_extract_wikilinks(str_from("[[]]"))), 0, "[[]] is not a link");
+    assert_eq(vec_len(mneme_io_extract_wikilinks(str_from("[[|x]]"))), 0, "[[|x]] is not a link");
+    assert_eq(vec_len(mneme_io_extract_wikilinks(str_from("[[a|]]"))), 0, "[[a|]] is not a link");
+    assert(str_eq_cstr(mneme_io_wikilinks_to_markdown(str_from("x [[]] y")), "x [[]] y"), "[[]] is left alone on conversion");
+
     return assert_summary();
 }
 

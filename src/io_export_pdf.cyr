@@ -182,7 +182,8 @@ fn mneme_io_wrap_text(text: Str, max_width): i64 {
         }
         i = i + 1;
     }
-    var line = str_from("");
+    var line = 0;   # a Str; untyped because it is reassigned from vec_get
+    line = str_from("");
     var w = 0;
     while (w < vec_len(words)) {
         var word = vec_get(words, w);

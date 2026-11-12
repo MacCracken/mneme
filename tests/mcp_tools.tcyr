@@ -62,7 +62,7 @@ fn _is_err(s: Str): i64 { return _has(s, "\"isError\":true"); }
 fn _mk_note(env, title, content, tags): i64 {
     var vault = mneme_store_openvault_vault(mneme_store_manager_active(load64(env)));
     var nwc = mneme_store_vault_create_note(vault, mneme_store_create_note_new(str_from(title), 0, str_from(content), tags, 0 - 1));
-    return mneme_store_uuid_to_string(mneme_core_note_id(mneme_store_nwc_note(nwc)));
+    return mneme_core_uuid_to_string(mneme_core_note_id(mneme_store_nwc_note(nwc)));
 }
 
 fn main() {
@@ -148,14 +148,14 @@ fn main() {
     # update_note_no_fields
     var env9 = _env();
     var una = mcp_args_new();
-    mcp_args_put_str(una, "id", mneme_store_uuid_to_string(mneme_core_uuid_v4()));
+    mcp_args_put_str(una, "id", mneme_core_uuid_to_string(mneme_core_uuid_v4()));
     assert_eq(_is_err(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_update_note"), una, load64(env9), load64(env9 + 8))), 1, "update no fields err");
 
     # search_feedback_tool
     var env10 = _env();
     var fa = mcp_args_new();
     mcp_args_put_str(fa, "search_id", str_from("s:0"));
-    mcp_args_put_str(fa, "note_id", mneme_store_uuid_to_string(mneme_core_uuid_v4()));
+    mcp_args_put_str(fa, "note_id", mneme_core_uuid_to_string(mneme_core_uuid_v4()));
     assert_eq(_has(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_search_feedback"), fa, load64(env10), load64(env10 + 8)), "Feedback recorded"), 1, "feedback ok");
 
     # search_feedback_missing_fields
@@ -195,7 +195,7 @@ fn main() {
     # parse_uuid_valid
     var pu = mneme_core_uuid_v4();
     var pa = mcp_args_new();
-    mcp_args_put_str(pa, "id", mneme_store_uuid_to_string(pu));
+    mcp_args_put_str(pa, "id", mneme_core_uuid_to_string(pu));
     assert_eq(mneme_core_uuid_eq(mcp_parse_uuid(pa, "id"), pu), 1, "parse_uuid valid");
 
     # parse_uuid_missing
@@ -210,6 +210,38 @@ fn main() {
     var eng = mcp_engines_new();
     assert_eq(mcp_engines_is_empty(eng), 1, "engines empty");
     assert_eq(mcp_engines_get(eng, mneme_core_uuid_v4()), 0, "engines get none");
+
+    # --- 1.2.3 regressions ---
+    var envx = _env();
+    var nid = _mk_note(envx, "Graph Note", "body", vec_new());
+    var nid_hex = mneme_core_uuid_to_hex(mneme_core_uuid_parse(nid));   # the 32-hex simple form
+    # query_graph with a simple-form id: it parsed to 0 and get_note loaded through it (the `mneme serve` crash)
+    var r3_qa = mcp_args_new();
+    mcp_args_put_str(r3_qa, "note_id", nid_hex);
+    assert_eq(_is_err(mneme_mcp_handle_tool_call(str_from("1"), str_from("mneme_query_graph"), r3_qa, load64(envx), load64(envx + 8))), 0, "query_graph accepts the simple form");
+    var r3_qb = mcp_args_new();
+    mcp_args_put_str(r3_qb, "note_id", str_from("0123456789abcdef0123456789abcdef"));
+    assert_eq(_has(mneme_mcp_handle_tool_call(str_from("2"), str_from("mneme_query_graph"), r3_qb, load64(envx), load64(envx + 8)), "Note not found"), 1, "an unknown simple-form id is 'not found', not a crash");
+    var r3_ga = mcp_args_new();
+    mcp_args_put_str(r3_ga, "id", nid_hex);
+    assert_eq(_has(mneme_mcp_handle_tool_call(str_from("3"), str_from("mneme_get_note"), r3_ga, load64(envx), load64(envx + 8)), "Graph Note"), 1, "get_note accepts the simple form (Rust parse_str does)");
+    # search_feedback with an index that overflows i64: it wrapped to -1 and vec_get aborted the process
+    var r3_fa = mcp_args_new();
+    mcp_args_put_str(r3_fa, "search_id", str_from("s:18446744073709551615"));
+    mcp_args_put_str(r3_fa, "note_id", str_from("x"));
+    assert_eq(_has(mneme_mcp_handle_tool_call(str_from("4"), str_from("mneme_search_feedback"), r3_fa, load64(envx), load64(envx + 8)), "Feedback recorded"), 1, "an overflowing arm index is ignored, not fatal");
+    var r3_fb = mcp_args_new();
+    mcp_args_put_str(r3_fb, "search_id", str_from("s:-1"));
+    mcp_args_put_str(r3_fb, "note_id", str_from("x"));
+    assert_eq(_has(mneme_mcp_handle_tool_call(str_from("5"), str_from("mneme_search_feedback"), r3_fb, load64(envx), load64(envx + 8)), "Feedback recorded"), 1, "a negative arm index is ignored");
+    # the unknown-tool error echoes the name (it strlen'd the Str handle and sent heap bytes)
+    assert_eq(_has(mneme_mcp_handle_tool_call(str_from("6"), str_from("no_such_tool"), mcp_args_new(), load64(envx), load64(envx + 8)), "Unknown tool: no_such_tool"), 1, "unknown tool echoes its name");
+    # an explicit path that escapes the vault is refused (ADR 016)
+    var r3_ca = mcp_args_new();
+    mcp_args_put_str(r3_ca, "title", str_from("Escape"));
+    mcp_args_put_str(r3_ca, "content", str_from("x"));
+    mcp_args_put_str(r3_ca, "path", str_from("../../escape.md"));
+    assert_eq(_is_err(mneme_mcp_handle_tool_call(str_from("7"), str_from("mneme_create_note"), r3_ca, load64(envx), load64(envx + 8))), 1, "create_note refuses a ../ path");
 
     return assert_summary();
 }

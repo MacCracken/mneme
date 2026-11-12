@@ -115,25 +115,6 @@ fn _cfg_toml_esc(sb, s: Str): i64 {
     }
     return 0;
 }
-# Decode a TOML basic-string body. Returns `s` itself when it holds no
-# backslash — the overwhelmingly common case allocates nothing.
-# bayan_toml_get_by_cstr. Absent (0) passes straight through, so callers keep their
-# existing "0 means None" contract.
-#
-# ⚠ NO UNESCAPE HERE — bayan's PARSER does it (bayan 1.5.5). This used to call a
-# local `_cfg_toml_unesc`, back when `_toml_parse_str` returned the raw slice
-# between the quotes with backslashes intact. bayan fixed that at the source (the
-# fix names mneme's report, and calls this compensation "exactly the hand-roll
-# bayan exists to delete"), so the local decoder became a SECOND unescape pass and
-# `/tmp/a\\b` came back mangled. Decoding can only happen where the quote is still
-# known — a basic string resolves escapes, a literal string must not — so it
-# belongs in the parser, not here. The ENCODER (`_cfg_toml_esc`) stays: mneme still
-# writes its TOML by hand and must escape on the way out.
-fn _cfg_toml_str(pairs, key): i64 {
-    var v = bayan_toml_get_by_cstr(pairs, key);
-    if (v == 0) { return 0; }
-    return v;
-}
 
 fn mneme_core_vault_entry_to_toml(e): i64 {
     var sb = str_builder_new();
@@ -155,9 +136,9 @@ fn mneme_core_vault_entry_to_toml(e): i64 {
 
 fn mneme_core_vault_entry_from_toml(toml_str: Str): i64 {
     var pairs = _cfg_top_pairs(bayan_toml_parse(toml_str));
-    var name = _cfg_toml_str(pairs, "name");
-    var path = _cfg_toml_str(pairs, "path");
-    var desc = _cfg_toml_str(pairs, "description");   # 0 if absent
+    var name = bayan_toml_get_by_cstr(pairs, "name");
+    var path = bayan_toml_get_by_cstr(pairs, "path");
+    var desc = bayan_toml_get_by_cstr(pairs, "description");   # 0 if absent
     var wstr = bayan_toml_get_by_cstr(pairs, "search_weight");
     var w = f64_parse("1.0");
     if (wstr != 0) { w = f64_parse(_cfg_cstr(wstr)); }
@@ -196,7 +177,7 @@ fn mneme_core_vault_info_new(name: Str, path: Str): i64 {
     store64(v + 16, path);
     store64(v + 24, str_from(""));
     store64(v + 32, f64_parse("1.0"));
-    store64(v + 40, clock_now_ns());
+    store64(v + 40, clock_epoch_ns());
     store64(v + 48, 0);               # is_default = false
     return v;
 }
@@ -251,7 +232,7 @@ fn mneme_core_config_from_toml(toml_str: Str): i64 {
     var sections = bayan_toml_parse(toml_str);
     var c = alloc(40);
     var top = _cfg_top_pairs(sections);
-    store64(c, _cfg_toml_str(top, "default_vault"));   # Str or 0
+    store64(c, bayan_toml_get_by_cstr(top, "default_vault"));   # Str or 0
     store64(c + 8, 0);
     # vaults = each [[vaults]] section
     var vaults = vec_new();
@@ -262,7 +243,7 @@ fn mneme_core_config_from_toml(toml_str: Str): i64 {
         var wstr = bayan_toml_get_by_cstr(pairs, "search_weight");
         var w = f64_parse("1.0");
         if (wstr != 0) { w = f64_parse(_cfg_cstr(wstr)); }
-        vec_push(vaults, mneme_core_vault_entry_new(_cfg_toml_str(pairs, "name"), _cfg_toml_str(pairs, "path"), _cfg_toml_str(pairs, "description"), w));
+        vec_push(vaults, mneme_core_vault_entry_new(bayan_toml_get_by_cstr(pairs, "name"), bayan_toml_get_by_cstr(pairs, "path"), bayan_toml_get_by_cstr(pairs, "description"), w));
         i = i + 1;
     }
     store64(c + 16, vaults);
@@ -271,7 +252,7 @@ fn mneme_core_config_from_toml(toml_str: Str): i64 {
     var emb = mneme_core_embedding_default();
     var esecs = bayan_toml_get_sections_by_cstr(sections, "embedding");
     if (vec_len(esecs) > 0) {
-        var bk = _cfg_toml_str(bayan_toml_section_pairs(vec_get(esecs, 0)), "backend");
+        var bk = bayan_toml_get_by_cstr(bayan_toml_section_pairs(vec_get(esecs, 0)), "backend");
         if (bk != 0) { store64(emb, bk); }
     }
     store64(c + 32, emb);

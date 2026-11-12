@@ -102,6 +102,11 @@ fn main() {
     elif (mneme_store_manager_open_count(m13) == 0) { cleared = 1; }
     assert_eq(cleared, 1, "active cleared or no open vaults");
 
+    # 1.2.3: a duplicate vault name is refused (Rust: VaultAlreadyExists); it was loaded through
+    var mdup = _fresh_mgr();
+    assert(mneme_store_manager_create_vault(mdup, str_from("dupe"), _vault_dir()) != 0, "first vault named dupe");
+    assert_eq(mneme_store_manager_create_vault(mdup, str_from("dupe"), _vault_dir()), 0, "second vault named dupe -> 0");
+
     return assert_summary();
 }
 

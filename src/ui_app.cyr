@@ -28,7 +28,9 @@ fn mneme_ui_app_new(manager, models_dir): i64 {
     if (ov != 0) {
         var e = alloc(24);
         store64(e, load64(mneme_store_openvault_info(ov)));
-        store64(e + 8, mneme_search_engine_in_memory());
+        var fte = mneme_search_engine_in_memory();
+        mneme_search_engine_index_vault(fte, mneme_store_openvault_vault(ov));   # 1.2.3: seed from the vault
+        store64(e + 8, fte);
         store64(e + 16, mneme_search_semantic_engine_disabled());
         vec_push(engines, e);
     }

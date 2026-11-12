@@ -1,5 +1,6 @@
 # mneme-search cross-vault tests — ported 1:1 from rust-old/crates/mneme-search/src/cross_vault.rs.
 include "src/core_uuid.cyr"
+include "src/search_engine.cyr"        # SearchResult (1.2.3: no longer duplicated in cross_vault)
 include "src/search_cross_vault.cyr"
 
 # make_ft(id, title, score) -> SearchResult { note_id: id, title, path: "{title}.md",
@@ -121,6 +122,19 @@ fn main() {
     # ---- empty_vaults ----
     var results5 = mneme_search_cross_vault_merge(vec_new(), 10);
     assert_eq(vec_len(results5), 0, "empty: is_empty");
+
+    # 1.2.3: the same note from full-text and semantic results is two DIFFERENT handles; the merge keys by value
+    var idv = mneme_core_uuid_v4();
+    var idv2 = mneme_core_uuid_parse(mneme_core_uuid_to_string(idv));
+    var ftv = vec_new();
+    vec_push(ftv, _make_ft(idv, str_from("Same"), f64_parse("1.0")));
+    var semv = vec_new();
+    vec_push(semv, _make_sem(idv2, str_from("Same"), f64_parse("0.9")));
+    var vrsv = vec_new();
+    vec_push(vrsv, mneme_search_vault_results_new(mneme_core_uuid_v4(), str_from("v"), f64_parse("1.0"), ftv, semv));
+    var rv = mneme_search_cross_vault_merge(vrsv, 10);
+    assert_eq(vec_len(rv), 1, "one merged entry, not two");
+    assert_eq(mneme_search_cross_vault_result_source(vec_get(rv, 0)), CROSS_VAULT_BOTH, "marked Both");
 
     return assert_summary();
 }

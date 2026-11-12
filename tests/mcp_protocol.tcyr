@@ -63,6 +63,14 @@ fn main() {
     var sw = mneme_mcp_tool_find(tools, "mneme_switch_vault");
     assert_eq(mneme_mcp_tool_schema_required_has(mneme_mcp_tool_def_input_schema(sw), "vault"), 1, "switch requires vault");
 
+    # 1.2.3: control characters are escaped (RFC 8259); a newline went out raw and made the JSON invalid
+    var esc = mneme_mcp_success(str_from("9"), str_from("a\nb\t\"c\\"));
+    assert_eq(_has(esc, "a\\nb\\t\\\"c\\\\"), 1, "newline, tab, quote, backslash escaped");
+    var raw_nl = 0;
+    var ei = 0;
+    while (ei < str_len(esc)) { if (load8(str_data(esc) + ei) == 10) { raw_nl = 1; } ei = ei + 1; }
+    assert_eq(raw_nl, 0, "no raw newline byte in the JSON");
+
     return assert_summary();
 }
 
